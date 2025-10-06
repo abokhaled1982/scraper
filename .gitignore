@@ -1,0 +1,16 @@
+# Python Bytecode-Cache
+__pycache__/
+*.py[cod]
+
+# Virtuelle Umgebungen
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# Sonstige temporäre Dateien
+*.log
+*.tmp
+.DS_Store
