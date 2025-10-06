@@ -1,0 +1,14 @@
+{
+  "asins": {
+    "B0D1QYF3WR": "B0D1QYF3WR.json",
+    "B0F1SWS24N": "B0F1SWS24N.json",
+    "B09FB15XDN": "B09FB15XDN.json",
+    "B0BZ4G7S3H": "B0BZ4G7S3H.json"
+  },
+  "hashes": {
+    "788a774e92db1d8207132a3f696f5a3c10615547": "B0D1QYF3WR.json",
+    "cf80f6cb490af423721006f0e196741c05f657e3": "B0F1SWS24N.json",
+    "185197fadd7da2e61639e174c64148f9f56785e5": "B09FB15XDN.json",
+    "397ac3b96f9156bfe96bb72af8ede88bcf38537d": "B0BZ4G7S3H.json"
+  }
+}
