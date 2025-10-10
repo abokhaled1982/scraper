@@ -60,13 +60,13 @@ async def main():
     # Prozesse starten
     ws_server       = await spawn("ws_server",       sys.executable, str(AMAZON / "ws_server.py"))
     deals_watcher   = await spawn("deals_watcher",   sys.executable, str(AMAZON / "watcher.py"))
-    product_opener  = await spawn("product_opener",  sys.executable, str(AMAZON / "product_opener.py"))
+    # product_opener  = await spawn("product_opener",  sys.executable, str(AMAZON / "product_opener.py"))
     product_parser  = await spawn("product_parser",  sys.executable, str(AMAZON / "product_parser.py"))
 
     procs = [
         ("ws_server", ws_server),
         ("deals_watcher", deals_watcher),
-        ("product_opener", product_opener),
+        # ("product_opener", product_opener),
         ("product_parser", product_parser),
     ]
     for n, p in procs:
@@ -97,7 +97,7 @@ async def main():
 
     # Beenden in stabiler Reihenfolge
     await terminate(product_parser,  "product_parser")
-    await terminate(product_opener,  "product_opener")
+    # await terminate(product_opener,  "product_opener")
     await terminate(deals_watcher,   "deals_watcher")
     await terminate(ws_server,       "ws_server")
 

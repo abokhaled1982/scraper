@@ -165,7 +165,7 @@ def _launch_chrome_with_extension(url: str) -> subprocess.Popen:
     # macOS: Path.home() / "Library/Application Support/Google/Chrome"
     # Linux: Path.home() / ".config/google-chrome"
 
-    profile_name = "Default"  # z.B. "Default", "Profile 1", "Profile 2", ...
+    profile_name = "Profile 2"  # z.B. "Default", "Profile 1", "Profile 2", ...
 
     args = [
         CHROME_BIN,
