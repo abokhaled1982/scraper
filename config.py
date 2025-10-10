@@ -8,7 +8,7 @@ DATA_DIR = (BASE_DIR / "data").resolve()
 # Unterordner
 INBOX_DIR = DATA_DIR / "inbox"
 PRODUCKT_DIR = DATA_DIR / "produckt"   # <- NEBEN inbox
-BAD_SUBDIR = DATA_DIR / "bad"          # <- optional für Fehlerdateien
+
 
 # Dateien
 PRODUCT_LIST_PATH = DATA_DIR / "product_list.json"

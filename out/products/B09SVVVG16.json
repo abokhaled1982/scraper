@@ -1,0 +1,102 @@
+{
+  "title": "Amazon Fire TV Cube (Neueste Generation) | Streaming-Mediaplayer mit Sprachsteuerung mit Alexa, Wi-Fi 6E, 4K Ultra HD",
+  "brand": "Besuche den Amazon Fire TV Store",
+  "asin": "B09SVVVG16",
+  "price": {
+    "raw": "99,00€",
+    "value": 99.0,
+    "currency_hint": "EUR"
+  },
+  "original_price": {
+    "raw": "159,99€",
+    "value": 159.99,
+    "currency_hint": "EUR"
+  },
+  "discount_amount": 60.99,
+  "discount_percent": 38.12,
+  "coupon_text": null,
+  "coupon_value": {
+    "percent": null,
+    "amount": null,
+    "currency_hint": null
+  },
+  "final_price_after_coupon": null,
+  "availability": "Auf Lager",
+  "is_prime": false,
+  "shipping_cost_text": null,
+  "delivery_date": "GRATIS Lieferung Dienstag, 14. Oktober",
+  "free_returns": null,
+  "returns_days": null,
+  "returns_text": null,
+  "rating_value": 4.4,
+  "review_count": 5473,
+  "answered_questions": null,
+  "purchases_past_month": null,
+  "purchases_past_month_is_plus": null,
+  "purchases_past_month_raw": null,
+  "bestseller_rank": null,
+  "seller_name": null,
+  "seller_rating_percent": null,
+  "buybox_sold_by": null,
+  "variants": {},
+  "bullets": [
+    "Unser bisher schnellster Streaming-Mediaplayer – Blitzschnelle App-Starts, Octa-Core-Prozessor und doppelt so viel Power wie Fire TV Stick 4K Max.",
+    "Alexa-Sprachsteuerung mit integriertem Mikrofon und integrierten Lautsprechern – Steuere kompatible Fernseher, Soundbars und AV-Receiver mit deiner Stimme, auch vom anderen Ende des Raums aus.",
+    "Einfacher Zugriff auf all deine Entertainment-Inhalte – Verbinde kompatible Geräte und wechsle ganz einfach zwischen Streaming, Kabelreceiver, Spielkonsole und Webcam.",
+    "Neueste WLAN-Technologie für ein noch reibungsloseres Streaming-Erlebnis – Der allererste Streaming-Mediaplayer mit Unterstützung für Wi-Fi 6E.",
+    "Bildqualität, die alles in den Schatten stellt – Die lebensechte, cineastische Bildqualität von 4K erweckt jede Szene zum Leben. Zusätzlich profitierst du von der Unterstützung für Dolby Vision, HDR und Dolby Atmos-Audio.",
+    "Grenzenlose Unterhaltung – Du kannst deine Lieblingsinhalte von Netflix, Prime Video, Disney+ und vielen mehr streamen und hast Zugriff auf Millionen von Songs. Möglicherweise fallen Abonnementgebühren an.",
+    "Entwickelt, um Datenschutz zu gewährleisten – Umfasst Datenschutz- und Kontrollmaßnahmen auf mehreren Ebenen, darunter eine Mikrofon-aus-Taste, mit der du die Stromzufuhr zu den Mikrofonen unterbrechen und sie somit deaktivieren kannst.",
+    "Verwalte dein Smart Home direkt auf dem Bildschirm – Starte Videoanrufe mit Alexa, frag nach dem Wetter, sieh dir Live-Video-Aufnahmen deiner Sicherheitskameras an und vieles mehr."
+  ],
+  "description": null,
+  "images": [
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SY450_.jpg",
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SX425_.jpg",
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SY355_.jpg",
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SX569_.jpg",
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SX466_.jpg",
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SX679_.jpg",
+    "https://m.media-amazon.com/images/I/61EAVskQQXL._AC_SX522_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/41K4LQYXplL._AC_UL165_SR165,165_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/41K4LQYXplL._AC_UL330_SR330,330_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/41K4LQYXplL._AC_UL495_SR495,495_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/610xk6SoIQL._AC_UL165_SR165,165_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/610xk6SoIQL._AC_UL330_SR330,330_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/610xk6SoIQL._AC_UL495_SR495,495_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/41+GfXQ0z9L._AC_UL165_SR165,165_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/41+GfXQ0z9L._AC_UL330_SR330,330_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/41+GfXQ0z9L._AC_UL495_SR495,495_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/711aR0Nm6BL._AC_UL165_SR165,165_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/711aR0Nm6BL._AC_UL330_SR330,330_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/711aR0Nm6BL._AC_UL495_SR495,495_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/71VeHhcq9PL._AC_UL165_SR165,165_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/71VeHhcq9PL._AC_UL330_SR330,330_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/71VeHhcq9PL._AC_UL495_SR495,495_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/61nrWDGVoOL._AC_UL165_SR165,165_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/61nrWDGVoOL._AC_UL330_SR330,330_.jpg",
+    "https://images-eu.ssl-images-amazon.com/images/I/61nrWDGVoOL._AC_UL495_SR495,495_.jpg",
+    "https://m.media-amazon.com/images/G/03/HomeCustomProduct/360_icon_73x73v2._CB485971279_SS40_FMpng_RI_.png",
+    "https://m.media-amazon.com/images/I/51g7D7RIuiL._AC_US40_.jpg",
+    "https://m.media-amazon.com/images/I/41dW984WMKL._AC_US40_.jpg",
+    "https://m.media-amazon.com/images/I/51CL6sTuz6L._AC_US40_.jpg",
+    "https://m.media-amazon.com/images/I/517m-2+lTGL._AC_US40_.jpg",
+    "https://m.media-amazon.com/images/I/51EAdsbGSCL._AC_US40_.jpg",
+    "https://m.media-amazon.com/images/I/51Zg3ZtQ6OL._AC_US40_.jpg",
+    "https://m.media-amazon.com/images/I/41ToSue3XSL._AC_US40_.jpg"
+  ],
+  "badges": [
+    "Befristetes Angebot",
+    "36 % Rabatt",
+    "35 % Rabatt",
+    "43 % Rabatt"
+  ],
+  "deal_badge": "Befristetes Angebot",
+  "product_info": {
+    "normalized": {
+      "manufacturer": "Besuche den Amazon Fire TV Store",
+      "asin": "B09SVVVG16"
+    }
+  },
+  "_source_file": "C:\\Users\\admin\\Desktop\\scraper\\data\\produckt\\https_www.amazon.de_fire-tv-cube_dp_B09BZWZS6S_3370b6735917b0fd.html"
+}
