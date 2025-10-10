@@ -1,0 +1,85 @@
+# --- Python Standard ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Distribution / Packaging ---
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+.conda/
+conda/
+*.env
+
+# --- Jupyter / IPython ---
+.ipynb_checkpoints/
+profile_default/
+.ipython/
+
+# --- PyInstaller ---
+*.manifest
+*.spec
+
+# --- Unit test / Coverage ---
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# --- MyPy / Pyre / Pytype ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# --- Logs / Debug / Temp ---
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+*.DS_Store
+Thumbs.db
+
+# --- IDE / Editor Settings ---
+.vscode/
+.idea/
+*.iml
+
+# --- Project-specific data ---
+data/
+out/
+tmp/
+*.json
+*.html
+*.csv
+*.xlsx
+*.db
+*.sqlite
+
+# --- Chrome profiles created by product_opener.py ---
+prodopener_profile_*/
+
+# --- Optional: compiled extensions ---
+*.so
+*.pyd
