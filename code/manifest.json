@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "HTML Sanitizer (Modular)",
+  "version": "0.1.0",
+  "description": "Parst die aktuelle Seite, entfernt Scripts/Styles/Kommentare/unnÃ¶tige Elemente â€“ modular.",
+  "permissions": ["storage", "activeTab", "scripting", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [{
+    "resources": ["modules/*.js", "utils/*.js"],
+    "matches": ["<all_urls>"]
+  }]
+}

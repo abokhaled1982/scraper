@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Strip &lt;script&gt; tags</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 12px;
+        width: 360px;
+      }
+      button {
+        padding: 8px 12px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      pre {
+        background: #f6f6f6;
+        padding: 8px;
+        border-radius: 8px;
+        max-height: 200px;
+        overflow: auto;
+      }
+      .muted {
+        color: #666;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="run">Get cleaned HTML</button>
+    <button id="download">Download</button>
+    <button id="scroll">Start Auto-Scroll</button>
+    <button id="stopscroll">Stop Auto-Scroll</button>
+
+    v
+    <div id="status" class="muted"></div>
+    <h4>Preview</h4>
+    <pre id="preview"></pre>
+    <script src="popup.js"></script>
+  </body>
+</html>

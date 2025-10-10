@@ -10,7 +10,7 @@ import sys
 
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from config import INBOX_DIR, OUT_DIR,FAILED_DIR,INTERVAL_SECS,REGISTRY_PATH,SUMMARY_PATH
+from config import PRODUCKT_DIR,OUT_DIR,FAILED_DIR,INTERVAL_SECS,REGISTRY_PATH,SUMMARY_PATH
 
 
 from parser import AmazonProductParser  # dein Parser-Modul 
@@ -44,7 +44,7 @@ def _save_registry(reg: dict) -> None:
     tmp.replace(REGISTRY_PATH)
 
 def _pick_oldest_html() -> Optional[Path]:
-    files = [p for p in INBOX_DIR.glob("*.html")]
+    files = [p for p in PRODUCKT_DIR.glob("*.html")]
     if not files:
         return None
     files.sort(key=lambda p: p.stat().st_mtime)
@@ -112,7 +112,7 @@ def process_one(fp: Path, reg: dict) -> Tuple[bool, str]:
 
 def daemon_loop(interval: int = INTERVAL_SECS) -> None:
     # Vertraut darauf, dass run_all.py Ordner angelegt hat (ensure_dirs)
-    print(f"[product-parser] watching {INBOX_DIR} every {interval}s -> {OUT_DIR}")
+    print(f"[product-parser] watching {PRODUCKT_DIR} every {interval}s -> {OUT_DIR}")
     reg = _load_registry()
     while True:
         try:
