@@ -157,15 +157,21 @@ def _due(opened: Dict[str, float], asin: str, now: float) -> bool:
 # ====================== Chrome Start/Stop =========================
 
 def _launch_chrome_with_extension(url: str) -> subprocess.Popen:
-    """
-    Startet eine eigenständige Chrome-Instanz mit temporärem Profil
-    und lädt die Extension aus EXTENSION_DIR, dann öffnet die URL.
-    """
-    user_data_dir = Path(tempfile.mkdtemp(prefix="prodopener_profile_"))
+    # entweder temporär lassen ...
+    # user_data_dir = Path(tempfile.mkdtemp(prefix="prodopener_profile_"))
+
+    # ... oder festen User-Data-Pfad nutzen
+    user_data_dir = Path.home() / "AppData/Local/Google/Chrome/User Data"  # Windows-Beispiel
+    # macOS: Path.home() / "Library/Application Support/Google/Chrome"
+    # Linux: Path.home() / ".config/google-chrome"
+
+    profile_name = "Default"  # z.B. "Default", "Profile 1", "Profile 2", ...
+
     args = [
         CHROME_BIN,
         "--new-window", url,
         f"--user-data-dir={user_data_dir}",
+        f"--profile-directory={profile_name}",      # <— HIER: Profil-Attribut
         f"--load-extension={EXTENSION_DIR}",
         f"--disable-extensions-except={EXTENSION_DIR}",
         "--no-first-run",
