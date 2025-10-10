@@ -14,23 +14,17 @@ import time
 import subprocess
 from pathlib import Path
 import os
-import sys
 import hashlib
 from urllib.parse import urlparse
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from config import OPENED_PATH, PRODUCT_LIST_PATH
 
-# --- CONFIG ---
-HERE = Path(__file__).parent.resolve()
-ROOT = HERE.parent if HERE.name == "amazon" else HERE
-PROJ = ROOT
 
-# Prefer data/product_list.json (as in your previous code), but fall back to ./product_list.json
-CANDIDATE_PRODUCT_PATHS = [
-    PROJ / "data" / "product_list.json",
-    PROJ / "product_list.json",
-]
 
-OPENED_PATH = PROJ / ".opened.json"    # state file we extend/maintain
-REGISTRY_PATH = PROJ / ".registry.json"  # not required for dedupe, but kept for completeness
+
+# OPENED_PATH = PROJ / ".opened.json"    # state file we extend/maintain
 
 CHROME_BIN = os.environ.get(
     "CHROME_BIN",
@@ -43,14 +37,6 @@ SKIP_TTL_SECONDS = int(os.environ.get("SKIP_TTL_SECONDS", str(24*3600)))
 DRY_RUN = os.environ.get("DRY_RUN", "0") not in ("0", "", "false", "False", "no", "No")
 # ----------------
 
-def find_product_list_path() -> Path:
-    for p in CANDIDATE_PRODUCT_PATHS:
-        if p.exists():
-            return p
-    # If neither exists, error out with a helpful message
-    raise FileNotFoundError(
-        f"product_list.json not found. Tried: {', '.join(str(p) for p in CANDIDATE_PRODUCT_PATHS)}"
-    )
 
 def load_json(p: Path, default):
     if not p.exists():
@@ -159,8 +145,8 @@ def update_opened(opened: dict, asin: str, url: str, meta: dict) -> None:
 
 def main():
     # Load inputs
-    product_list_path = find_product_list_path()
-    products = load_json(product_list_path, default={})  # {ASIN: meta}
+    #product_list_path = find_product_list_path()
+    products = load_json(PRODUCT_LIST_PATH, default={})  # {ASIN: meta}
     opened = load_json(OPENED_PATH, default={})          # state
     # registry = load_json(REGISTRY_PATH, default={})    # not required for opening logic
 

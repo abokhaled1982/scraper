@@ -106,7 +106,7 @@ def _ensure_dirs():
     # Create common directories if your workers expect them; safe no-ops otherwise.
     (HERE / "data" / "inbox").mkdir(parents=True, exist_ok=True)
     (HERE / "data" / "produckt").mkdir(parents=True, exist_ok=True)  # preserving original naming
-    (HERE / "out" / "products").mkdir(parents=True, exist_ok=True)
+    (HERE  / "data" / "out" / "products").mkdir(parents=True, exist_ok=True)
 
 async def spawn(name: str, *argv: str):
     print(f"[supervisor] spawn {name}: {' '.join(argv)}")

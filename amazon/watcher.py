@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from config import INBOX_DIR, BAD_SUBDIR, WATCH_INTERVAL_SECS
+from config import INBOX_DIR,WATCH_INTERVAL_SECS
 from parser_worker import parse_and_merge
 
 def _pick_oldest_html(inbox: Path) -> Path | None:
@@ -15,8 +15,7 @@ def _pick_oldest_html(inbox: Path) -> Path | None:
     return files[0]
 
 def main():
-    INBOX_DIR.mkdir(parents=True, exist_ok=True)
-    BAD_SUBDIR.mkdir(parents=True, exist_ok=True)
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)  
 
     print(f"[watcher] started. polling {INBOX_DIR} every {WATCH_INTERVAL_SECS}s")
     while True:
@@ -32,16 +31,8 @@ def main():
             except Exception:
                 # move bad file for later inspection
                 print(f"[watcher] ERROR while parsing {fp.name} -> moving to bad/")
-                traceback.print_exc()
-                dest = BAD_SUBDIR / fp.name
-                try:
-                    shutil.move(str(fp), str(dest))
-                except Exception:
-                    # if move fails, at least try to rename
-                    try:
-                        fp.rename(dest)
-                    except Exception:
-                        pass
+                traceback.print_exc()            
+               
                 continue
 
             # only delete after successful merge

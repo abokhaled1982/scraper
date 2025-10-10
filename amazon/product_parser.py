@@ -6,16 +6,12 @@ import hashlib, json, time, traceback, shutil
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Tuple
+import sys
 
-# --- feste Pfade (run_all.py erstellt die Ordner) ---
-ROOT = Path(__file__).parent.resolve()          # .../amazon
-PROJ = ROOT.parent                              # .../scraper
-INBOX_DIR = (PROJ / "data" / "produckt").resolve()
-OUT_DIR   = (PROJ / "out" / "products").resolve()
-FAILED_DIR = (INBOX_DIR / "_failed").resolve()
-SUMMARY_PATH  = (OUT_DIR / "summary.jsonl").resolve()
-REGISTRY_PATH = (OUT_DIR / ".registry.json").resolve()
-INTERVAL_SECS = 13
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from config import INBOX_DIR, OUT_DIR,FAILED_DIR,INTERVAL_SECS,REGISTRY_PATH,SUMMARY_PATH
+
 
 from parser import AmazonProductParser  # dein Parser-Modul 
 
