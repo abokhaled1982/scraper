@@ -17,7 +17,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import config
 from telegram.login_once import LoginConfig, ensure_logged_in
-from telegram.offer_message import build_caption_html, pick_image_source
+# NEU: Importiere build_inline_keyboard für flexible Buttons
+from telegram.offer_message import build_caption_html, pick_image_source, build_inline_keyboard # Hinzugefügt: build_inline_keyboard
 
 # Settings
 INVITE_RE     = re.compile(r"(?:t\.me\/\+|joinchat\/)([A-Za-z0-9_-]+)")
@@ -26,12 +27,12 @@ OUT_DIR: Path = config.OUT_DIR
 DATA_DIR: Path = config.DATA_DIR
 MAX_TEXT_LEN  = 4096
 AFFILIATE_URL = os.getenv("AFFILIATE_URL", "https://amzn.to/42vWlQM")
-WATCH_SECS    = int(float(os.getenv("WATCH_INTERVAL_SECS", "60")))  # jede Minute
+WATCH_SECS    = int(float(os.getenv("WATCH_INTERVAL_SECS", "10")))  # jede Minute
 
 # Datei im data/-Ordner mit gesendeten ASINs
 SENT_LIST_PATH: Path = DATA_DIR / "sent_asins.json"
 
-# Helpers
+# Helpers (UNVERÄNDERT)
 def chunk_text(s: str, size: int = MAX_TEXT_LEN) -> list[str]:
     s = s or ""
     return [s[i:i+size] for i in range(0, len(s), size)]
@@ -64,7 +65,7 @@ def _extract_identity(fp: str, payload: Union[dict, list, str]) -> Tuple[str, st
     # Fallback: Fingerprint der Datei (stabil, falls kein asin vorhanden)
     return ("filehash", _sha1_file(fp))
 
-# Registry (gesendete ASINs / Hashes) laden/speichern
+# Registry (gesendete ASINs / Hashes) laden/speichern (UNVERÄNDERT)
 def _load_sent_registry() -> dict:
     if SENT_LIST_PATH.exists():
         try:
@@ -103,10 +104,14 @@ class TelegramOfferRouter:
         assert self.client is not None
 
         caption = build_caption_html(d, AFFILIATE_URL)
-        url = d.get("affiliate_url") or AFFILIATE_URL
-        buttons = [[Button.url("🛒 Jetzt sichern", url)]]
-
-        src = pick_image_source(d, config.BASE_DIR)  # lokale Pfade, URLs, Platzhalter
+        
+        # NEU: Flexible Inline-Buttons bauen
+        keyboard_data = build_inline_keyboard(d)
+        # Telethon erwartet hier eine spezielle Inline-Button-Struktur, wenn es ein Bild ist
+        # Konvertierung von Dict in Telethon Button-Struktur
+        buttons = Button.inline_from_column(keyboard_data["inline_keyboard"][0]) if keyboard_data and keyboard_data.get("inline_keyboard") else None
+        
+        src = pick_image_source(d, config.BASE_DIR)    # lokale Pfade, URLs, Platzhalter
 
         if src:
             try:
@@ -116,20 +121,30 @@ class TelegramOfferRouter:
                 )
                 return
             except Exception as e:
-                print(f"⚠️ Bildversand fehlgeschlagen: {e} – sende Text.")
+                # Bessere Fehlermeldung
+                print(f"⚠️ Bildversand fehlgeschlagen (Quelle: {src}) – sende Text. Fehler: {e}")
 
-        # Fallback: reine Textnachricht (ein Post, Button einmal anhängen)
+        # Fallback: reine Textnachricht (ein Post, Buttons einmal anhängen)
+        if keyboard_data and keyboard_data.get("inline_keyboard"):
+             # Konvertiere das Inline-Keyboard-Dict in eine Telethon-List-of-List-Struktur
+            buttons_fallback = [
+                [Button.url(b['text'], b['url']) for b in row]
+                for row in keyboard_data['inline_keyboard']
+            ]
+        else:
+            # Fallback auf den Standard-Button, falls build_inline_keyboard None liefert
+            url = d.get("affiliate_url") or AFFILIATE_URL
+            buttons_fallback = [[Button.url("🛒 Jetzt sichern", url)]]
+        
         for i, part in enumerate(chunk_text(caption)):
             await self.client.send_message(
                 entity, part, parse_mode="html",
-                buttons=buttons if i == 0 else None
+                # Buttons nur beim ersten Teil mitsenden
+                buttons=buttons_fallback if i == 0 else None
             )
 
     async def _send_one_new_item(self, entity) -> bool:
-        """
-        Sucht das ERSTE noch nicht gesendete Produkt und sendet es.
-        Gibt True zurück, wenn etwas gesendet wurde, sonst False.
-        """
+        """ (UNVERÄNDERT) """
         reg = _load_sent_registry()
         files = _iter_json_files()
         for fp in files:
@@ -166,13 +181,10 @@ class TelegramOfferRouter:
                 _save_sent_registry(reg)
                 return True
 
-        return False  # nichts Neues
+        return False    # nichts Neues
 
     async def run_watch(self):
-        """
-        Dauer-Watcher: alle WATCH_SECS prüfen und höchstens 1 Post pro Tick senden.
-        JSONs bleiben im Ordner; Wiederholungen werden durch die Registry verhindert.
-        """
+        """ (UNVERÄNDERT) """
         self.client = await ensure_logged_in(LoginConfig.from_env())
         async with self.client:
             entity = await self._ensure_join_and_resolve(self.client, self.channel_ref)
@@ -189,6 +201,7 @@ class TelegramOfferRouter:
 
     # Alte Einmal-Funktion bleibt verfügbar (falls du sie brauchst)
     async def run_once(self):
+        """ (UNVERÄNDERT) """
         self.client = await ensure_logged_in(LoginConfig.from_env())
         async with self.client:
             entity = await self._ensure_join_and_resolve(self.client, self.channel_ref)
@@ -199,11 +212,11 @@ class TelegramOfferRouter:
             if not any_sent:
                 print("ℹ️ Keine neuen Einträge zum Senden.")
 
-# CLI
+# CLI (UNVERÄNDERT)
 async def _amain():
     if not CHANNEL_REF:
         raise SystemExit("Bitte CHANNEL_INVITE_URL in .env oder config.py setzen.")
-    mode = os.getenv("ROUTER_MODE", "watch")  # "watch" oder "once"
+    mode = os.getenv("ROUTER_MODE", "watch")    # "watch" oder "once"
     router = TelegramOfferRouter(CHANNEL_REF)
     if mode == "once":
         await router.run_once()
