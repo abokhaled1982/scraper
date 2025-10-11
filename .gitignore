@@ -7,10 +7,11 @@ __pycache__/
 venv/
 env/
 data/
+.sessions/
 
 # VS Code
 .vscode/
-.sessions/
+
 
 # Sonstige temporäre Dateien
 *.log
