@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 run_all.py – Supervisor
-
-Starts the browser loader (blocking) BEFORE all long-running services.
-The loader opens Edge + Chrome with given profiles/URLs and contains its own sleeps.
-Then the Amazon services are started and supervised.
+Startet:
+  1. Browser-Loader (Edge + Chrome)
+  2. Alle Amazon-Worker
+  3. Telegram-Router (Watcher-Modus, alles über .env gesteuert)
 """
 
 from __future__ import annotations
@@ -17,40 +17,41 @@ import sys
 import asyncio
 import signal
 from pathlib import Path
+from typing import Optional, Dict
+from dotenv import load_dotenv
 
-# ------------------------------
-# Config & Paths
-# ------------------------------
+# ----------------------------------------------------------
+# Initial Setup & Pfade
+# ----------------------------------------------------------
 HERE = Path(__file__).parent.resolve()
 AMAZON = HERE / "amazon"
 
-# URLs and profiles (from user's snippet)
-URL = "https://www.amazon.de/deals?ref_=nav_cs_gb"
-URL2 = "https://www.geldhub.de/de"
-EDGE_PROFILE = "Default"       # e.g. "Default", "Profile 1", "Profile 2"
-CHROME_PROFILE = "Profile 1"   # e.g. "Default", "Profile 1"
+# 🔹 .env laden
+load_dotenv()
 
-# ------------------------------
-# Loader utilities (from user's snippet)
-# ------------------------------
+# URLs / Profile aus .env oder Defaults
+URL            = os.getenv("EDGE_URL", "https://www.amazon.de/deals?ref_=nav_cs_gb")
+URL2           = os.getenv("CHROME_URL", "https://www.geldhub.de/de")
+EDGE_PROFILE   = os.getenv("EDGE_PROFILE", "Default")
+CHROME_PROFILE = os.getenv("CHROME_PROFILE", "Profile 1")
+
+# ----------------------------------------------------------
+# Browser Loader
+# ----------------------------------------------------------
 def candidates_for(app_name, subpath_64, subpath_86):
-    # Typical installation paths + PATH (Windows)
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
     pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-    cands = [
-        app_name,  # if in PATH
+    return [
+        app_name,
         str(Path(pf) / subpath_64),
         str(Path(pf86) / subpath_86),
     ]
-    return cands
 
 def find_executable(candidates):
     for c in candidates:
-        # first check PATH
         w = shutil.which(c)
         if w:
             return w
-        # then absolute path
         p = Path(c)
         if p.is_file():
             return str(p)
@@ -68,53 +69,48 @@ chrome_cands = candidates_for(
 )
 
 def run_loader_blocking():
-    """Open Edge and Chrome with the given profiles/URLs and wait (sleep already inside)."""
+    """Open Edge and Chrome with given profiles/URLs and wait (sleep already inside)."""
     edge_path = find_executable(edge_cands)
     chrome_path = find_executable(chrome_cands)
 
     if not edge_path:
-        raise FileNotFoundError(
-            "Microsoft Edge (msedge.exe) wurde nicht gefunden.\n"
-            "Bitte prüfe die Installation oder passe den Pfad im Skript an.\n"
-            f"Getestete Pfade:\n- " + "\n- ".join(edge_cands)
-        )
+        raise FileNotFoundError("❌ Edge wurde nicht gefunden – bitte Pfad prüfen.")
 
-    print("Starte Microsoft Edge...")
+    print("🌐 Starte Microsoft Edge …")
     subprocess.Popen([edge_path, f"--profile-directory={EDGE_PROFILE}", URL])
-
-    # kurze Pause, damit Edge sicher hochkommt
     time.sleep(5)
 
     if not chrome_path:
-        raise FileNotFoundError(
-            "Google Chrome (chrome.exe) wurde nicht gefunden.\n"
-            "Bitte prüfe die Installation oder passe den Pfad im Skript an.\n"
-            f"Getestete Pfade:\n- " + "\n- ".join(chrome_cands)
-        )
+        raise FileNotFoundError("❌ Chrome wurde nicht gefunden – bitte Pfad prüfen.")
 
-    print("Starte Google Chrome...")
+    print("🌐 Starte Google Chrome …")
     subprocess.Popen([chrome_path, f"--profile-directory={CHROME_PROFILE}", URL2])
 
-    print("Warte 30 Sekunden...")
-    time.sleep(30)
-    print("Fertig ✅")
+    sleep_time = int(os.getenv("BROWSER_WAIT_SECS", "30"))
+    print(f"⏳ Warte {sleep_time} Sekunden …")
+    time.sleep(sleep_time)
+    print("✅ Browser-Loader fertig.")
 
-# ------------------------------
-# Supervisor for long-running workers
-# ------------------------------
+# ----------------------------------------------------------
+# Supervisor Utilities
+# ----------------------------------------------------------
 def _ensure_dirs():
-    # Create common directories if your workers expect them; safe no-ops otherwise.
     (HERE / "data" / "inbox").mkdir(parents=True, exist_ok=True)
-    (HERE / "data" / "produckt").mkdir(parents=True, exist_ok=True)  # preserving original naming
-    (HERE  / "data" / "out" / "products").mkdir(parents=True, exist_ok=True)
+    (HERE / "data" / "produckt").mkdir(parents=True, exist_ok=True)
+    (HERE / "data" / "out").mkdir(parents=True, exist_ok=True)
+    (HERE / ".sessions").mkdir(parents=True, exist_ok=True)
+    (HERE / "assets").mkdir(parents=True, exist_ok=True)
 
-async def spawn(name: str, *argv: str):
+async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
     print(f"[supervisor] spawn {name}: {' '.join(argv)}")
     creationflags = 0
-    # Create a new process group on Windows so we can send signals cleanly
     if os.name == "nt":
-        creationflags = getattr(asyncio.subprocess, "CREATE_NEW_PROCESS_GROUP", 0)  # type: ignore
-    return await asyncio.create_subprocess_exec(*argv, creationflags=creationflags)
+        creationflags = getattr(asyncio.subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    return await asyncio.create_subprocess_exec(
+        *argv,
+        creationflags=creationflags,
+        env={**os.environ, **(env or {})},
+    )
 
 async def terminate(proc: asyncio.subprocess.Process | None, name: str, timeout: float = 5.0):
     if not proc or proc.returncode is not None:
@@ -127,37 +123,42 @@ async def terminate(proc: asyncio.subprocess.Process | None, name: str, timeout:
         except asyncio.TimeoutError:
             print(f"[supervisor] kill {name}")
             proc.kill()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                print(f"[supervisor] WARN: {name} did not exit")
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
     except ProcessLookupError:
         pass
 
+# ----------------------------------------------------------
+# Main Supervisor
+# ----------------------------------------------------------
 async def main():
     os.chdir(HERE)
     _ensure_dirs()
 
-    # 1) Run loader BEFORE all scripts (blocking). Sleep is already in there.
-    print("[supervisor] running loader (browsers) before services …")
+    print("[supervisor] running loader before services …")
     run_loader_blocking()
     print("[supervisor] loader finished, starting services …")
 
-    # 2) Start long-running services
-    ws_server       = await spawn("ws_server",       sys.executable, str(AMAZON / "ws_server.py"))
-    deals_watcher   = await spawn("deals_watcher",   sys.executable, str(AMAZON / "watcher.py"))
-    product_opener  = await spawn("product_opener",  sys.executable, str(AMAZON / "product_opener.py"))
-    product_parser  = await spawn("product_parser",  sys.executable, str(AMAZON / "product_parser.py"))
+    # Amazon Services
+    ws_server      = await spawn("ws_server",      sys.executable, str(AMAZON / "ws_server.py"))
+    deals_watcher  = await spawn("deals_watcher",  sys.executable, str(AMAZON / "watcher.py"))
+    product_opener = await spawn("product_opener", sys.executable, str(AMAZON / "product_opener.py"))
+    product_parser = await spawn("product_parser", sys.executable, str(AMAZON / "product_parser.py"))
+
+    # 🟢 Telegram Router – alles über .env gesteuert
+    # WATCH_INTERVAL_SECS, ROUTER_MODE, CHANNEL_INVITE_URL, AFFILIATE_URL, DEAL_BADGE_THRESHOLD …
+    tel_router = await spawn("telegram_router", sys.executable, "-m", "telegram.telRouter")
 
     procs = [
         ("ws_server", ws_server),
         ("deals_watcher", deals_watcher),
         ("product_opener", product_opener),
         ("product_parser", product_parser),
+        ("telegram_router", tel_router),
     ]
     for n, p in procs:
         print(f"[supervisor] started {n} (pid={p.pid})")
 
+    # Signalhandling
     stop_event = asyncio.Event()
     def _sig(*_): stop_event.set()
     for s in (signal.SIGINT, signal.SIGTERM):
@@ -181,7 +182,8 @@ async def main():
     else:
         print("[supervisor] stop requested; shutting down …")
 
-    # 3) Shut down others in stable order
+    # geordnet beenden
+    await terminate(tel_router,      "telegram_router")
     await terminate(product_parser,  "product_parser")
     await terminate(product_opener,  "product_opener")
     await terminate(deals_watcher,   "deals_watcher")

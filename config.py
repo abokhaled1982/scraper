@@ -40,8 +40,8 @@ def ensure_directories() -> None:
     Erstellt alle benötigten Ordner, falls sie nicht existieren.
     Kann überall importiert und aufgerufen werden.
     """
-    for p in [DATA_DIR, INBOX_DIR, PRODUCKT_DIR, BAD_SUBDIR]:
+    for p in [DATA_DIR, INBOX_DIR, PRODUCKT_DIR]:
         p.mkdir(parents=True, exist_ok=True)
 
     # Optional: Rückmeldung in der Konsole
-    print(f"[config] ensured directories:\n  {INBOX_DIR}\n  {PRODUCKT_DIR}\n  {BAD_SUBDIR}")
+    print(f"[config] ensured directories:\n  {INBOX_DIR}\n  {PRODUCKT_DIR}\n")
