@@ -10,6 +10,7 @@ data/
 
 # VS Code
 .vscode/
+.sessions/
 
 # Sonstige temporäre Dateien
 *.log
