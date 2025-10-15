@@ -707,6 +707,18 @@ class AmazonProductParser:
             self._select_text("span#dealBadge_feature_div", "span.a-badge-label-inner", "span.dealBadge"),
             self._find_by_regex([r"(Lightning Deal|Blitzangebot|Prime Day|Angebot des Tages|Deal)"]),
         )
+   
+    def extract_shortlink(self, data: ProductData) -> None:
+        """
+        Extracts Amazon shortlink from id='amzn-ss-text-shortlink-textarea'
+        Example:
+            <textarea id="amzn-ss-text-shortlink-textarea" class="amzn-ss-text-shortlink-textarea">https://amzn.to/3xyz</textarea>
+        """
+        el = self.soup.select_one("#amzn-ss-text-shortlink-textarea.amzn-ss-text-shortlink-textarea")
+        if el:
+            shortlink = norm_space(el.get_text() or el.get("value") or "")
+            if shortlink:
+                data.product_info["shortlink"] = shortlink
 
     # --- public API ---
 
@@ -719,6 +731,8 @@ class AmazonProductParser:
         self.extract_ranking_and_vendor(data)
         self.extract_product_info(data)   # NEW
         self.extract_content(data)
+        self.extract_shortlink(data)
+
         return data
 
 # ---------------------------------------------------------------------------
