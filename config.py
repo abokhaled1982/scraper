@@ -10,6 +10,11 @@ INBOX_DIR = DATA_DIR / "inbox"
 OUT_DIR = DATA_DIR / "out"
 PRODUCKT_DIR = DATA_DIR / "produckt"   # <- NEBEN inbox
 
+# Input- und Output-Pfade
+HTML_SOURCE_FILE = DATA_DIR / "html" / "addidas.html" 
+TEMP_LLM_INPUT_FILE = DATA_DIR / "llm_input" / "llm_input.json"
+
+
 
 # Dateien
 PRODUCT_LIST_PATH = DATA_DIR / "product_list.json"
