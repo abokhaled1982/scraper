@@ -3,6 +3,7 @@
 import sys
 import json
 from pathlib import Path
+import uuid # NEU: Für die Generierung zufälliger IDs
 
 # config aus Parent-Ordner laden (direkter Skriptstart möglich)
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -55,16 +56,36 @@ def parse_price_string(price_str: str):
 def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> dict:
     """
     Mappt die extrahierten Daten aus dem AI-Output in das Ziel-JSON-Format,
-    wobei alle Felder auf Englisch benannt und alle Cleanups durchgeführt werden,
-    inklusive der neuen Felder für Verkauf, Händler und Lieferung.
+    wobei alle Felder auf Englisch benannt und alle Cleanups durchgeführt werden.
     """
     extracted = ai_output.get("extracted_data", {})
     final_output = target_template.copy()
     clean_text = ai_output.get("clean_text") # Quelle für allgemeine Texte
     
-    # --- 1. CORE PRODUCT IDENTIFIER (KORRIGIERT: ASIN/SKU-Logik und Umbenennung zu product_id) ---
-    final_output['title'] = ai_output.get('product_title', 'N/A')
-    final_output['affiliate_url'] = target_template.get('url_des_produkts')
+    # --- 1. CORE PRODUCT IDENTIFIER ---
+    
+    # Mapping des Titels: LLM-Titel > Template-Titel > Input-Titel
+    extracted_title = extracted.get('produkt_titel')
+    template_title = target_template.get('title')
+    input_title = ai_output.get('product_title', 'N/A')
+    
+    if extracted_title and extracted_title != 'N/A':
+        final_output['title'] = extracted_title
+    elif template_title and template_title != 'N/A':
+        final_output['title'] = template_title
+    else:
+        final_output['title'] = input_title
+
+    # Mapping der Affiliate URL: LLM-URL > Template-URL
+    extracted_url = extracted.get('url_des_produkts')
+    template_url = target_template.get('affiliate_url')
+
+    if extracted_url and extracted_url != 'N/A':
+        final_output['affiliate_url'] = extracted_url
+    elif template_url:
+        final_output['affiliate_url'] = template_url
+    else:
+        final_output['affiliate_url'] = 'N/A'
     
     # NEU: Implementierung der Produkt-ID Logik (ASIN/SKU)
     extracted_product_id = extracted.get('produkt_id') 
@@ -77,7 +98,7 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
     else:
         final_output['product_id'] = 'N/A'
     
-    final_output.pop('asin', None) # Entferne das alte 'asin' Feld
+    # Das 'asin' Feld wird am Ende von main entfernt.
     
     final_output['brand'] = extracted.get('marke', target_template.get('brand', 'N/A'))
     
@@ -99,13 +120,8 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
     
     # --- 3. IMAGES (KORRIGIERT: Mapping direkt auf Array von URLs) ---
     images_from_ai = extracted.get('hauptprodukt_bilder', [])
-  
+    final_output['images'] = images_from_ai 
     
-  
-    # ÄNDERUNG: Mappen auf 'images' anstelle von 'main_product_images'
-    final_output['images'] = images_from_ai
-    
-    # Entferne die alten Felder, falls sie im Template waren
     final_output.pop('main_product_images', None)
     
     # --- 4. RATING MAPPING (KORRIGIERT) ---
@@ -129,7 +145,6 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
 
     # --- 6. WEITERE PRODUKT- UND LIEFERINFORMATIONEN (NEU) ---
     
-    # NEU: Mappen der hinzugefügten Felder auf Englisch
     final_output['units_sold'] = extracted.get('anzahl_verkauft', target_template.get('units_sold', 'N/A'))
     final_output['seller_name'] = extracted.get('haendler_verkaeufer', target_template.get('seller_name', 'N/A'))
     final_output['availability'] = extracted.get('verfuegbarkeit', target_template.get('availability', 'N/A'))
@@ -155,19 +170,17 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
     return final_output
 
 def main():
-    final_output_file = OUT_DIR / "final_mapped_output.json" # Neuen Dateinamen verwenden
+    # Die Dateidefinition muss später erfolgen, da die ASIN/ID erst nach LLM-Schritt 2 bekannt ist.
     temp_ai_output_file = OUT_DIR / "output.json" # Dateiname vom ai_extractor
 
     # create_directories()
 
-    # 1. SCHRITT: HTML-Verarbeitung
-    # ... (Dieser Teil bleibt unverändert) ...
+    # 1. SCHRITT: HTML-Verarbeitung (Unverändert)
     print("\n=============================================")
     print("SCHRITT 1: HTML-VERARBEITUNG")
     print("=============================================")
     
     try:
-        # Übergibt die fest definierten Pfade an den Prozessor
         process_html_to_llm_input(HTML_SOURCE_FILE, TEMP_LLM_INPUT_FILE)
     except FileNotFoundError as e:
         print(f"PIPELINE ABGEBROCHEN: {e}", file=sys.stderr)
@@ -178,17 +191,14 @@ def main():
         sys.exit(1)
 
 
-    # 2. SCHRITT: AI-Extraktion
-    # ... (Dieser Teil bleibt unverändert) ...
+    # 2. SCHRITT: AI-Extraktion (Unverändert)
     print("\n=============================================")
     print("SCHRITT 2: AI-EXTRAKTION")
     print("=============================================")
 
     try:
-        # KORRIGIERT: Übergibt den korrekten Dateipfad
         extract_and_save_data(TEMP_LLM_INPUT_FILE, temp_ai_output_file)
     except FileNotFoundError as e:
-        # Dies sollte nicht passieren, wenn Schritt 1 erfolgreich war.
         print(f"PIPELINE ABGEBROCHEN: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
@@ -206,14 +216,13 @@ def main():
         with open(temp_ai_output_file, 'r', encoding='utf-8') as f:
             ai_output_data = json.load(f)
 
-              
-        # KORRIGIERT: Template angepasst auf die neuen Zielfelder
+        # 3b. Definiere das Ziel-Template (nur zum Laden der Defaults)
         target_template_content = {
             "title": "roborock Qrevo Serie Saugroboter mit Wischfunktion, 8000Pa Saugkraft(verbessert von Qrevo S), Anti-Verfilzungs-Seitenbürste, Hindernisvermeidung, LiDAR-Navigation, All-in-One Dock,Schwarz(QV 35A Set)",
             "affiliate_url": "https://www.amazon.de/roborock-Anti-Verfilzungs-Seitenb%C3%BCrste-Hindernisvermeidung-LiDAR-Navigation-35A/dp/B0DSLBN5FS",
             "brand": "roborock",
-            "product_id": "N/A", # NEU: Generisches Produkt-ID Feld
-            "asin": "B0DSLBN5FS", # Beibehalten als Fallback/Quelle
+            "product_id": "N/A",
+            "asin": "B0DSLBN5FS", # Fallback ASIN für den Dateinamen, falls LLM fehlschlägt
             "price": {"raw": None, "value": None, "currency_hint": None},
             "original_price": {"raw": None, "value": None, "currency_hint": None},
             "discount_amount": None,
@@ -224,22 +233,35 @@ def main():
             "coupon_text": None,
             "coupon_value": {"percent": None, "amount": None, "currency_hint": None},
             "rabatt_details": "N/A",
-            "images": [], # KORRIGIERT: Umbenennung auf 'images'
-            "main_product_images": [], # Beibehalten, falls es später entfernt wird
+            "images": [], 
+            "main_product_images": [], 
             "features": [],
             "feature_text": None,
             "description": None,
             "description_text": None
         }
 
-        # 3c. Mappe die Daten
+        # 3c. Mappe die Daten (Hier wird 'product_id' im mapped_data gesetzt)
         mapped_data = map_ai_output_to_target_format(ai_output_data, target_template_content)
         
-        # HINWEIS: Das 'asin' Feld wird im Mapping entfernt.
+        # 3d. BESTIMME DEN NAMEN DER AUSGABEDATEI (KORRIGIERT)
+        # Priorität: product_id (vom LLM) > asin (vom Template-Fallback)
+        product_identifier = mapped_data.get('product_id', mapped_data.get('asin', 'N/A'))
+
+        # Generiere einen zufälligen String, wenn keine ID gefunden wurde
+        if product_identifier in ('N/A', None):
+            # Erzeuge eine zufällige, verkürzte UUID als Fallback
+            random_id = str(uuid.uuid4()).replace('-', '') 
+            product_identifier = f"random_{random_id[:12]}" 
+            
+        # NEU: Definiere den finalen Dateipfad mit der Produkt-ID
+        final_output_file = OUT_DIR / f"{product_identifier}.json"
+
+        # VOR dem Speichern: Entferne die temporären/veralteten Felder, die nicht im finalen Schema sein sollen
         mapped_data.pop('asin', None)
         mapped_data.pop('main_product_images', None)
-
-        # 3d. Speichere das Endergebnis
+        
+        # 3e. Speichere das Endergebnis
         print(f"-> Speichere gemapptes Ergebnis unter: {final_output_file.name}")
         with open(final_output_file, 'w', encoding='utf-8') as f:
             json.dump(mapped_data, f, indent=4, ensure_ascii=False)
