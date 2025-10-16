@@ -262,7 +262,7 @@ class ProductData:
 
     # Product info / tech details
     product_info: Dict[str, Any] = field(default_factory=dict)
-
+    affiliate_url: Optional[str] = None  # <— diese Zeile hinzufügen
     # File provenance
     _source_file: Optional[str] = None
 
@@ -718,8 +718,7 @@ class AmazonProductParser:
         if el:
             shortlink = norm_space(el.get_text() or el.get("value") or "")
             if shortlink:
-                data.product_info["shortlink"] = shortlink
-
+               data.affiliate_url = shortlink
     # --- public API ---
 
     def parse(self) -> ProductData:
