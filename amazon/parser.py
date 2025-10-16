@@ -5,39 +5,16 @@ amazon_parser_pro.py
 --------------------
 Professional, robust, and extensible Amazon product HTML parser.
 
-Key additions in this version
------------------------------
-- Parses "wie viel gekauft" (e.g., "100+ gekauft Mal im letzten Monat")
-  -> purchases_past_month, purchases_past_month_is_plus, purchases_past_month_raw
-- Extracts "Produktinformationen" / "Technische Daten" sections including:
-  Hersteller, Modellnummer, Abmessungen, Gewicht, Herkunftsland, Erstverfügbarkeit, etc.
-  -> product_info (normalized dict + raw keys preserved)
+Wichtig:
+- Die Parsing-Logik bleibt unverändert robust.
+- NEU (entscheidend für dich): Eine Mapping-Schicht `to_b0_schema(product)`,
+  die die FELDNAMEN und STRUKTUR 1:1 an das BO…-Schema angleicht.
 
-Design goals
-------------
-- Offline parsing of locally saved Amazon product pages
-- Robust against DOM variations (multiple selectors + regex fallbacks)
-- Clean architecture: utils -> parser (extractors) -> pipeline
-- Outputs:
-    out/<file>.json (per product)
-    out/summary.jsonl (one product JSON per line)
-- No CSV.
+Benutzung (Standalone):
+    python parser.py --inbox inbox --out out
 
-Usage
------
-    # Parse default folder "inbox" and write JSON to "out"
-    python amazon_parser_pro.py
-
-    # Custom folders
-    python amazon_parser_pro.py --inbox "C:\\data\\inbox" --out "C:\\data\\out"
-
-Dependencies
-------------
+Abhängigkeiten:
     pip install bs4 lxml
-
-Legal
------
-Parsing Amazon HTML may be subject to Amazon's terms. Use on offline files.
 """
 
 from __future__ import annotations
@@ -61,20 +38,20 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 def norm_space(s: Optional[str]) -> str:
-    """Collapse whitespace and strip."""
+    """Whitespace normalisieren und trimmen."""
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 def extract_html_from_js_wrapper(raw: str) -> str:
     """
-    Some scrapers store HTML embedded in a JS string/assignment.
-    We trim everything before the first '<html' or '<!doctype'.
+    Falls HTML in einer JS-Variable eingewickelt ist, ab <html…> oder <!doctype…> extrahieren.
     """
     m = re.search(r"(<\s*!doctype\b.*?>|<\s*html\b)", raw, flags=re.I | re.S)
     return raw[m.start():] if m else raw
 
 def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
     """
-    Normalize prices like '€ 1.234,56' or '$1,234.56' -> {'raw', 'value', 'currency_hint'}
+    Normalisiert Preise wie '€ 1.234,56' oder '$1,234.56' -> {'raw','value','currency_hint'}
+    currency_hint: ISO (EUR/USD/GBP/JPY), intern für Berechnung.
     """
     if not text:
         return None
@@ -92,10 +69,10 @@ def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
             .replace("¥", "JPY")
         )
 
-    # keep digits and separators
+    # Ziffern und Trenner behalten
     num = re.sub(r"[^0-9,.\-]", "", t)
 
-    # heuristic: EU decimal
+    # Heuristik: EU-Dezimal
     if num.count(",") and not num.count("."):
         num_eu = num.replace(".", "")
         if "," in num_eu:
@@ -104,7 +81,7 @@ def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
         else:
             num_std = num_eu
     else:
-        # US style or mixed
+        # US-Stil oder gemischt
         num_std = num.replace(",", "")
 
     try:
@@ -116,14 +93,12 @@ def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
 
 def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
     """
-    Parse coupon hints like "10% coupon" or "€5 coupon".
-    Returns {"percent": float|None, "amount": float|None, "currency_hint": str|None}
+    Coupons wie '10% Coupon' oder '5 € Coupon' -> {'percent','amount','currency_hint'}
     """
     if not text:
         return {"percent": None, "amount": None, "currency_hint": None}
     t = text.strip()
 
-    # percentage
     m_pct = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", t)
     if m_pct:
         try:
@@ -132,7 +107,6 @@ def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # absolute
     m_abs = re.search(r"(€|EUR|\$|USD|£|GBP|¥|JPY)?\s*([0-9][0-9.,]*)", t, flags=re.I)
     if m_abs:
         cur = m_abs.group(1)
@@ -163,11 +137,10 @@ def compute_discount_fields(
     coupon_info: Optional[Dict[str, Any]],
 ) -> Dict[str, Optional[float]]:
     """
-    Compute:
+    Berechnet:
       - discount_amount
       - discount_percent
       - final_price_after_coupon
-    Based on price, original/list price, and optional coupon.
     """
     price_val = price_obj.get("value") if isinstance(price_obj, dict) else None
     orig_val = original_price_obj.get("value") if isinstance(original_price_obj, dict) else None
@@ -215,12 +188,12 @@ def first_nonempty(*vals: Optional[str]) -> Optional[str]:
 
 @dataclass
 class ProductData:
-    # Core identity
+    # Identität
     title: Optional[str] = None
     brand: Optional[str] = None
     asin: Optional[str] = None
 
-    # Pricing
+    # Preise
     price: Optional[Dict[str, Any]] = None
     original_price: Optional[Dict[str, Any]] = None
     discount_amount: Optional[float] = None
@@ -229,7 +202,7 @@ class ProductData:
     coupon_value: Dict[str, Any] = field(default_factory=dict)
     final_price_after_coupon: Optional[float] = None
 
-    # Availability / delivery
+    # Verfügbarkeit / Versand
     availability: Optional[str] = None
     is_prime: bool = False
     shipping_cost_text: Optional[str] = None
@@ -238,7 +211,7 @@ class ProductData:
     returns_days: Optional[int] = None
     returns_text: Optional[str] = None
 
-    # Social proof
+    # Social Proof
     rating_value: Optional[float] = None
     review_count: Optional[int] = None
     answered_questions: Optional[int] = None
@@ -246,13 +219,13 @@ class ProductData:
     purchases_past_month_is_plus: Optional[bool] = None
     purchases_past_month_raw: Optional[str] = None
 
-    # Ranking / vendor
+    # Ranking / Händler
     bestseller_rank: Optional[str] = None
     seller_name: Optional[str] = None
     seller_rating_percent: Optional[int] = None
     buybox_sold_by: Optional[str] = None
 
-    # Content
+    # Inhalte
     variants: Dict[str, str] = field(default_factory=dict)
     bullets: List[str] = field(default_factory=list)
     description: Optional[str] = None
@@ -260,10 +233,10 @@ class ProductData:
     badges: List[str] = field(default_factory=list)
     deal_badge: Optional[str] = None
 
-    # Product info / tech details
+    # Produktinfos (Technische Daten)
     product_info: Dict[str, Any] = field(default_factory=dict)
 
-    # File provenance
+    # Quelle
     _source_file: Optional[str] = None
 
 # ---------------------------------------------------------------------------
@@ -271,10 +244,7 @@ class ProductData:
 # ---------------------------------------------------------------------------
 
 class AmazonProductParser:
-    """
-    Encapsulates parsing logic for a single HTML document.
-    Extend by adding methods or enriching selector pools.
-    """
+    """Parser für eine einzelne Amazon-Produktseite (offline HTML)."""
 
     def __init__(self, html_text: str):
         self.html_text = extract_html_from_js_wrapper(html_text)
@@ -283,7 +253,7 @@ class AmazonProductParser:
         except Exception:
             self.soup = BeautifulSoup(self.html_text, "html.parser")
 
-    # --- small helpers bound to soup ---
+    # --- Helpers ---
 
     def _select_text(self, *selectors: str) -> Optional[str]:
         for sel in selectors:
@@ -314,7 +284,7 @@ class AmazonProductParser:
                 return m.group(1) if m.groups() else m.group(0)
         return None
 
-    # --- extractors ---
+    # --- Extractors ---
 
     def extract_core(self, data: ProductData) -> None:
         data.title = self._select_text(
@@ -330,7 +300,7 @@ class AmazonProductParser:
             "tr.po-brand td.a-span9 span",
             "div#bylineInfo_feature_div",
         )
-        # ASIN via tables or data-asin
+        # ASIN
         asin = None
         for table in self.soup.select("table, div#detailBulletsWrapper_feature_div, div#productDetails_detailBullets_sections1"):
             cells = table.select("th, td")
@@ -371,7 +341,7 @@ class AmazonProductParser:
         )
         data.original_price = clean_price(list_price_text) if list_price_text else None
 
-        # explicit savings %
+        # ggf. explizit angezeigte Ersparnis
         explicit_savings = self._select_text(
             "#corePrice_feature_div span.savingsPercentage",
             ".priceBlockSavingsString",
@@ -467,7 +437,7 @@ class AmazonProductParser:
                 except Exception:
                     pass
 
-        # --- "Bought in past month" / "gekauft im letzten Monat" (handles "100+ gekauft ...")
+        # „Gekauft im letzten Monat“ (z. B. „100+ gekauft …“)
         purchases_raw = self._find_by_regex(
             [
                 r"(\d[\d\.\,]*\+?)\s*(?:bought in the past month|bought in past month)",
@@ -483,7 +453,6 @@ class AmazonProductParser:
                 data.purchases_past_month = val
                 data.purchases_past_month_is_plus = True if is_plus else False
             except Exception:
-                # fallback: try to catch "100+" where formatting is odd
                 m = re.search(r"(\d+)\s*\+", purchases_raw)
                 if m:
                     data.purchases_past_month = int(m.group(1))
@@ -517,10 +486,9 @@ class AmazonProductParser:
 
     # ---- PRODUCT INFO / TECH DETAILS ----
     def _normalize_info_key(self, k: str) -> str:
-        """Normalize German/English keys to stable snake_case."""
+        """De/En-Schlüssel → stabile snake_case Keys."""
         k_norm = norm_space(k).lower()
         mapping = {
-            # de -> en (common)
             "hersteller": "manufacturer",
             "marke": "brand",
             "modellnummer": "model_number",
@@ -547,21 +515,18 @@ class AmazonProductParser:
             "herstellerreferenz": "manufacturer_reference",
             "modellar": "model_number",
         }
-        # try simple mapping first
         if k_norm in mapping:
             return mapping[k_norm]
-        # generic normalize
         k_norm = re.sub(r"[^a-z0-9]+", "_", k_norm).strip("_")
         return k_norm
 
     def _collect_key_values(self, container) -> Dict[str, str]:
         """
-        Given a details container (table/div list), try to read key->value pairs.
-        Works with various Amazon layouts.
+        Liest Key/Value-Paare aus diversen Layouts (Tabellen, dl/dd, po-rows).
         """
         kv: Dict[str, str] = {}
 
-        # 1) Key in <th>, value in next <td>
+        # 1) Klassisch: th/td
         for row in container.select("tr"):
             th = row.find("th")
             td = row.find("td")
@@ -571,7 +536,7 @@ class AmazonProductParser:
                 if key and val:
                     kv[key] = val
 
-        # 2) Detail bullets (dt/dd like)
+        # 2) dl/dt/dd
         for dl in container.select("dl"):
             dts = dl.select("dt")
             dds = dl.select("dd")
@@ -581,9 +546,8 @@ class AmazonProductParser:
                 if key and val:
                     kv[key] = val
 
-        # 3) Bullet list inside detail wrapper
+        # 3) Bullets mit bold key
         for li in container.select("li"):
-            # pattern: <span class="a-text-bold">Key:</span> Value
             bold = li.select_one("span.a-text-bold")
             if bold:
                 key = norm_space(bold.get_text()).rstrip(":")
@@ -591,7 +555,7 @@ class AmazonProductParser:
                 if key and val:
                     kv[key] = val
 
-        # 4) A newer "po-" table structure (mobile/desktop)
+        # 4) Neues "po-" Layout
         for row in container.select("div.po-row, div.po-item, tr.po-row"):
             lab = row.select_one(".po-attribute-name, .a-span3, th")
             val = row.select_one(".po-attribute-value, .a-span9, td")
@@ -603,12 +567,9 @@ class AmazonProductParser:
         return kv
 
     def extract_product_info(self, data: ProductData) -> None:
-        """
-        Parse 'Produktinformationen' / 'Technische Daten' blocks from various layouts.
-        """
+        """Produktinformationen / Technische Daten einsammeln."""
         info_blocks = []
 
-        # Classic details sections
         for sel in [
             "#productDetails_detailBullets_sections1",
             "#productDetails_techSpec_section_1",
@@ -620,21 +581,17 @@ class AmazonProductParser:
             if el:
                 info_blocks.append(el)
 
-        # A+ and mobile layouts may use "po-" prefixed containers
         for el in self.soup.select("div#poExpander, div#poDocumentCarousel, div#technicalSpecifications_feature_div"):
             info_blocks.append(el)
 
-        # Aggregate key-values
         raw_kv: Dict[str, str] = {}
         for blk in info_blocks:
             raw_kv.update(self._collect_key_values(blk))
 
-        # Normalize keys
         normalized: Dict[str, Any] = {}
         for k, v in raw_kv.items():
             nk = self._normalize_info_key(k)
             if nk in normalized and normalized[nk] != v:
-                # Keep first, also store under nk__alt if different
                 suffix = 2
                 while f"{nk}__alt{suffix}" in normalized:
                     suffix += 1
@@ -642,20 +599,15 @@ class AmazonProductParser:
             else:
                 normalized[nk] = v
 
-        # If manufacturer missing but brand present, set as fallback
         if "manufacturer" not in normalized and data.brand:
             normalized["manufacturer"] = data.brand
-
-        # If ASIN missing but we have data.asin
         if "asin" not in normalized and data.asin:
             normalized["asin"] = data.asin
 
-        data.product_info = {                      # original keys as seen on page
-            "normalized": normalized  # normalized keys for stable usage
-        }
+        data.product_info = {"normalized": normalized}
 
     def extract_content(self, data: ProductData) -> None:
-        # variants (size/color)
+        # Varianten
         for block in self.soup.select("div#twister, div#variation_size_name, div#variation_color_name"):
             label = block.select_one("label")
             lab = norm_space(label.get_text()) if label else None
@@ -664,7 +616,7 @@ class AmazonProductParser:
             if lab or sel:
                 data.variants[lab or "variant"] = sel
 
-        # bullets
+        # Bullets
         bullets = [
             norm_space(li.get_text())
             for li in self.soup.select("#feature-bullets li:not(.aok-hidden)")
@@ -672,7 +624,7 @@ class AmazonProductParser:
         ]
         data.bullets = bullets
 
-        # description
+        # Beschreibung
         for sel in ["#productDescription", "div#aplus_feature_div", "div#productDescription_feature_div"]:
             el = self.soup.select_one(sel)
             if el:
@@ -681,7 +633,7 @@ class AmazonProductParser:
                     data.description = desc
                     break
 
-        # images
+        # Bilder
         seen: set = set()
         for img_container in self.soup.select("img[data-a-dynamic-image]"):
             raw = img_container.get("data-a-dynamic-image", "")
@@ -696,23 +648,21 @@ class AmazonProductParser:
                 seen.add(src)
                 data.images.append(src)
 
-        # badges
+        # Badges
         for b in self.soup.select("span.badge-label, span.a-badge-label-inner, i.a-icon-amazons-choice, i.a-icon-bestseller"):
             t = norm_space(b.get_text())
             if t and t not in data.badges:
                 data.badges.append(t)
 
-        # deal badge / promo keywords
+        # Deal-Hinweise
         data.deal_badge = first_nonempty(
             self._select_text("span#dealBadge_feature_div", "span.a-badge-label-inner", "span.dealBadge"),
             self._find_by_regex([r"(Lightning Deal|Blitzangebot|Prime Day|Angebot des Tages|Deal)"]),
         )
-   
+
     def extract_shortlink(self, data: ProductData) -> None:
         """
-        Extracts Amazon shortlink from id='amzn-ss-text-shortlink-textarea'
-        Example:
-            <textarea id="amzn-ss-text-shortlink-textarea" class="amzn-ss-text-shortlink-textarea">https://amzn.to/3xyz</textarea>
+        Extrahiert Amazon-Shortlink (z.B. amzn.to) falls auf der Seite vorhanden.
         """
         el = self.soup.select_one("#amzn-ss-text-shortlink-textarea.amzn-ss-text-shortlink-textarea")
         if el:
@@ -720,7 +670,7 @@ class AmazonProductParser:
             if shortlink:
                 data.product_info["shortlink"] = shortlink
 
-    # --- public API ---
+    # --- Public API ---
 
     def parse(self) -> ProductData:
         data = ProductData()
@@ -729,21 +679,154 @@ class AmazonProductParser:
         self.extract_availability_and_delivery(data)
         self.extract_social_proof(data)
         self.extract_ranking_and_vendor(data)
-        self.extract_product_info(data)   # NEW
+        self.extract_product_info(data)
         self.extract_content(data)
         self.extract_shortlink(data)
-
         return data
 
 # ---------------------------------------------------------------------------
-# Ingestion Pipeline
+# Schema Mapping -> "BO..."-Struktur (wie B0DSLBN5FS.json)
+#   Ändert nur die Ausgabestruktur – nicht das Parsing!
+# ---------------------------------------------------------------------------
+
+def _currency_symbol_from_raw(raw: Optional[str]) -> str:
+    """Aus raw-Preistext Symbol extrahieren (€, $, £, ¥); Fallback: 'EUR'."""
+    if not raw:
+        return "EUR"
+    m = re.search(r"(€|\$|£|¥)", raw)
+    if m:
+        return m.group(1)
+    return "EUR"
+
+def _price_obj_with_symbol(price_obj: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Passt Preisobjekt an BO-Schema an: currency_hint enthält das SYMBOL (z. B. '€').
+    """
+    if not price_obj:
+        return None
+    raw = price_obj.get("raw") or ""
+    return {
+        "raw": raw or None,
+        "value": price_obj.get("value"),
+        "currency_hint": _currency_symbol_from_raw(raw)
+    }
+
+def _format_discount_percent(price_obj: Optional[Dict[str, Any]],
+                             original_price_obj: Optional[Dict[str, Any]],
+                             explicit_pct: Optional[float]) -> Optional[str]:
+    """
+    Formatiert Rabatt-Prozent als String wie '-40%'.
+    Nimmt, wenn vorhanden, explicit_pct; sonst aus price/original berechnet.
+    """
+    def _val(p):
+        return p.get("value") if isinstance(p, dict) else None
+
+    if explicit_pct is not None:
+        try:
+            return f"-{int(round(float(explicit_pct)))}%"
+        except Exception:
+            pass
+
+    pv = _val(price_obj)
+    ov = _val(original_price_obj)
+    if pv is not None and ov and ov > 0 and pv <= ov:
+        try:
+            pct = round((1 - pv / ov) * 100)
+            return f"-{int(pct)}%"
+        except Exception:
+            return None
+    return None
+
+def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
+    """
+    Mappt ProductData -> BO…-Schema (Feldnamen + Struktur wie B0DSLBN5FS.json).
+    """
+    price_obj = _price_obj_with_symbol(product.price)
+    orig_obj  = _price_obj_with_symbol(product.original_price)
+    discount_percent_str = _format_discount_percent(product.price, product.original_price, product.discount_percent)
+
+    rating_block = None
+    if product.rating_value is not None or product.review_count is not None:
+        rating_block = {"value": product.rating_value, "counts": product.review_count}
+
+    features_list = product.bullets or []
+    feature_text = " • ".join(features_list) if features_list else None
+    description_text = product.description or None
+
+    if product.purchases_past_month is not None:
+        units_sold = f"{product.purchases_past_month}{'+' if product.purchases_past_month_is_plus else ''} im letzten Monat"
+    else:
+        units_sold = "N/A"
+
+    coboun_more = None
+    if product.coupon_value:
+        if product.coupon_value.get("percent"):
+            try:
+                coboun_more = f"Spare {int(round(product.coupon_value['percent']))} %"
+            except Exception:
+                coboun_more = None
+        elif product.coupon_value.get("amount") is not None:
+            amt = product.coupon_value.get("amount")
+            cur = product.coupon_value.get("currency_hint") or ""
+            try:
+                coboun_more = f"Spare {float(amt):g} {cur}".strip()
+            except Exception:
+                coboun_more = f"Spare {amt} {cur}".strip()
+    if not coboun_more and product.coupon_text:
+        coboun_more = product.coupon_text
+
+    coboun_block = {"code": "N/A", "code_details": "N/A", "more": coboun_more}
+
+    affiliate_url = None
+    if product.asin:
+        affiliate_url = f"https://www.amazon.de/dp/{product.asin}"
+    try:
+        shortlink = product.product_info.get("shortlink")
+        if shortlink:
+            affiliate_url = shortlink
+    except Exception:
+        pass
+
+    out = {
+        "title": product.title or None,
+        "affiliate_url": affiliate_url,
+        "brand": product.brand or None,
+        "product_id": product.asin or None,
+        "price": price_obj,
+        "original_price": orig_obj,
+        "discount_amount": product.discount_amount,
+        "discount_percent": discount_percent_str,
+        "rating": rating_block,
+        "coupon_text": product.coupon_text or None,
+        "coupon_value": {
+            "percent": product.coupon_value.get("percent") if product.coupon_value else None,
+            "amount": product.coupon_value.get("amount") if product.coupon_value else None,
+            "currency_hint": product.coupon_value.get("currency_hint") if product.coupon_value else None,
+        },
+        "rabatt_details": None,
+        "images": product.images or [],
+        "features": features_list,
+        "feature_text": feature_text,
+        "description": None,             # im Beispiel null
+        "description_text": description_text,
+        "coboun": coboun_block,
+        "units_sold": units_sold,
+        "seller_name": product.seller_name or None,
+        "availability": product.availability or None,
+        "shipping_info": product.shipping_cost_text or None,
+    }
+    return out
+
+# ---------------------------------------------------------------------------
+# CLI (optional: schreibt BO-Schema direkt in out/)
 # ---------------------------------------------------------------------------
 
 class InboxPipeline:
     """
-    Reads all supported files from an input folder and writes JSON outputs.
+    Liest HTML aus --inbox und schreibt JSON nach --out.
+    Hier (bewusst) Standard: ORIGINAL-Parsing-Struktur.
+    Für BO-Schema: nutze product_parser.py (Daemon) oder passe unten an.
     """
-
     def __init__(self, inbox_dir: Path, out_dir: Path):
         self.inbox_dir = inbox_dir
         self.out_dir = out_dir
@@ -774,10 +857,13 @@ class InboxPipeline:
                     product._source_file = str(fp.resolve())
 
                     out_json = self.out_dir / f"{fp.stem}.json"
+                    # HINWEIS: Standardmäßig original asdict; wenn du
+                    # BO-Schema willst, tausche asdict(product) gegen to_b0_schema(product)
+                    data = asdict(product)
                     with out_json.open("w", encoding="utf-8") as f:
-                        json.dump(asdict(product), f, ensure_ascii=False, indent=2)
+                        json.dump(data, f, ensure_ascii=False, indent=2)
 
-                    summary_out.write(json.dumps(asdict(product), ensure_ascii=False) + "\n")
+                    summary_out.write(json.dumps(data, ensure_ascii=False) + "\n")
 
                     parsed += 1
                     print(f"[OK] {fp.name} -> {out_json.name}")
@@ -788,10 +874,6 @@ class InboxPipeline:
         print(f"\nSummary: parsed={parsed}, errors={errors}, out={self.out_dir}")
         print(f"Summary file: {summary_path}")
         return parsed, errors
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser(description="Robust Amazon product HTML parser (offline).")
