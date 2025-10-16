@@ -109,7 +109,15 @@ class TelegramOfferRouter:
         keyboard_data = build_inline_keyboard(d)
         # Telethon erwartet hier eine spezielle Inline-Button-Struktur, wenn es ein Bild ist
         # Konvertierung von Dict in Telethon Button-Struktur
-        buttons = Button.inline_from_column(keyboard_data["inline_keyboard"][0]) if keyboard_data and keyboard_data.get("inline_keyboard") else None
+        # Konvertiere das Inline-Keyboard-Dict in eine Telethon-List-of-List-Struktur
+        # Nur wenn keyboard_data vorhanden ist
+        if keyboard_data and keyboard_data.get("inline_keyboard"):
+             buttons = [
+                [Button.url(b['text'], b['url']) for b in row]
+                for row in keyboard_data['inline_keyboard']
+            ]
+        else:
+            buttons = None # Kein Keyboard
         
         src = pick_image_source(d, config.BASE_DIR)    # lokale Pfade, URLs, Platzhalter
 
@@ -133,7 +141,11 @@ class TelegramOfferRouter:
             ]
         else:
             # Fallback auf den Standard-Button, falls build_inline_keyboard None liefert
-            url = d.get("affiliate_url") or AFFILIATE_URL
+            url = (
+                d.get("affiliate_url")
+                or d.get("product_url")
+                or (f"https://www.amazon.de/dp/{d['asin']}" if d.get("asin") else AFFILIATE_URL)
+            )
             buttons_fallback = [[Button.url("🛒 Jetzt sichern", url)]]
         
         for i, part in enumerate(chunk_text(caption)):
