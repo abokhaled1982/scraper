@@ -1,4 +1,10 @@
 # ai_extractor.py
+"""
+Definiert die Pydantic-Datenmodelle und die Logik zur LLM-gestützten Extraktion.
+
+AKTUALISIERUNGEN: 
+1. Feld 'url_des_produkts' im LLM-Schema hinzugefügt (wird später zu affiliate_url).
+"""
 
 import os
 import json
@@ -9,7 +15,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-load_dotenv() 
+load_dotenv()
 
 # --- 1. LLM-DATENMODELLE ---
 
@@ -20,128 +26,109 @@ class Produktbild(BaseModel):
         description="Der Breiten- oder Dichte-Deskriptor, z.B. '480w' (Mobile), '1200w' (Desktop) oder '2x' (Retina). Wähle den besten Deskriptor, der zur URL passt, oder schätze diesen ('1x' als Standard)."
     )
 
+class Gutschein(BaseModel):
+    """Repräsentiert spezifische Gutschein-Informationen."""
+    details: str = Field(description="Der gefundene Gutscheintext, z.B. '5% Rabatt mit Code X' ODER 'N/A'.")
+    code: str = Field(description="Der Gutscheincode oder 'N/A', falls kein Code gefunden wurde.")
+
 class Produktinformation(BaseModel):
     """Strukturierte Daten, die von der Produktseite extrahiert werden sollen."""
+    titel: str = Field(description="Der vollständige, aussagekräftige Produkt-Titel aus dem Text.")
+    sku_asin: str = Field(description="Die eindeutige Produktnummer (ASIN, SKU, EAN, MPN oder eine ähnliche Produktkennung) aus dem Text. Gib 'N/A' an, wenn keine gefunden wird.")
+    
+    # NEU: Das Feld für die Produkt-URL
+    url_des_produkts: str = Field(description="Die vollständige und bereinigte URL der Produktseite, gefunden in canonical tags oder anderen Links im HTML-Inhalt. Gib 'N/A' an, wenn keine URL gefunden wird.")
+
     marke: str = Field(description="Die Marke oder der Hersteller des Produkts.")
     akt_preis: str = Field(description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €).")
     uvp_preis: str = Field(description="Der ursprüngliche Preis (UVP) vor dem Rabatt oder 'N/A'.")
     rabatt_prozent: str = Field(description="Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'.")
-    rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für einen Rabatt, z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', 'Sonderpreis' oder 'N/A'.")
-    
-    hauptprodukt_bilder: list[Produktbild] = Field(
-        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei jede URL mit ihrem responsiven Deskriptor ('480w', '1200w' oder '2x') kategorisiert wird. Das Array muss leer sein, wenn keine Bilder gefunden werden."
+    rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für einen Rabatt, z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', 'Sonderpreis', 'Befristetes Angebot' oder 'N/A'.")
+
+    bewertung: str = Field(description="Die durchschnittliche Kundenbewertung, z.B. '4,5 von 5 Sternen' oder 'N/A'.")
+    anzahl_bewertungen: str = Field(description="Die Gesamtzahl der abgegebenen Kundenbewertungen, z.B. '1.234' oder 'N/A'.")
+
+    gutschein: Gutschein = Field(description="Informationen über Gutscheine.")
+    verfuegbarkeit: str = Field(description="Die Verfügbarkeit des Produkts, z.B. 'Auf Lager' oder 'Nicht auf Lager'.")
+    produkt_highlights: list[str] = Field(description="Eine Liste der wichtigsten Produktmerkmale/Highlights (Bullet-Points).")
+    images: list[Produktbild] = Field(
+        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei nur die beste/größte URL pro Bild mit ihrem Größendeskriptor angegeben wird."
     )
-    
-    bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1. Verwende 0.0, falls nicht gefunden.")
-    anzahl_reviews: int = Field(description="Die Gesamtzahl der abgegebenen Bewertungen (Reviews). Verwende 0, falls nicht gefunden.")
-    anzahl_verkauft: str = Field(description="Die Anzahl der verkauften Produkte (z.B. 'Über 1000 verkauft' oder 'N/A').")
-    haendler_verkaeufer: str = Field(description="Der Name des Händlers oder Verkäufers, der das Produkt versendet (z.B. 'Zalando', 'Amazon' oder 'N/A').")
-    verfuegbarkeit: str = Field(description="Informationen zur Verfügbarkeit.")
-    lieferinformation: str = Field(description="Details zur Lieferung.")
-    gutschein_code: str = Field(description="Der Gutscheincode oder Promo-Code, z.B. '20PREMIUM' oder 'N/A'.")
-    gutschein_details: str = Field(description="Die vollständige Beschreibung des Gutscheins, z.B. 'Spare -20% auf Premium & Designer Brands.' oder 'N/A'.")
 
 
-# --- 2. LLM-FUNKTIONEN ---
+# --- 2. LLM-LOGIK UND IMPLEMENTIERUNG ---
 
 def baue_pattern_pack():
-    """Initialisiert den LLM-Client und die Konfiguration."""
-    if "GOOGLE_API_KEY" not in os.environ:
-        raise EnvironmentError(
-            "Die Umgebungsvariable 'GOOGLE_API_KEY' ist nicht gesetzt. "
-            "Bitte erstellen Sie eine '.env' Datei und fügen Sie Ihren Schlüssel ein."
-        )
+    """Erstellt das Pattern Pack für die LLM-Extraktion."""
+    schema_definition = Produktinformation.model_json_schema()
+    return {"output_schema": schema_definition}
+
+def extrahiere_produktsignale(clean_text: str, bild_kandidaten_list: list[str], pack: dict) -> dict:
+    """Führt die LLM-Extraktion durch."""
+    try:
+        client = genai.Client()
+    except Exception:
+        raise EnvironmentError("GOOGLE_API_KEY ist nicht gesetzt oder ungültig.")
     
-    client = genai.Client()
+    # Prompt-Anpassung, um die URL-Extraktion zu betonen
+    prompt = f"""
+    Extrahiere die folgenden Produktinformationen aus dem bereitgestellten Text und den Bild-Kandidaten.
+    1. Fülle 'titel' mit dem vollständigsten und besten Produktnamen.
+    2. Fülle 'sku_asin' mit der eindeutigen Produktnummer (ASIN, SKU, EAN o.ä.) aus dem Text.
+    3. Fülle 'url_des_produkts' mit der vollständigen und bereinigten URL der Produktseite (canonical oder Haupt-Link).
+    4. Fülle 'rabatt_text' mit dem allgemeinen Rabatt- oder Angebotstext (wird später zu gutschein.details).
+    5. Fülle 'gutschein.code' NUR mit dem tatsächlichen Gutscheincode.
+    Gib 'N/A' an, wenn die Information fehlt.
+
+    --- BILD-KANDIDATEN ---
+    {json.dumps(bild_kandidaten_list, indent=2, ensure_ascii=False)}
+    
+    --- BEREINIGTER TEXT ---
+    {clean_text[:4000]}
+    """
+    
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=Produktinformation,
-    )
-    
-    system_prompt = (
-        "Du bist ein hochpräziser Datenextraktions-Experte. Deine Aufgabe ist es, alle "
-        "angeforderten Produktdetails aus dem unstrukturierten Text und der bereitgestellten "
-        "Liste von Bild-Kandidaten zu extrahieren. Halte dich streng an das bereitgestellte JSON-Schema. "
-        "WICHTIG: Prüfe die Liste der 'BILD-KANDIDATEN' sorgfältig. Wähle die relevantesten "
-        "Hauptbild-URLs (inklusive responsiver Varianten) und **strukturiere diese als Array von Produktbild-Objekten** "
-        "im Feld 'hauptprodukt_bilder'. Jedes Objekt muss 'url' und 'groessen_deskriptor' enthalten. "
-        "Wenn Deskriptoren fehlen, nutze Schätzungen wie '1x'. Wenn keine Bilder gefunden werden, "
-        "muss 'hauptprodukt_bilder' eine leere Liste `[]` sein. Für alle anderen nicht gefundenen Felder "
-        "muss exakt 'N/A' oder 0/0.0 befüllt werden. Der Output muss zu 100% valides JSON sein."
+        response_schema=pack["output_schema"],
     )
 
-    return {
-        "client": client,
-        "config": config,
-        "system_prompt": system_prompt
-    }
-
-def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
-    """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=config,
+        )
+        return json.loads(response.text)
     
-    LLM_MODEL = 'gemini-2.5-flash' # Kosteneffizienter für Extraktion
+    except Exception as e:
+        print(f"LLM-Aufruf fehlgeschlagen: {e}", file=sys.stderr)
+        return {"Extraktionsfehler": f"LLM-Fehler: {e}"}
+
+
+# --- 3. HAUPTLOGIK (extract_and_save_data) ---
+
+def extract_and_save_data(llm_input_path: Path, output_path: Path):
+    """Führt die LLM-Extraktion durch und speichert das Roh-Ergebnis."""
+    try:
+        with open(llm_input_path, 'r', encoding='utf-8') as f:
+            llm_input_data = json.load(f)
+    except Exception as e:
+        raise FileNotFoundError(f"Fehler beim Laden der LLM-Eingabedatei: {e}")
+
+    clean_text = llm_input_data.get("clean_text", "")
+    bild_kandidaten_str = llm_input_data.get("bild_kandidaten", "") 
     
-    client = pack["client"]
-    config = pack["config"]
-    system_prompt = pack["system_prompt"]
+    print("\t-> Starte LLM-Extraktion...")
     
-    user_prompt = f"""
-Extrahiere die Produktinformationen aus dem folgenden Text.
-
-BILD-KANDIDATEN (Wähle und kategorisiere die relevanten Hauptproduktbilder):
----
-{bild_kandidaten_str}
----
-
-PRODUKT-TEXT:
----
-{unstrukturierter_text}
----
-"""
-
-    print(f"-> Sende Extraktionsanfrage an {LLM_MODEL} (LLM)...")
-
-    response = client.models.generate_content(
-        model=LLM_MODEL, 
-        contents=[system_prompt, user_prompt],
-        config=config,
-    )
-    
-    print("<- Antwort erhalten.")
-    
-    json_string = response.text.strip()
-    produkt_daten = Produktinformation.model_validate_json(json_string)
-    
-    return produkt_daten.model_dump()
-
-
-# --- 3. Hauptausführung des Skripts ---
-
-def extract_and_save_data(input_path: Path, output_path: Path):
-    """
-    Liest die Input-JSON, führt die LLM-Extraktion durch und speichert das Ergebnis.
-    """
-    print(f"\n[SCHRITT 2/2: AI-EXTRAKTOR]")
-    print(f" 	-> LLM-Input-Quelle: {input_path.resolve()}")
-    print(f" 	-> Ausgabe-Ziel: {output_path.resolve()}")
-    
-    if not input_path.exists():
-        raise FileNotFoundError(f"LLM-Input-Datei nicht gefunden: {input_path}")
-        
-    print("\n-> Lese LLM-Input-Daten...")
-    with open(input_path, "r", encoding="utf-8") as f:
-        llm_input_data = json.load(f)
-
-    clean_text = llm_input_data.get("clean_text", "N/A")
-    bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
-    
-    if clean_text == "N/A" or not clean_text.strip():
+    result = {}
+    if not clean_text.strip():
         result = {"Fehler": "Bereinigter Text ist leer."}
         print("WARNUNG: Bereinigter Text ist leer. LLM-Extraktion wird übersprungen.", file=sys.stderr)
     else:
         try:
             pack = baue_pattern_pack()
-            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack)
+            bild_kandidaten_list = bild_kandidaten_str.split(' | ') if bild_kandidaten_str else []
+            result = extrahiere_produktsignale(clean_text, bild_kandidaten_list, pack)
         except EnvironmentError as e:
             print(f"Fehler beim Laden des LLM-Schlüssels: {e}", file=sys.stderr)
             sys.exit(1)
@@ -150,20 +137,17 @@ def extract_and_save_data(input_path: Path, output_path: Path):
             print(error_msg, file=sys.stderr)
             result = {"Extraktionsfehler": str(e), "Hinweis": "Prüfen Sie den GOOGLE_API_KEY und das LLM-Schema."}
 
-
-    # Finales Ergebnis speichern
+    # Finales Ergebnis speichern (Roh-Output)
     final_output = {
         "source_file": llm_input_data.get("source_file", "N/A"),
-        "product_title": llm_input_data.get("product_title", "N/A"),
-        "raw_bild_kandidaten": bild_kandidaten,
+        "product_title": llm_input_data.get("product_title", "N/A"), 
+        "asin": llm_input_data.get("asin", "N/A"), 
+        "raw_bild_kandidaten": bild_kandidaten_str,
         "clean_text": clean_text,
         "extracted_data": result,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(final_output, f, ensure_ascii=False, indent=2)
-
-    print(f"\n[ERFOLG] Pipeline abgeschlossen!")
-    print(f" 	-> Strukturiertes Ergebnis gespeichert in: {output_path}")
-
-# Die if __name__ == "__main__": Logik wurde entfernt, da der Runner diese Funktion aufruft.
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(final_output, f, indent=4, ensure_ascii=False)
+    
+    print(f"\t-> LLM-Roh-Output gespeichert unter: {output_path.resolve()}")
