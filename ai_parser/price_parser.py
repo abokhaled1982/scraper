@@ -52,9 +52,6 @@ def parse_price_string(price_str: str):
     }
 
 # NEUE FUNKTION: Daten-Transformation und Mapping
-# ... (Vorheriger Code inklusive Importe und Hilfsfunktionen wie parse_price_string) ...
-
-# NEUE FUNKTION: Daten-Transformation und Mapping
 def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> dict:
     """
     Mappt die extrahierten Daten aus dem AI-Output in das Ziel-JSON-Format,
@@ -65,10 +62,23 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
     final_output = target_template.copy()
     clean_text = ai_output.get("clean_text") # Quelle für allgemeine Texte
     
-    # --- 1. CORE PRODUCT IDENTIFIER (Unverändert) ---
+    # --- 1. CORE PRODUCT IDENTIFIER (KORRIGIERT: ASIN/SKU-Logik und Umbenennung zu product_id) ---
     final_output['title'] = target_template.get('title', ai_output.get('product_title', 'N/A'))
-    final_output['affiliate_url'] = target_template.get('affiliate_url')
-    final_output['asin'] = target_template.get('asin')
+    final_output['affiliate_url'] = target_template.get('produkt_url')
+    
+    # NEU: Implementierung der Produkt-ID Logik (ASIN/SKU)
+    extracted_product_id = extracted.get('produkt_id') 
+    template_asin = target_template.get('asin') # Verwende ASIN aus Template als Fallback
+
+    if extracted_product_id and extracted_product_id != 'N/A':
+        final_output['product_id'] = extracted_product_id
+    elif template_asin:
+        final_output['product_id'] = template_asin
+    else:
+        final_output['product_id'] = 'N/A'
+    
+    final_output.pop('asin', None) # Entferne das alte 'asin' Feld
+    
     final_output['brand'] = extracted.get('marke', target_template.get('brand', 'N/A'))
     
     # --- 2. PRICE & DISCOUNT MAPPING (Unverändert) ---
@@ -87,15 +97,16 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
         
     final_output['discount_percent'] = extracted.get('rabatt_prozent', target_template.get('discount_percent', 'N/A'))
     
-    # --- 3. IMAGES (Unverändert) ---
-    images = extracted.get('hauptprodukt_bilder', [])
-    mapped_images = []
-    for img in images:
-        mapped_images.append({
-            "url": img.get('url'),
-            "size_descriptor": img.get('groessen_deskriptor')
-        })
-    final_output['main_product_images'] = mapped_images
+    # --- 3. IMAGES (KORRIGIERT: Mapping direkt auf Array von URLs) ---
+    images_from_ai = extracted.get('hauptprodukt_bilder', [])
+  
+    
+  
+    # ÄNDERUNG: Mappen auf 'images' anstelle von 'main_product_images'
+    final_output['images'] = images_from_ai
+    
+    # Entferne die alten Felder, falls sie im Template waren
+    final_output.pop('main_product_images', None)
     
     # --- 4. RATING MAPPING (KORRIGIERT) ---
     final_output['rating'] = {
@@ -142,6 +153,7 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
    
   
     return final_output
+
 def main():
     final_output_file = OUT_DIR / "final_mapped_output.json" # Neuen Dateinamen verwenden
     temp_ai_output_file = OUT_DIR / "output.json" # Dateiname vom ai_extractor
@@ -194,18 +206,15 @@ def main():
         with open(temp_ai_output_file, 'r', encoding='utf-8') as f:
             ai_output_data = json.load(f)
 
-        # 3b. Lade die Ziel-JSON-Struktur (B0DSLBN5FS.json)
-        # HINWEIS: Wir verwenden die hochgeladene Datei B0DSLBN5FS.json als Template.
-        target_template_file = Path(__file__).resolve().parent / "B0DSLBN5FS.json"
+      
         
-        # In dieser Umgebung nutzen wir die geladene Snippet-Information für das Template
-        # In einem realen Skript würden Sie die Datei B0DSLBN5FS.json laden.
-        # Da ich nur das Snippet habe, simuliere ich den Inhalt der Datei.
+        # KORRIGIERT: Template angepasst auf die neuen Zielfelder
         target_template_content = {
             "title": "roborock Qrevo Serie Saugroboter mit Wischfunktion, 8000Pa Saugkraft(verbessert von Qrevo S), Anti-Verfilzungs-Seitenbürste, Hindernisvermeidung, LiDAR-Navigation, All-in-One Dock,Schwarz(QV 35A Set)",
             "affiliate_url": "https://www.amazon.de/roborock-Anti-Verfilzungs-Seitenb%C3%BCrste-Hindernisvermeidung-LiDAR-Navigation-35A/dp/B0DSLBN5FS",
             "brand": "roborock",
-            "asin": "B0DSLBN5FS",
+            "product_id": "N/A", # NEU: Generisches Produkt-ID Feld
+            "asin": "B0DSLBN5FS", # Beibehalten als Fallback/Quelle
             "price": {"raw": None, "value": None, "currency_hint": None},
             "original_price": {"raw": None, "value": None, "currency_hint": None},
             "discount_amount": None,
@@ -216,7 +225,8 @@ def main():
             "coupon_text": None,
             "coupon_value": {"percent": None, "amount": None, "currency_hint": None},
             "rabatt_details": "N/A",
-            "main_product_images": [],
+            "images": [], # KORRIGIERT: Umbenennung auf 'images'
+            "main_product_images": [], # Beibehalten, falls es später entfernt wird
             "features": [],
             "feature_text": None,
             "description": None,
@@ -225,6 +235,10 @@ def main():
 
         # 3c. Mappe die Daten
         mapped_data = map_ai_output_to_target_format(ai_output_data, target_template_content)
+        
+        # HINWEIS: Das 'asin' Feld wird im Mapping entfernt.
+        mapped_data.pop('asin', None)
+        mapped_data.pop('main_product_images', None)
 
         # 3d. Speichere das Endergebnis
         print(f"-> Speichere gemapptes Ergebnis unter: {final_output_file.name}")
