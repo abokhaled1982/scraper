@@ -47,14 +47,34 @@ class Produktinformation(BaseModel):
     rabatt_prozent: str = Field(description="Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'.")
     rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für einen Rabatt, z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', 'Sonderpreis', 'Befristetes Angebot' oder 'N/A'.")
 
-    bewertung: str = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1. Verwende 0.0, falls nicht gefunden.")
-    anzahl_bewertungen: str = Field(description="Die Gesamtzahl der abgegebenen Kundenbewertungen, z.B. '1.234' oder 'N/A'.")
+    bewertung: str = Field(description="Die numerische Produktbewertung auf einer 5er-Skala. Erkenne und extrahiere den Wert aus möglichst vielen Varianten, z. B.: "
+        "• Deutsch: 'X,X von 5 Sternen', 'X.X von 5', 'Bewertung: X,0/5', 'Durchschnitt: X,X/5', 'X,X Sterne', 'Note X,X/5', '⭐ X,X/5' "
+        "• Englisch: 'X.X out of 5', 'Rated X.X/5', 'X/5 stars', 'average rating X.X/5', 'X.X ★ out of 5' "
+        "• Weitere Muster: 'X,X / 5', 'X.X/ 5', 'X von fünf', 'X/5⭐', '★ X,X von 5', 'X,0 /5', 'X (von 5)' "
+        "• Erlaube Dezimaltrennzeichen ',' oder '.' sowie optionale Leerzeichen/Symbole (★, ⭐, Stern(e), stars). "
+        "Normalisierung: Ersetze Komma durch Punkt und gib immer mit Dezimalpunkt zurück (z. B. '4,4' → '4.4'). "
+        "Ganzzahlen (z. B. '4 von 5', '4/5') als '4.0' ausgeben. "
+        "Skalen-Annahme: Nur 5er-Skala akzeptieren; verwende die Zahl nur, wenn der Kontext klar '… von 5', '/5', 'out of 5' impliziert "
+        "oder 'Sterne/stars' unmittelbar genannt sind. Andernfalls ignorieren (z. B. 'Top 5', '5 Sterne-System' sind zu ignorieren). "
+        "Mehrfachvorkommen: Wähle die prominenteste/aggregierte Produktbewertung (nicht einzelne Nutzerkommentare). "
+        "Bereich: Werte außerhalb 0–5 verwerfen. "
+        "Fallback: Bei fehlenden/unbrauchbaren Daten '0.0'.")
+    anzahl_bewertungen: str = Field(description="Die Gesamtzahl der Bewertungen/Rezensionen. Erkenne Varianten in unterschiedlichen Sprachen und Schreibweisen, z. B.: "
+        "• Deutsch: '(123 Kundenrezensionen)', '1.234 Bewertungen', 'über 1.000 Rezensionen', 'Basierend auf 37 Bewertungen' "
+        "• Englisch: '1,234 reviews', '1.2K ratings', '2M reviews', 'based on 37 reviews' "
+        "• Weitere: '12 345 Rezensionen' (geschützte Leerzeichen), '12 345 reviews' (Leerzeichen als Tausendertrennzeichen), '≈1.2k', '1.2k+' "
+        "Extrahiere NUR die Zahl, entferne Klammern, Wörter und Trennzeichen (Punkt, Komma, Leerzeichen, schmale/geschützte Leerzeichen). "
+        "Kompakt-Notation auflösen: '1,2K'/'1.2k' → '1200'; '2M' → '2000000'; '3B' → '3000000000'. Suffixe case-insensitive (k/m/b). "
+        "Ungefähre Angaben ('~', '≈', '+', 'über', 'mehr als', 'more than') ignorieren und nur die Zahl umsetzen. "
+        "Wenn explizit 'keine Bewertungen', 'no reviews', '0 Bewertungen' o. ä., dann '0'. "
+        "Bei Mehrfachzahlen wähle diejenige, die ausdrücklich die Gesamtmenge der Rezensionen bezeichnet (meist gemeinsam mit Wörtern wie 'Bewertungen', 'Rezensionen', 'reviews', 'ratings'). "
+        "Fallback: Bei fehlenden/unklaren Daten 'N/A'.")
 
     gutschein: Gutschein = Field(description="Informationen über Gutscheine.")
     verfuegbarkeit: str = Field(description="Die Verfügbarkeit des Produkts, z.B. 'Auf Lager' oder 'Nicht auf Lager'.")
     produkt_highlights: list[str] = Field(description="Eine Liste der wichtigsten Produktmerkmale/Highlights (Bullet-Points).")
     images: list[Produktbild] = Field(
-        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei nur die beste/größte URL flash Bild mit ihrem Größendeskriptor angegeben wird."
+        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei nur die beste/größte URL pro Bild mit ihrem Größendeskriptor angegeben wird."
     )
 
 
@@ -99,7 +119,7 @@ def extrahiere_produktsignale(clean_text: str, bild_kandidaten_list: list[str], 
 
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash', 
+            model='gemini-2.5-flash-lite', 
             contents=prompt,
             config=config,
         )
