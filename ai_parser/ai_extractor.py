@@ -3,7 +3,9 @@
 Definiert die Pydantic-Datenmodelle und die Logik zur LLM-gestützten Extraktion.
 
 AKTUALISIERUNGEN: 
-1. Feld 'url_des_produkts' im LLM-Schema hinzugefügt (wird später zu affiliate_url).
+1. Der LLM-Prompt wurde aktualisiert, um die aus dem HTML-Parser 
+   vorangestellte 'KANONISCHE URL' im bereinigten Text zu priorisieren.
+2. Die Anweisung zur Sortierung der Bilder (Hauptbild an Index 0) wird beibehalten.
 """
 
 import os
@@ -36,8 +38,8 @@ class Produktinformation(BaseModel):
     titel: str = Field(description="Der vollständige, aussagekräftige Produkt-Titel aus dem Text.")
     sku_asin: str = Field(description="Die eindeutige Produktnummer (ASIN, SKU, EAN, MPN oder eine ähnliche Produktkennung) aus dem Text. Gib 'N/A' an, wenn keine gefunden wird.")
     
-    # NEU: Das Feld für die Produkt-URL
-    url_des_produkts: str = Field(description="Die vollständige und bereinigte URL der Produktseite, gefunden in canonical tags oder anderen Links im HTML-Inhalt. Gib 'N/A' an, wenn keine URL gefunden wird.")
+    # Feld für die Produkt-URL
+    url_des_produkts: str = Field(description="Die vollständige und bereinigte URL der Produktseite. PRIORITY: Extrahiere diese aus dem Abschnitt 'KANONISCHE URL VOM PARSER' im bereinigten Text, falls vorhanden.")
 
     marke: str = Field(description="Die Marke oder der Hersteller des Produkts.")
     akt_preis: str = Field(description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €).")
@@ -45,14 +47,14 @@ class Produktinformation(BaseModel):
     rabatt_prozent: str = Field(description="Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'.")
     rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für einen Rabatt, z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', 'Sonderpreis', 'Befristetes Angebot' oder 'N/A'.")
 
-    bewertung: str = Field(description="Die durchschnittliche Kundenbewertung, z.B. '4,5 von 5 Sternen' oder 'N/A'.")
+    bewertung: str = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1. Verwende 0.0, falls nicht gefunden.")
     anzahl_bewertungen: str = Field(description="Die Gesamtzahl der abgegebenen Kundenbewertungen, z.B. '1.234' oder 'N/A'.")
 
     gutschein: Gutschein = Field(description="Informationen über Gutscheine.")
     verfuegbarkeit: str = Field(description="Die Verfügbarkeit des Produkts, z.B. 'Auf Lager' oder 'Nicht auf Lager'.")
     produkt_highlights: list[str] = Field(description="Eine Liste der wichtigsten Produktmerkmale/Highlights (Bullet-Points).")
     images: list[Produktbild] = Field(
-        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei nur die beste/größte URL pro Bild mit ihrem Größendeskriptor angegeben wird."
+        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei nur die beste/größte URL flash Bild mit ihrem Größendeskriptor angegeben wird."
     )
 
 
@@ -70,20 +72,23 @@ def extrahiere_produktsignale(clean_text: str, bild_kandidaten_list: list[str], 
     except Exception:
         raise EnvironmentError("GOOGLE_API_KEY ist nicht gesetzt oder ungültig.")
     
-    # Prompt-Anpassung, um die URL-Extraktion zu betonen
+    # Prompt-Anpassung, um die URL-Priorisierung zu betonen
     prompt = f"""
     Extrahiere die folgenden Produktinformationen aus dem bereitgestellten Text und den Bild-Kandidaten.
+    
     1. Fülle 'titel' mit dem vollständigsten und besten Produktnamen.
     2. Fülle 'sku_asin' mit der eindeutigen Produktnummer (ASIN, SKU, EAN o.ä.) aus dem Text.
-    3. Fülle 'url_des_produkts' mit der vollständigen und bereinigten URL der Produktseite (canonical oder Haupt-Link).
-    4. Fülle 'rabatt_text' mit dem allgemeinen Rabatt- oder Angebotstext (wird später zu gutschein.details).
+    3. **WICHTIG (url_des_produkts):** Prüfe den Anfang des BEREINIGTEN TEXTES auf einen Block mit der Bezeichnung 'KANONISCHE URL VOM PARSER'. Wenn eine URL dort vorhanden ist, verwende diese für das Feld 'url_des_produkts'. Ansonsten extrahiere die beste URL aus dem Rest des Textes.
+    4. Fülle 'rabatt_text' mit dem allgemeinen Rabatt- oder Angebotstext.
     5. Fülle 'gutschein.code' NUR mit dem tatsächlichen Gutscheincode.
+    6. **WICHTIG (images):** Im Array 'images' muss das **Hauptproduktbild** zwingend an die **erste Stelle (Index 0)** gesetzt werden. Das LLM muss die Bilder selbstständig nach Relevanz für das Hauptprodukt sortieren.
+
     Gib 'N/A' an, wenn die Information fehlt.
 
     --- BILD-KANDIDATEN ---
     {json.dumps(bild_kandidaten_list, indent=2, ensure_ascii=False)}
     
-    --- BEREINIGTER TEXT ---
+    --- BEREINIGER TEXT ---
     {clean_text[:4000]}
     """
     
@@ -94,7 +99,7 @@ def extrahiere_produktsignale(clean_text: str, bild_kandidaten_list: list[str], 
 
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.5-flash', 
             contents=prompt,
             config=config,
         )
