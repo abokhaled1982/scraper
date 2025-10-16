@@ -87,6 +87,7 @@ load_dotenv()
 
 class Produktinformation(BaseModel):
     """Strukturierte Daten, die von der Produktseite extrahiert werden sollen."""
+    produkt_titel: str = Field(description="Der vollständige und präzise Titel des Produkts.")
     marke: str = Field(description="Die Marke oder der Hersteller des Produkts.")
     akt_preis: str = Field(description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €).")
     uvp_preis: str = Field(description="Der ursprüngliche Preis (UVP) vor dem Rabatt oder 'N/A'.")
@@ -99,7 +100,7 @@ class Produktinformation(BaseModel):
     hauptprodukt_bilder: list[str] = Field(
         description="Eine Liste der relevantesten Produktbild-URLs als Strings. Das Array muss leer sein, wenn keine Bilder gefunden werden."
     )
-    produkt_url: str = Field(description="Die kanonische URL des Produkts, extrahiert aus dem Text. Verwende 'N/A', falls nicht gefunden.")
+    url_des_produkts: str = Field(description="Die kanonische URL des Produkts, extrahiert aus dem Text. Verwende 'N/A', falls nicht gefunden.")
     bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1. Verwende 0.0, falls nicht gefunden.")
     anzahl_reviews: int = Field(description="Die Gesamtzahl der abgegebenen Bewertungen (Reviews). Verwende 0, falls nicht gefunden.")
     anzahl_verkauft: str = Field(description="Die Anzahl der verkauften Produkte (z.B. 'Über 1000 verkauft' oder 'N/A').")
@@ -130,7 +131,7 @@ def baue_pattern_pack():
         "WICHTIG: Prüfe die Liste der 'BILD-KANDIDATEN' sorgfältig. Wähle die RELEVANTEN "
         "Hauptbild-URLs und **strukturiere diese als Array von URL-Strings** "
         "im Feld 'hauptprodukt_bilder'. Wenn keine Bilder gefunden werden, "
-        "muss 'hauptprodukt_bilder' eine leere Liste `[]` sein. **Extrahiere die Produkt-URL in das Feld 'produkt_url'.** Für alle anderen nicht gefundenen Felder "
+        "muss 'hauptprodukt_bilder' eine leere Liste `[]` sein. **Extrahiere den 'produkt_titel' und die 'url_des_produkts' aus dem Text.** Für alle anderen nicht gefundenen Felder "
         "muss exakt 'N/A' oder 0/0.0 befüllt werden. Der Output muss zu 100% valides JSON sein."
     )
 

@@ -63,8 +63,8 @@ def map_ai_output_to_target_format(ai_output: dict, target_template: dict) -> di
     clean_text = ai_output.get("clean_text") # Quelle für allgemeine Texte
     
     # --- 1. CORE PRODUCT IDENTIFIER (KORRIGIERT: ASIN/SKU-Logik und Umbenennung zu product_id) ---
-    final_output['title'] = target_template.get('title', ai_output.get('product_title', 'N/A'))
-    final_output['affiliate_url'] = target_template.get('produkt_url')
+    final_output['title'] = ai_output.get('product_title', 'N/A')
+    final_output['affiliate_url'] = target_template.get('url_des_produkts')
     
     # NEU: Implementierung der Produkt-ID Logik (ASIN/SKU)
     extracted_product_id = extracted.get('produkt_id') 
@@ -206,8 +206,7 @@ def main():
         with open(temp_ai_output_file, 'r', encoding='utf-8') as f:
             ai_output_data = json.load(f)
 
-      
-        
+              
         # KORRIGIERT: Template angepasst auf die neuen Zielfelder
         target_template_content = {
             "title": "roborock Qrevo Serie Saugroboter mit Wischfunktion, 8000Pa Saugkraft(verbessert von Qrevo S), Anti-Verfilzungs-Seitenbürste, Hindernisvermeidung, LiDAR-Navigation, All-in-One Dock,Schwarz(QV 35A Set)",
