@@ -18,7 +18,7 @@ import os
 import hashlib
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse,urlparse, urlunparse, parse_qs, urlencode
 
 # config aus Parent-Ordner laden (direkter Skriptstart möglich)
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -35,6 +35,27 @@ SKIP_TTL_SECONDS = int(os.environ.get("SKIP_TTL_SECONDS", str(24*3600)))
 DRY_RUN = os.environ.get("DRY_RUN", "0") not in ("0", "", "false", "False", "no", "No")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "5"))  # Wartezeit beim Leerlauf
 # ------------------------------------------------
+
+
+# ---------------- NEUE HELFERFUNKTION ----------------
+def add_trigger_param(url: str) -> str:
+    """Fügt 'ext_trigger=send_html' zur URL hinzu, um das Addon zu aktivieren."""
+    try:
+        parsed = urlparse(url)
+        # parse_qs gibt ein Dict von Listen zurück
+        query_parts = parse_qs(parsed.query) 
+        
+        # Setze den speziellen Marker, der das Addon aktiviert
+        query_parts['ext_trigger'] = ['send_html'] 
+        
+        # Erzeuge den neuen Query-String. doseq=True ist wichtig für korrekte Encodierung.
+        new_query = urlencode(query_parts, doseq=True)
+        
+        # Setze den neuen Query-String in die URL ein und gib sie zurück
+        return urlunparse(parsed._replace(query=new_query))
+    except Exception as e:
+        print(f"Fehler beim Hinzufügen des Parameters zu {url}: {e}")
+        return url # Im Fehlerfall die Original-URL zurückgeben
 
 def load_json(p: Path, default):
     if not p.exists():
@@ -155,46 +176,58 @@ def update_opened(opened: dict, asin: str, url: str, meta: dict) -> None:
         "canonical_url": canonicalize_amazon_url(url),
     }
 
-# --- current main function start ---
 def main():
     # Load configuration from environment/defaults
-    POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "10")) # Defined at top of file
+    # Annahme: POLL_SECONDS, PAUSE_SECONDS, DRY_RUN, SKIP_TTL_SECONDS sind global definiert
+    POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "10")) 
 
-    while True: # ADDED: Loop indefinitely
+    while True:
         # 1. Wait for items (blocking until items are present)
+        # Angenommen, wait_until_has_items existiert
         products = wait_until_has_items(poll_seconds=POLL_SECONDS)
 
         # State laden/sicherstellen
+        # Angenommen, load_json existiert
         opened = load_json(OPENED_PATH, default={})
 
         # Reihenfolge: aktuell einfach nach Key; hier könntest du auch nach Rabatt etc. sortieren
         items = sorted(products.items(), key=lambda kv: kv[0])
 
         total = len(items)
+        # Angenommen, SKIP_TTL_SECONDS und DRY_RUN sind global definiert
         print(f"[INFO] Considering {total} items. TTL={SKIP_TTL_SECONDS}s, pause={PAUSE_SECONDS}s, dry_run={DRY_RUN}")
 
         opened_count = 0
         skipped = 0
         
-        # 2. Processing logic (your existing for loop)
+        # 2. Processing logic
         for idx, (asin, meta) in enumerate(items, start=1):
-            # ... (Existing logic for checking, opening, and pausing) ...
             url = (meta or {}).get("product_url")
             if not url:
                 print(f"[{idx}/{total}] [SKIP] {asin}: no product_url")
                 skipped += 1
                 continue
 
+            # NEU: Die URL mit dem Addon-Trigger versehen
+            triggered_url = add_trigger_param(url) # ⬅️ WICHTIGE ANPASSUNG
+
+            # Angenommen, should_open existiert
             ok_to_open, reason = should_open(asin, url, meta, opened)
             if not ok_to_open:
                 print(f"[{idx}/{total}] [SKIP] {asin} -> {reason}")
                 skipped += 1
                 continue
 
-            print(f"[{idx}/{total}] OPEN {asin} -> {canonicalize_amazon_url(url)}")
-            if open_in_chrome(url):
-                update_opened(opened, asin, url, meta)
-                save_json(OPENED_PATH, opened)
+            # Log-Ausgabe mit Hinweis auf den Trigger
+            # Angenommen, canonicalize_amazon_url existiert
+            print(f"[{idx}/{total}] OPEN {asin} -> {canonicalize_amazon_url(url)} (Triggered)") 
+            
+            # WICHTIG: Die getriggerte URL öffnen
+            # Angenommen, open_in_chrome existiert
+            if open_in_chrome(triggered_url): # ⬅️ VERWENDUNG DER MODIFIZIERTEN URL
+                # Update der History mit der ORIGINALEN URL, damit der Link sauber bleibt
+                update_opened(opened, asin, url, meta) # Angenommen, update_opened existiert
+                save_json(OPENED_PATH, opened) # Angenommen, save_json existiert
                 opened_count += 1
                 time.sleep(PAUSE_SECONDS)
             else:
@@ -203,11 +236,10 @@ def main():
         print(f"[DONE] opened={opened_count}, skipped={skipped}, total={total}]")
         
         # 3. Pause before checking the product list again
-        # The script only exits the while loop upon KeyboardInterrupt or other error.
         print(f"[opener] Cycle complete. Waiting {POLL_SECONDS}s for next check...")
         time.sleep(POLL_SECONDS)
-        
-# --- main function end ---
+
+
 if __name__ == "__main__":
     try:
         main()

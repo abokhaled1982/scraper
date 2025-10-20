@@ -16,6 +16,19 @@
   const isAmazonProductPath = (p = location.pathname) => /(\/dp\/[A-Z0-9]{10})(\/|$)/i.test(p) || /(\/gp\/product\/[A-Z0-9]{10})(\/|$)/i.test(p);
   const isAmazonDealsPath = (p = location.pathname) => /^\/deals\b/i.test(p);
   const isAmazonTargetPage = () => isAmazonHost() && (isAmazonProductPath() || isAmazonDealsPath());
+  // --- Opener-Trigger (Query) ---
+  const TRIGGER_PARAM = "ext_trigger";
+  const TRIGGER_VALUE = "send_html";
+  let triggerConsumedForUrl = new Set();
+  function hasOpenerTrigger(href = location.href) {
+    try {
+      const u = new URL(href, location.origin);
+      return u.searchParams.get(TRIGGER_PARAM) === TRIGGER_VALUE;
+    } catch {
+      return false;
+    }
+  }
+
 
   // --- Auto-Scroll nur für Deals ---
   function startAutoScroll() {
@@ -176,7 +189,7 @@
   const MIN_RUN_INTERVAL_MS = 60_000; // maximal alle 60s pro URL
 
   async function safeRun(reason = "auto") {
-    if (!isAmazonTargetPage()) {
+    if (!(isAmazonTargetPage() || hasOpenerTrigger())) {
       stopAutoScroll();
       return;
     }
@@ -198,7 +211,23 @@
     try {
       console.log("[AutoRun] runPipeline ->", reason, href);
 
-      // **NEU**: Bei Produktseiten Senden nur, wenn Shortlink ready ist.
+      // **NEU**: Bei Produktseiten Senden nur, wenn Shortlink ready ist.      // >>> Trigger-Shortcut: Wenn per Opener aufgerufen (ext_trigger=send_html),
+      // dann verhalte dich wie Produktseite und sende SOFORT (ohne SiteStripe-Gate).
+      if (hasOpenerTrigger(href)) {
+        const key = href.split("#")[0];
+        if (!triggerConsumedForUrl.has(key)) {
+          await runPipeline();
+          const html = document.documentElement.outerHTML;
+          const payload = { url: href, html };
+          chrome.runtime.sendMessage({ type: "PRODUCT_HTML", payload }, (resp) => console.log("[send] PRODUCT_HTML (trigger) resp:", resp));
+          triggerConsumedForUrl.add(key);
+          lastRunAt = Date.now();
+          lastRunUrl = href;
+        }
+        return;
+      }
+
+
       if (isAmazonProductPath()) {
         const ok = await ensureStripeLinkReadyForCurrentProduct();
         if (!ok) {
@@ -228,7 +257,7 @@
   }
 
   // 1) Direkt beim Laden
-  if (isAmazonTargetPage()) safeRun("initial");
+  if (isAmazonTargetPage() || hasOpenerTrigger()) safeRun("initial");
 
   // 2) Sanfter Dauerbetrieb (nur wenn Tab sichtbar)
   setInterval(() => {
@@ -254,7 +283,7 @@
 
   // 4) DOM-Fallback
   const mo = new MutationObserver(() => {
-    if (isAmazonTargetPage() && location.href !== lastRunUrl) safeRun("mutation");
+    if ((isAmazonTargetPage() || hasOpenerTrigger()) && location.href !== lastRunUrl) safeRun("mutation");
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
 
