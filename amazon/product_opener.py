@@ -155,48 +155,59 @@ def update_opened(opened: dict, asin: str, url: str, meta: dict) -> None:
         "canonical_url": canonicalize_amazon_url(url),
     }
 
+# --- current main function start ---
 def main():
-    # Optional: falls du sicher gehen willst, dass data/ existiert
-    # from config import ensure_directories; ensure_directories()
+    # Load configuration from environment/defaults
+    POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "10")) # Defined at top of file
 
-    # wartet hier, bis Items vorhanden sind (legt Datei an, falls fehlt)
-    products = wait_until_has_items()
+    while True: # ADDED: Loop indefinitely
+        # 1. Wait for items (blocking until items are present)
+        products = wait_until_has_items(poll_seconds=POLL_SECONDS)
 
-    # State laden/sicherstellen
-    opened = load_json(OPENED_PATH, default={})
+        # State laden/sicherstellen
+        opened = load_json(OPENED_PATH, default={})
 
-    # Reihenfolge: aktuell einfach nach Key; hier könntest du auch nach Rabatt etc. sortieren
-    items = sorted(products.items(), key=lambda kv: kv[0])
+        # Reihenfolge: aktuell einfach nach Key; hier könntest du auch nach Rabatt etc. sortieren
+        items = sorted(products.items(), key=lambda kv: kv[0])
 
-    total = len(items)
-    print(f"[INFO] Considering {total} items. TTL={SKIP_TTL_SECONDS}s, pause={PAUSE_SECONDS}s, dry_run={DRY_RUN}")
+        total = len(items)
+        print(f"[INFO] Considering {total} items. TTL={SKIP_TTL_SECONDS}s, pause={PAUSE_SECONDS}s, dry_run={DRY_RUN}")
 
-    opened_count = 0
-    skipped = 0
-    for idx, (asin, meta) in enumerate(items, start=1):
-        url = (meta or {}).get("product_url")
-        if not url:
-            print(f"[{idx}/{total}] [SKIP] {asin}: no product_url")
-            skipped += 1
-            continue
+        opened_count = 0
+        skipped = 0
+        
+        # 2. Processing logic (your existing for loop)
+        for idx, (asin, meta) in enumerate(items, start=1):
+            # ... (Existing logic for checking, opening, and pausing) ...
+            url = (meta or {}).get("product_url")
+            if not url:
+                print(f"[{idx}/{total}] [SKIP] {asin}: no product_url")
+                skipped += 1
+                continue
 
-        ok_to_open, reason = should_open(asin, url, meta, opened)
-        if not ok_to_open:
-            print(f"[{idx}/{total}] [SKIP] {asin} -> {reason}")
-            skipped += 1
-            continue
+            ok_to_open, reason = should_open(asin, url, meta, opened)
+            if not ok_to_open:
+                print(f"[{idx}/{total}] [SKIP] {asin} -> {reason}")
+                skipped += 1
+                continue
 
-        print(f"[{idx}/{total}] OPEN {asin} -> {canonicalize_amazon_url(url)}")
-        if open_in_chrome(url):
-            update_opened(opened, asin, url, meta)
-            save_json(OPENED_PATH, opened)
-            opened_count += 1
-            time.sleep(PAUSE_SECONDS)
-        else:
-            print(f"[{idx}/{total}] [FAIL] Could not open {asin}")
-
-    print(f"[DONE] opened={opened_count}, skipped={skipped}, total={total}]")
-
+            print(f"[{idx}/{total}] OPEN {asin} -> {canonicalize_amazon_url(url)}")
+            if open_in_chrome(url):
+                update_opened(opened, asin, url, meta)
+                save_json(OPENED_PATH, opened)
+                opened_count += 1
+                time.sleep(PAUSE_SECONDS)
+            else:
+                print(f"[{idx}/{total}] [FAIL] Could not open {asin}")
+        
+        print(f"[DONE] opened={opened_count}, skipped={skipped}, total={total}]")
+        
+        # 3. Pause before checking the product list again
+        # The script only exits the while loop upon KeyboardInterrupt or other error.
+        print(f"[opener] Cycle complete. Waiting {POLL_SECONDS}s for next check...")
+        time.sleep(POLL_SECONDS)
+        
+# --- main function end ---
 if __name__ == "__main__":
     try:
         main()
