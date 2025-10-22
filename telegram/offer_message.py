@@ -25,7 +25,7 @@ _ZWSP = "\u200E"
 _DIV  = ""  # keine Linien
 
 # ------------------------------
-# Schema-Helper (NEU)
+# Schema-Helper
 # ------------------------------
 
 _NUM_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
@@ -59,7 +59,7 @@ def _get_discount_percent_number(d: Dict[str, Any]) -> Optional[float]:
 
 def _get_rating(d: Dict[str, Any]) -> Tuple[Optional[float], Optional[int]]:
     """
-    Unterstützt BO-Schema (rating: {value, counts}) und Alt-Schema (rating_value, review_count)
+    Extrahiert Bewertungswert und Anzahl.
     """
     if isinstance(d.get("rating"), dict):
         r = d["rating"]
@@ -71,12 +71,6 @@ def _get_rating(d: Dict[str, Any]) -> Tuple[Optional[float], Optional[int]]:
     cnt = int(d.get("review_count")) if d.get("review_count") is not None else None
     return val, cnt
 
-def _get_list(d: Dict[str, Any], *keys: str) -> Optional[List[str]]:
-    for k in keys:
-        v = d.get(k)
-        if isinstance(v, list) and v:
-            return v
-    return None
 
 # ------------------------------
 # Deal-Badge & Bewertung
@@ -84,7 +78,7 @@ def _get_list(d: Dict[str, Any], *keys: str) -> Optional[List[str]]:
 
 def _badge(d: Dict[str, Any]) -> Optional[str]:
     """
-    Badge skaliert mit Rabatt – nutzt tolerant geparstes Prozent.
+    Badge skaliert mit Rabatt.
     """
     pct = _get_discount_percent_number(d) or 0.0
     if pct >= 50:
@@ -108,17 +102,6 @@ def _stars(val: Optional[float], cnt: Optional[int]) -> str:
 # Preis / Rabatt / Affiliate
 # ------------------------------
 
-def _price_line(d: Dict[str, Any]) -> str:
-    p   = (d.get("price") or {}).get("raw")
-    o   = (d.get("original_price") or {}).get("raw")
-    pct_abs = _get_discount_percent_number(d)
-    s = f"💰 <b>{escape(p)}</b>" if p else "💰 n/a"
-    if o:
-        s += f"  <i><s>{escape(o)}</s></i>"
-    if pct_abs is not None:
-        s += f" <b>({int(round(pct_abs))}% Rabatt!)</b>"
-    return s
-
 def _affiliate(d: Dict[str, Any], fallback_url: str) -> str:
     return d.get("affiliate_url") or fallback_url or "https://amzn.to/42vWlQM"
 
@@ -131,7 +114,7 @@ def _with_utm(url: str, d: Dict[str, Any]) -> str:
     return f"{url}{sep}{pairs}"
 
 # ------------------------------
-# Sektionen/Formatter
+# Datumsformatierung
 # ------------------------------
 
 def _fmt_expires(iso: Optional[str]) -> Optional[str]:
@@ -144,61 +127,6 @@ def _fmt_expires(iso: Optional[str]) -> Optional[str]:
     except Exception:
         return None
 
-def _facts_block(price_html: str, d: Dict[str, Any]) -> str:
-    p   = (d.get("price") or {}).get("raw")
-    o   = (d.get("original_price") or {}).get("raw")
-    pct_abs = _get_discount_percent_number(d)
-
-    parts: List[str] = []
-    line1: List[str] = []
-
-    if p:
-        line1.append(f"💶 <b><u>{escape(p)}</u></b>")
-    if o:
-        line1.append(f"  <s>{escape(o)}</s>")
-
-    if pct_abs is not None:
-        pct_val = int(round(pct_abs))
-        if pct_val >= 50:
-            rabatt_text = f"🔥🔥 <b><u>-{pct_val}% ERSPARNIS</u></b>"
-        elif pct_val >= 35:
-            rabatt_text = f"⬇️⬇️ <b>-{pct_val}% Rabatt</b>"
-        else:
-            rabatt_text = f"➖ <i>-{pct_val}%</i>"
-        line1.append(f" {rabatt_text}")
-
-    if line1:
-        parts.append(" ".join(line1))
-
-    coupon = d.get("coupon_code")
-    cnote  = d.get("coupon_note")
-    exp    = _fmt_expires(d.get("expires_at"))
-    sub: List[str] = []
-
-    if coupon:
-        sub.append(f"🎟️ <b>COUPON:</b> <code>{escape(str(coupon))}</code>")
-    if cnote:
-        sub.append(f"ℹ️ <i>{escape(str(cnote))}</i>")
-    if exp:
-        sub.append(f"⏱️ <b>ENDE:</b> {exp}")
-
-    if sub:
-        parts.append("")
-        parts.append("\n".join(sub))
-
-    return "\n".join(parts) if parts else price_html
-
-def _highlights_list(items: Optional[List[str]]) -> Optional[str]:
-    if not items:
-        return None
-    items = [i.strip() for i in items if i and str(i).strip()]
-    if not items:
-        return None
-    items = items[:4]
-    bullets = "\n".join(f"👉 {escape(i)}" for i in items)
-    return f"⭐ <b>DETAILS:</b>\n{bullets}"
-
-
 # ------------------------------
 # Caption-Builder (Hauptfunktion)
 # ------------------------------
@@ -210,64 +138,99 @@ def build_caption_html(
     style: str = "rich"
 ) -> str:
     """
-    Telegram-sichere, strukturierte Caption mit BO- und Alt-Schema-Support.
+    Erstellt die minimale, Telegram-sichere Caption ohne Produkt-Details.
     """
     title = escape((d.get("title") or "").strip())
     if len(title) > 90:
         title = title[:87] + "…"
 
     badge  = _badge(d)
-    price  = _price_line(d)
-    r_val, r_cnt = _get_rating(d)       # <— NEU: Schema-agnostisch
+    r_val, r_cnt = _get_rating(d)       
     rating = _stars(r_val, r_cnt)
     avail  = d.get("availability")
     url    = _with_utm(_affiliate(d, affiliate_fallback), d)
-    # --- Automatische Coupon-Übernahme ---
-    coupon = d.get("coupon", {}).get("code")
+
+    # --- Coupon-Logik: Priorisiert neues Schema, Fallback auf altes ---
+    coupon = d.get("coupon", {}).get("code") 
+    if not coupon: 
+        coupon = d.get("coupon_code")
    
+    # --- Daten für den Preis- & Coupon-Block ---
+    p   = (d.get("price") or {}).get("raw")
+    o   = (d.get("original_price") or {}).get("raw")
+    pct_abs = _get_discount_percent_number(d)
+    cnote  = d.get("coupon_note")
+    exp    = _fmt_expires(d.get("expires_at"))
 
     parts: List[str] = []
 
+    # 1. Titel
     if title:
         parts.append(f"🛍️ <b><u>{title}</u></b>")
         parts.append("\n")
 
+    # 2. Deal-Badge
     if badge:
         parts.append(badge)
         parts.append("\n")
 
-    facts_block = _facts_block(price, d).strip()
-    if facts_block:
-        parts.append(facts_block)
+    # --- Integrierter Preis- & Rabatt-Block ---
+    price_lines: List[str] = []
+    line1: List[str] = []
 
-    if coupon and coupon!="N/A":
-         parts.append(f"🎟️ Code: <b>{escape(str(coupon))}</b>")
-    parts.append("\n")
+    if p:
+        line1.append(f"💶 <b><u>{escape(p)}</u></b>")
+    if o:
+        line1.append(f"  <s>{escape(o)}</s>")
+
+    if pct_abs is not None:
+        pct_val = int(round(pct_abs))
+        rabatt_text = f"⬇️<b>-{pct_val}% Rabatt</b>"
+        line1.append(f" {rabatt_text}")
+    if line1:
+        price_lines.append(" ".join(line1))
+
+    # Coupon-Code, Hinweis und Ablaufdatum
+    sub: List[str] = []
+    if coupon and coupon != "N/A":
+        sub.append(f"🎟️ <b>COUPON:</b> <code>{escape(str(coupon))}</code>")
+    if cnote:
+        sub.append(f"ℹ️ <i>{escape(str(cnote))}</i>")
+    if exp:
+        sub.append(f"⏱️ <b>ENDE:</b> {exp}")
+
+    if sub:
+        if price_lines:
+             price_lines.append("") 
+        price_lines.append("\n".join(sub))
+        
+    if price_lines:
+        parts.append("\n".join(price_lines))
+    # --- Ende Preis- & Coupon-Block ---
+
+    parts.append("\n") # Leerzeile für Trennung zum Status
+
+    # 3. Bewertungs- und Statusinformationen
     if rating:
         parts.append(f"⭐️ Bewertung: {rating}")
-    if avail:
+    
+    # Status wird nur angezeigt, wenn er nicht leer und nicht "N/A" ist
+    if avail and avail != "N/A":
         parts.append(f"✅ Status: <b>{escape(str(avail))}</b>")
 
     ship = d.get("shipping") or d.get("shipping_info")
+    # Versand wird nur angezeigt, wenn er nicht leer und nicht "N/A" ist
     if ship and ship!="N/A":
         parts.append(f"🚚 Versand: <b>{escape(str(ship))}</b>")
      
-
-    # Highlights: erst "highlights", sonst "features" (BO)
-    items = _get_list(d, "highlights", "features")
-    if style == "rich":
-        hl = _highlights_list(items)
-        if hl:
-            parts.append("\n")
-            parts.append(hl)
-
+    # 4. Call to Action (CTA)
     parts.append("\n\n")
     parts.append(f"🛒 <b><a href=\"{escape(url)}\">DIREKT ZUM ANGEBOT!</a></b> 🚀")
 
+    # Kürzung Logik (vereinfacht, da Highlights/Details entfernt wurden)
     caption = "\n".join(parts)
-    if len(caption) > 1024 and style == "rich":
-        parts_no_hl = [p for p in parts if not p.startswith("⭐ ")]
-        caption = "\n".join(parts_no_hl)
+    caption = re.sub(r'\n\s*\n\s*\n', '\n\n', caption).strip()
+    
     if len(caption) > 1024:
         keep: List[str] = []
         used = 0
@@ -280,8 +243,8 @@ def build_caption_html(
                 used += len(p) + 1
         keep.append(cta)
         caption = "\n".join(keep)
+        caption = re.sub(r'\n\s*\n\s*\n', '\n\n', caption).strip()
 
-    caption = re.sub(r'\n\s*\n\s*\n', '\n\n', caption).strip()
     return caption
 
 # ------------------------------
