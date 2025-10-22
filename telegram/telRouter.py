@@ -3,6 +3,9 @@ import os, sys, re, glob, json, asyncio, hashlib, time
 from typing import Optional, Union, Iterable, Tuple
 from pathlib import Path
 
+# NEU: aiohttp für den asynchronen Download
+import aiohttp 
+
 from telethon import TelegramClient, Button
 from telethon.errors import UserAlreadyParticipantError
 from telethon.tl.functions.messages import ImportChatInviteRequest
@@ -18,6 +21,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import config
 from telegram.login_once import LoginConfig, ensure_logged_in
 from telegram.offer_message import build_caption_html, pick_image_source, build_inline_keyboard
+# NEU: Import der Bildverarbeitungs-Logik
+from telegram.image_processor import get_best_image_url, download_and_convert_to_jpg 
 
 # Settings
 INVITE_RE     = re.compile(r"(?:t\.me\/\+|joinchat\/)([A-Za-z0-9_-]+)")
@@ -119,34 +124,62 @@ class TelegramOfferRouter:
                 for row in keyboard_data['inline_keyboard']
             ]
 
-        src = pick_image_source(d, config.BASE_DIR)
+        # 1. Bildquelle (Lokale Datei/Placeholder) suchen
+        src: Optional[str] = pick_image_source(d, config.BASE_DIR)
+        
+        # Temp-Pfad für das heruntergeladene Bild initialisieren
+        temp_img_path: Optional[Path] = None
+        
+        # 2. Wenn keine lokale Datei gefunden wurde, versuche Download & Konvertierung
+        if not src:
+            image_url = get_best_image_url(d)
+            if image_url:
+                # !!! ASYNCHRONER DOWNLOAD und KONVERTIERUNG
+                temp_img_path = await download_and_convert_to_jpg(image_url)
+                if temp_img_path:
+                    src = str(temp_img_path)
+                    
+        # --- Bild Senden Logik ---
+        
+        try:
+            if src:
+                try:
+                    # Sende die gefundene Quelle (lokaler Pfad oder Temp-JPG)
+                    await self.client.send_file(
+                        entity, src,
+                        caption=caption, parse_mode="html", buttons=buttons
+                    )
+                    return
+                except Exception as e:
+                    # Wenn Senden fehlschlägt (z.B. wegen zu großer Datei), 
+                    # loggen und zum Text-Fallback übergehen.
+                    print(f"⚠️ Bildversand fehlgeschlagen (Quelle: {src}) – sende Text. Fehler: {e}")
 
-        if src:
-            try:
-                await self.client.send_file(
-                    entity, src,
-                    caption=caption, parse_mode="html", buttons=buttons
+            # Fallback: reine Textnachricht
+            if not buttons:
+                url = (
+                    d.get("affiliate_url")
+                    or d.get("product_url")
+                    or (f"https://www.amazon.de/dp/{d['asin']}" if d.get("asin") else
+                        f"https://www.amazon.de/dp/{d['product_id']}" if d.get("product_id") else
+                        AFFILIATE_URL)
                 )
-                return
-            except Exception as e:
-                print(f"⚠️ Bildversand fehlgeschlagen (Quelle: {src}) – sende Text. Fehler: {e}")
+                buttons = [[Button.url("🛒 Jetzt sichern", url)]]
 
-        # Fallback: reine Textnachricht
-        if not buttons:
-            url = (
-                d.get("affiliate_url")
-                or d.get("product_url")
-                or (f"https://www.amazon.de/dp/{d['asin']}" if d.get("asin") else
-                    f"https://www.amazon.de/dp/{d['product_id']}" if d.get("product_id") else
-                    AFFILIATE_URL)
-            )
-            buttons = [[Button.url("🛒 Jetzt sichern", url)]]
-
-        for i, part in enumerate(chunk_text(caption)):
-            await self.client.send_message(
-                entity, part, parse_mode="html",
-                buttons=buttons if i == 0 else None
-            )
+            # Text-Nachricht aufteilen
+            for i, part in enumerate(chunk_text(caption)):
+                await self.client.send_message(
+                    entity, part, parse_mode="html",
+                    buttons=buttons if i == 0 else None
+                )
+                
+        finally:
+            # 3. AUFRÄUMEN: Temporäre Datei sicher löschen (wichtig!)
+            if temp_img_path and temp_img_path.exists():
+                try:
+                    temp_img_path.unlink()
+                except Exception as e:
+                    print(f"❌ Fehler beim Löschen der temporären Datei {temp_img_path}: {e}")
 
     async def _send_one_new_item(self, entity) -> bool:
         reg = _load_sent_registry()

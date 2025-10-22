@@ -97,7 +97,7 @@ def _badge(d: Dict[str, Any]) -> Optional[str]:
 
 def _stars(val: Optional[float], cnt: Optional[int]) -> str:
     if not val:
-        return "⭐ n/a"
+        return ""  # nichts anzeigen, wenn keine Bewertung
     full = int(val)
     half = 1 if val - full >= 0.5 else 0
     bar = "⭐" * full + ("✩" if half else "") + "☆" * (5 - full - half)
@@ -198,15 +198,6 @@ def _highlights_list(items: Optional[List[str]]) -> Optional[str]:
     bullets = "\n".join(f"👉 {escape(i)}" for i in items)
     return f"⭐ <b>DETAILS:</b>\n{bullets}"
 
-def _service_line(d: Dict[str, Any]) -> Optional[str]:
-    ship = d.get("shipping") or d.get("shipping_info")
-    warr = d.get("warranty")
-    bits: List[str] = []
-    if ship:
-        bits.append(f"🚚 Versand: <b>{escape(str(ship))}</b>")
-    if warr:
-        bits.append(f"🛡️ Garantie: <b>{escape(str(warr))}</b>")
-    return " | ".join(bits) if bits else None
 
 # ------------------------------
 # Caption-Builder (Hauptfunktion)
@@ -231,6 +222,9 @@ def build_caption_html(
     rating = _stars(r_val, r_cnt)
     avail  = d.get("availability")
     url    = _with_utm(_affiliate(d, affiliate_fallback), d)
+    # --- Automatische Coupon-Übernahme ---
+    coupon = d.get("coupon", {}).get("code")
+   
 
     parts: List[str] = []
 
@@ -246,15 +240,18 @@ def build_caption_html(
     if facts_block:
         parts.append(facts_block)
 
+    if coupon and coupon!="N/A":
+         parts.append(f"🎟️ Code: <b>{escape(str(coupon))}</b>")
     parts.append("\n")
-    parts.append(f"⭐️ Bewertung: {rating}")
+    if rating:
+        parts.append(f"⭐️ Bewertung: {rating}")
     if avail:
         parts.append(f"✅ Status: <b>{escape(str(avail))}</b>")
 
-    svc = _service_line(d)
-    if svc:
-        parts.append("")
-        parts.append(svc)
+    ship = d.get("shipping") or d.get("shipping_info")
+    if ship and ship!="N/A":
+        parts.append(f"🚚 Versand: <b>{escape(str(ship))}</b>")
+     
 
     # Highlights: erst "highlights", sonst "features" (BO)
     items = _get_list(d, "highlights", "features")
@@ -293,7 +290,8 @@ def build_caption_html(
 
 def pick_image_source(d: Dict[str, Any], base_dir: Path) -> Optional[str]:
     """
-    Gibt bevorzugt eine HTTPS-URL oder einen lokalen absoluten Pfad zurück.
+    Gibt den Pfad zu einem lokalen Bild zurück. 
+    !!! URLs werden hier IGNORIERT, da sie nun in telRouter.py asynchron verarbeitet werden.
     """
     def _valid_img(path: str) -> bool:
         mt, _ = mimetypes.guess_type(path)
@@ -307,11 +305,9 @@ def pick_image_source(d: Dict[str, Any], base_dir: Path) -> Optional[str]:
     if d.get("thumbnail"):
         candidates.append(d["thumbnail"])
 
+    # 1. Lokale Pfade suchen
     for img in candidates:
-        if _is_url(img) and _valid_img(img):
-            return img
-    for img in candidates:
-        if not img:
+        if not img or _is_url(img): # <- NEU: Ignoriere alle URLs
             continue
         path = Path(img)
         if not path.is_absolute():
@@ -319,6 +315,7 @@ def pick_image_source(d: Dict[str, Any], base_dir: Path) -> Optional[str]:
         if path.exists() and _valid_img(str(path)):
             return str(path)
 
+    # 2. Fallback: Placeholder
     cat = (d.get("category") or "").lower().strip()
     if cat:
         ph_cat = base_dir / "assets" / f"placeholder_{cat}.jpg"
