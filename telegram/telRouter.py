@@ -22,7 +22,7 @@ import config
 from telegram.login_once import LoginConfig, ensure_logged_in
 from telegram.offer_message import build_caption_html, pick_image_source, build_inline_keyboard
 # NEU: Import der Bildverarbeitungs-Logik
-from telegram.image_processor import get_best_image_url, download_and_convert_to_jpg 
+from telegram.image_processor import get_best_image_url, download_and_convert_to_jpg ,url_needs_local_processing
 
 # Settings
 INVITE_RE     = re.compile(r"(?:t\.me\/\+|joinchat\/)([A-Za-z0-9_-]+)")
@@ -134,10 +134,15 @@ class TelegramOfferRouter:
         if not src:
             image_url = get_best_image_url(d)
             if image_url:
-                # !!! ASYNCHRONER DOWNLOAD und KONVERTIERUNG
-                temp_img_path = await download_and_convert_to_jpg(image_url)
-                if temp_img_path:
-                    src = str(temp_img_path)
+                if url_needs_local_processing(image_url): # <-- NEU: PRÜFEN, OB KONVERTIERUNG NÖTIG
+                    # !!! ASYNCHRONER DOWNLOAD und KONVERTIERUNG (für WebP/GIF)
+                    temp_img_path = await download_and_convert_to_jpg(image_url)
+                    if temp_img_path:
+                        src = str(temp_img_path)
+                else:
+                    # Für alle anderen Formate (JPG, PNG etc.): Direkt die URL als Quelle nutzen
+                    # Telethon kann Bilder oft direkt von der URL senden, das ist schneller
+                    src = image_url
                     
         # --- Bild Senden Logik ---
         
