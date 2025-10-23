@@ -255,7 +255,7 @@
           console.log(`[send] ${messageType} resp:`, resp);
           if (resp?.ok) {
               // Bei Erfolg Tab schließen lassen
-              chrome.runtime.sendMessage({ type: "CLOSE_CURRENT_TAB_1" });
+              chrome.runtime.sendMessage({ type: "CLOSE_CURRENT_TAB" });
           }
       });
       } else {
