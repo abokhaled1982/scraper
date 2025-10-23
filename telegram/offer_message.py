@@ -82,11 +82,11 @@ def _badge(d: Dict[str, Any]) -> Optional[str]:
     """
     pct = _get_discount_percent_number(d) or 0.0
     if pct >= 50:
-        return "🔥🔥 <b>UNGLAUBLICHER PREISSTURZ!</b> 🔥🔥"
+        return "🔥 <b>UNGLAUBLICHER PREISSTURZ!</b> 🔥"
     elif pct >= 35:
         return "🔥 <b>TOP-DEAL DES TAGES!</b>"
     elif pct >= 20:
-        return "✨✨ Gutes Angebot ✨✨"
+        return "✨ Gutes Angebot ✨"
     return None
 
 def _stars(val: Optional[float], cnt: Optional[int]) -> str:
@@ -221,10 +221,10 @@ def build_caption_html(
     if avail and avail != "N/A":
         parts.append(f"✅ Status: <b>{escape(str(avail))}</b>")
 
-    ship = d.get("shipping") or d.get("shipping_info")
+    #ship = d.get("shipping") or d.get("shipping_info")
     # Versand wird nur angezeigt, wenn er nicht leer und nicht "N/A" ist
-    if ship and ship!="N/A":
-        parts.append(f"🚚 Versand: <b>{escape(str(ship))}</b>")
+    # if ship and ship!="N/A":
+    #     parts.append(f"🚚 Versand: <b>{escape(str(ship))}</b>")
      
     # 4. Call to Action (CTA)
     parts.append("\n\n")
