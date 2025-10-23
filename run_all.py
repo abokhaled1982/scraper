@@ -208,7 +208,7 @@ async def main():
     # 1. 🌐 Browser-Loader (Blocking)
     # 💡 NEU: Dies ist der erste Schritt und ist synchron/blocking.
     print("[supervisor] running loader before services …")
-    run_loader_blocking()
+    #run_loader_blocking()
     print("[supervisor] loader finished, starting Telegram check …")
 
     # 2. 🔑 Sequentieller Login-Check (Muss nach dem Browser-Start passieren!)

@@ -789,6 +789,7 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
 
     out = {
         "title": product.title or None,
+        "market":"AMAZON",
         "affiliate_url": affiliate_url,
         "brand": product.brand or None,
         "product_id": product.asin or None,
