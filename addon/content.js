@@ -223,7 +223,7 @@
               console.log("[send] PRODUCT_HTML (trigger) resp:", resp);
               if (resp?.ok) {
                   // Bei Erfolg Tab schließen lassen
-                  chrome.runtime.sendMessage({ type: "CLOSE_CURRENT_TAB_1" });
+                  chrome.runtime.sendMessage({ type: "CLOSE_CURRENT_TAB" });
               }
           });
           triggerConsumedForUrl.add(key);
