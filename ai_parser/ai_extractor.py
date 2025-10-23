@@ -24,7 +24,6 @@ class Produktinformation(BaseModel):
     akt_preis: str = Field(
         description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €). Dieses Feld MUSS den FINALEN, niedrigsten Preis nach Anwendung des HÖCHSTEN RABATTS (Code oder Aktion) enthalten. Der Wert muss berechnet und mit Währung angegeben werden."
     )
-    uvp_preis: str = Field(description="Der ursprüngliche Preis (UVP) vor dem Rabatt oder 'N/A'.")
     
     # NEUE LOGIK: Muss den Rabatt vom UVP zum NEU berechneten akt_preis berechnen!
     rabatt_prozent: str = Field(
@@ -33,7 +32,9 @@ class Produktinformation(BaseModel):
     marktplatz: str = Field(description="Der Name des Marktplatzes/Shops (z.B. Amazon, Otto, MediaMarkt, oder 'N/A').")
    
     produkt_id: str = Field(description="Die eindeutige Produktkennung wie ASIN, SKU oder Produktnummer. Falls keine gültige Produktkennung gefunden wird, verwende den String: **'produkt titel-der preis'**, wobei **alle Leerzeichen und Kommas** durch Bindestriche (-) ersetzt werden sollen")
-    hauptprodukt_bilder: list[str] = Field(description="Eine Liste der relevantesten Produktbild-URLs als Strings.")
+    hauptprodukt_bilder: list[str] = Field(
+    description="Eine Liste der relevantesten Produktbild-URLs als Strings. **Intelligente Kriterien:** URLs, die für die detaillierte Produktansicht optimiert sind. Diese Bilder sind typischerweise **hochauflösende JPGs** (hohe 'x' und 'y' Parameter, wie z.B. 536x402) mit **unterschiedlichen Asset-IDs** (zur Abdeckung verschiedener Blickwinkel). **Ausgeschlossen** werden kleine PNG-Thumbnails (z.B. x=140), Marketing-Grafiken oder Banner (erkennbar z.B. an 'pixelboxx' im Namen) und generische Shop-Logos."
+)
     url_des_produkts: str = Field(description="Die kanonische URL des Produkts. Verwende 'N/A', falls nicht gefunden.")
     bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1.")
     anzahl_reviews: int = Field(description="Die Gesamtzahl der Bewertungen.")
