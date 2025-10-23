@@ -36,7 +36,7 @@
     autoScrollInterval = setInterval(() => {
       window.scrollBy({ top: 800, behavior: "smooth" });
       const _jitter = 200 + Math.random() * 400; // noop, nur für Humanizer
-    }, 8_000);
+    }, 120_000);
     console.log("[AutoScroll] started (deals)");
   }
   function stopAutoScroll() {
@@ -77,7 +77,7 @@
     return null;
   }
 
-  async function waitForStripeButton(timeoutMs = 12_000, intervalMs = 400) {
+  async function waitForStripeButton(timeoutMs = 12_000, intervalMs = 4000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const btn = findStripeButtonInDoc(document);
@@ -130,7 +130,7 @@
   // Klick + Link-Wartekette, setzt linkReadyForUrl wenn erfolgreich
   async function ensureStripeLinkReadyForCurrentProduct() {
     const urlKey = location.href.split("#")[0];
-
+    
     if (linkReadyForUrl.has(urlKey)) return true;
 
     // Falls Button vorhanden, ggf. einmalig klicken
@@ -213,13 +213,19 @@
 
       // **NEU**: Bei Produktseiten Senden nur, wenn Shortlink ready ist.      // >>> Trigger-Shortcut: Wenn per Opener aufgerufen (ext_trigger=send_html),
       // dann verhalte dich wie Produktseite und sende SOFORT (ohne SiteStripe-Gate).
-      if (hasOpenerTrigger(href)) {
+      if (hasOpenerTrigger(href) && !isAmazonProductPath()) {
         const key = href.split("#")[0];
         if (!triggerConsumedForUrl.has(key)) {
           await runPipeline();
           const html = document.documentElement.outerHTML;
           const payload = { url: href, html };
-          chrome.runtime.sendMessage({ type: "PRODUCT_HTML", payload }, (resp) => console.log("[send] PRODUCT_HTML (trigger) resp:", resp));
+         chrome.runtime.sendMessage({ type: "PRODUCT_HTML", payload }, (resp) => {
+              console.log("[send] PRODUCT_HTML (trigger) resp:", resp);
+              if (resp?.ok) {
+                  // Bei Erfolg Tab schließen lassen
+                  chrome.runtime.sendMessage({ type: "CLOSE_CURRENT_TAB_1" });
+              }
+          });
           triggerConsumedForUrl.add(key);
           lastRunAt = Date.now();
           lastRunUrl = href;
@@ -230,6 +236,7 @@
 
       if (isAmazonProductPath()) {
         const ok = await ensureStripeLinkReadyForCurrentProduct();
+       
         if (!ok) {
           // NICHT senden – nächste Runde abwarten (Interval/Mutation/History)
           return;
@@ -244,7 +251,13 @@
       const payload = { url: href, html };
 
       if (isAmazonProductPath()) {
-        chrome.runtime.sendMessage({ type: "PRODUCT_HTML", payload }, (resp) => console.log("[send] PRODUCT_HTML resp:", resp));
+       chrome.runtime.sendMessage({ type: messageType, payload }, (resp) => {
+          console.log(`[send] ${messageType} resp:`, resp);
+          if (resp?.ok) {
+              // Bei Erfolg Tab schließen lassen
+              chrome.runtime.sendMessage({ type: "CLOSE_CURRENT_TAB_1" });
+          }
+      });
       } else {
         chrome.runtime.sendMessage({ type: "PARSED_HTML", payload }, (resp) => console.log("[send] PARSED_HTML resp:", resp));
       }

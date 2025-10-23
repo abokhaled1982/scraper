@@ -111,6 +111,7 @@ def parse_price_string(price_str: str) -> Dict[str, Any]:
 # --- ZIEL-SCHEMA TEMPLATE ---
 TARGET_SCHEMA_TEMPLATE = {
     "title": "N/A", "affiliate_url": "N/A", "brand": "N/A", "product_id": "N/A",
+    "market": "N/A", # <-- NEU: Marktplatz
     "price": {"raw": None, "value": None, "currency_hint": None},
     "original_price": {"raw": None, "value": None, "currency_hint": None},
     "discount_amount": None, "discount_percent": "N/A", 
@@ -146,10 +147,11 @@ def map_ai_output_to_target_format(
     extracted_title = extracted.get('produkt_titel')
     input_title = ai_output.get('product_title', 'N/A') 
     
-    if html_title != 'N/A':
-        final_output['title'] = html_title
-    elif extracted_title and extracted_title != 'N/A':
+    
+    if extracted_title != 'N/A':
         final_output['title'] = extracted_title
+    elif html_title:
+        final_output['title'] = html_title
     else:
         final_output['title'] = input_title
 
@@ -169,18 +171,19 @@ def map_ai_output_to_target_format(
     else:
         final_output['product_id'] = 'N/A'
     
-    final_output['brand'] = extracted.get('marke', 'N/A')
+   
     
     # ----------------------------- 2. PRICE & DISCOUNT MAPPING --------------------------------------
     price_info = parse_price_fn(extracted.get('akt_preis'))
     original_price_info = parse_price_fn(extracted.get('uvp_preis'))
     
     final_output['price'] = price_info
+    final_output['brand'] = extracted.get('marke', 'N/A')
     final_output['original_price'] = original_price_info
     
     current_value = price_info.get('value')
     original_value = original_price_info.get('value')
-    
+    final_output['market'] = extracted.get('marktplatz', 'N/A')
     final_output['discount_amount'] = None
     if current_value is not None and original_value is not None and original_value > current_value:
         final_output['discount_amount'] = round(original_value - current_value, 2)

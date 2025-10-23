@@ -30,8 +30,10 @@ class Produktinformation(BaseModel):
     rabatt_prozent: str = Field(
         description="Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'. MUSS EXAKT VOM UVP ZUM FINALEN, BERECHNETEN 'akt_preis' AUSGERECHNET WERDEN. Das Ergebnis muss in Prozent ('-XX%') angegeben werden."
     )
-    
-    produkt_id: str = Field(description="Die eindeutige Produktkennung wie ASIN, SKU oder Produktnummer. Verwende 'produkt tille + ein random nummer 8 steillig', falls nicht gefunden.")
+    marktplatz: str = Field(description="Der Name des Marktplatzes/Shops (z.B. Amazon, Otto, MediaMarkt, oder 'N/A').")
+    produkt_id: str = Field(
+        description="Die eindeutige Produktkennung wie **ASIN**, **SKU**, **MPN**, **EAN** oder eine andere spezifische **Produktnummer** des Shops/Marktplatzes. Diese ID ist essenziell für die Zuordnung. Verwende 'N/A', falls keine solche Kennung (mindestens 8 Zeichen lang, alphanumerisch) gefunden werden kann."
+    )
     hauptprodukt_bilder: list[str] = Field(description="Eine Liste der relevantesten Produktbild-URLs als Strings.")
     url_des_produkts: str = Field(description="Die kanonische URL des Produkts. Verwende 'N/A', falls nicht gefunden.")
     bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1.")

@@ -149,7 +149,7 @@ def build_caption_html(
     rating = _stars(r_val, r_cnt)
     avail  = d.get("availability")
     url    = _with_utm(_affiliate(d, affiliate_fallback), d)
-
+    market = d.get("market") # <-- NEU: Marktplatz holen
     # --- Coupon-Logik: Priorisiert neues Schema, Fallback auf altes ---
     coupon = d.get("coupon", {}).get("code") 
     if not coupon: 
@@ -209,6 +209,9 @@ def build_caption_html(
     # --- Ende Preis- & Coupon-Block ---
 
     parts.append("\n") # Leerzeile für Trennung zum Status
+
+    if market and market != "N/A":
+        parts.append(f"🏬 Marktplatz: <b>{escape(str(market))}</b>")
 
     # 3. Bewertungs- und Statusinformationen
     if rating:
