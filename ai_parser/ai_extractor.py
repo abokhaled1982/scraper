@@ -33,8 +33,11 @@ class Produktinformation(BaseModel):
    
     produkt_id: str = Field(description="Die eindeutige Produktkennung wie ASIN, SKU oder Produktnummer. Falls keine gültige Produktkennung gefunden wird, verwende den String: **'produkt titel-der preis'**, wobei **alle Leerzeichen und Kommas** durch Bindestriche (-) ersetzt werden sollen")
     hauptprodukt_bilder: list[str] = Field(
-    description="Eine Liste der relevantesten Produktbild-URLs als Strings. **Intelligente Kriterien:** URLs, die für die detaillierte Produktansicht optimiert sind. Diese Bilder sind typischerweise **hochauflösende JPGs** (hohe 'x' und 'y' Parameter, wie z.B. 536x402) mit **unterschiedlichen Asset-IDs** (zur Abdeckung verschiedener Blickwinkel). **Ausgeschlossen** werden kleine PNG-Thumbnails (z.B. x=140), Marketing-Grafiken oder Banner (erkennbar z.B. an 'pixelboxx' im Namen) und generische Shop-Logos."
-)
+        description=(
+            "Eine Liste der relevantesten Produktbild-URLs als Strings. **WICHTIGE REGEL ZUR KORREKTUR:** Falls eine gefundene URL **relativ** ist (beginnt z.B. mit '/'), **MUSS** sie mithilfe der im Prompt bereitgestellten kanonischen Produkt-URL in eine **ABSOLUTE, vollständige Web-URL** umgewandelt werden (z.B. https://shop.de/p/o/1/bild.jpg). "
+            "**Intelligente Kriterien:** URLs, die für die detaillierte Produktansicht optimiert sind (hochauflösende JPGs, unterschiedliche Asset-IDs). **Ausgeschlossen** werden kleine PNG-Thumbnails, Marketing-Grafiken oder Shop-Logos."
+        )
+    )
     url_des_produkts: str = Field(description="Die kanonische URL des Produkts. Verwende 'N/A', falls nicht gefunden.")
     bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1.")
     anzahl_reviews: int = Field(description="Die Gesamtzahl der Bewertungen.")
@@ -60,7 +63,9 @@ def baue_pattern_pack():
     )
     system_prompt = (
         "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
-        "Produktdetails aus Text und Bild-URL-Kandidaten. Halte dich exakt an das JSON-Schema. "
+        "Produktdetails aus dem Text. Halte dich exakt an das JSON-Schema. "
+        "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
+        "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
         "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
     )
     return {"client": client, "config": config, "system_prompt": system_prompt}

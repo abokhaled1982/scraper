@@ -93,7 +93,7 @@ def process_with_ai_parser(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
         
-        cleanup_temp_files()
+        #cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}", data_mapped
 
