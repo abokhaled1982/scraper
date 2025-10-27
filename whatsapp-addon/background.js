@@ -1,4 +1,4 @@
-// ===== background.js (lokal, sofortiges Senden) =====
+// ===== background.js (lokal, sofortiges Senden - Bereinigt) =====
 
 // Lokaler WebSocket-Server (Python-Server aus server.py)
 const WS_URL = "ws://127.0.0.1:8765/";
@@ -121,6 +121,7 @@ function pageInject(text) {
   insertAndSend(text);
 }
 
+// Code, der in der Seite ausgeführt wird (Öffnen des Foto/Video-Dialogs)
 function pageOpenPhotoVideo() {
   function toast(msg) {
     let t = document.getElementById("waqs-toast");
@@ -214,25 +215,6 @@ async function sendToWhatsApp(text) {
   );
 }
 
-// NEUE Funktion zum Senden des Base64-Bildes
-async function sendImageToWhatsApp(base64Data, caption) {
-  const tabs = await findWATabs();
-  if (!tabs.length) {
-    console.warn("[WS] Kein WhatsApp-Tab offen – Bildnachricht verworfen.");
-    return;
-  }
-  await Promise.all(
-    tabs.map((tab) =>
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "MAIN",
-        func: pageInjectImage,
-        args: [base64Data, caption],
-      })
-    )
-  );
-}
-
 // WebSocket aufbauen + Events
 function connectWS() {
   if (
@@ -254,6 +236,7 @@ function connectWS() {
     console.log("[WS] verbunden:", WS_URL);
     connecting = false;
     clearInterval(heartbeatTimer);
+    // Heartbeat beibehalten, um die Verbindung offen zu halten
     heartbeatTimer = setInterval(() => {
       try {
         sock?.send(JSON.stringify({ type: "ping", t: Date.now() }));
@@ -265,21 +248,13 @@ sock.addEventListener("message", async (ev) => {
   try {
     const data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
 
+    // Nur "send" (Text) und "openMediaPicker" werden unterstützt
     if (data && data.type === "send" && data.text) {
       console.log("[WS] Text-Nachricht empfangen, sende an WhatsApp …");
       await sendToWhatsApp(data.text);
-    } else if (
-      data &&
-      data.type === "sendImage" &&
-      data.base64_data &&
-      data.caption
-    ) {
-      console.log("[WS] Bild-Nachricht empfangen, versuche Upload...");
-      await sendImageToWhatsApp(data.base64_data, data.caption);
     } else if (data && data.type === "openMediaPicker") {
       console.log("[WS] Öffne Plus → Fotos & Videos …");
-
-      // 🔽 Das hier ersetzt deinen direkten Aufruf
+      
       const tabs = await findWATabs();
       if (!tabs.length) {
         console.warn("[WS] Kein WhatsApp-Tab offen – openMediaPicker verworfen.");
@@ -295,7 +270,7 @@ sock.addEventListener("message", async (ev) => {
         )
       );
     } else {
-      console.log("[WS] Unbekannte Nachricht:", data);
+      console.log("[WS] Unbekannte Nachricht verworfen:", data);
     }
   } catch (err) {
     console.error("[WS] message error:", err);

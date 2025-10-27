@@ -248,7 +248,7 @@ async def send_offer_from_file():
         # AUFRÄUMEN: Temporäre Datei löschen
         if temp_image_path and temp_image_path.exists():
             try:
-                temp_image_path.unlink()
+                # temp_image_path.unlink()
                 print(f"[i] Temporäre Bilddatei gelöscht: {temp_image_path}")
             except Exception as e:
                 print(f"[!] Konnte temporäre Datei nicht löschen: {e}")
