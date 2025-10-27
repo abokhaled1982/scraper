@@ -168,10 +168,45 @@ def load_image_as_base64(image_url: str) -> Optional[str]:
         print(f"[!] Konnte Bild nicht als Base64 laden: {e}")
         return None
 
+# HINZUFÜGEN: Temporäre Speicherung des Bildes
+def download_image_to_temp(image_url: str) -> Optional[Path]:
+    """Lädt ein Bild von einer URL und speichert es temporär."""
+    try:
+        # Lade das Bild binär von der URL
+        with urllib.request.urlopen(image_url) as response:
+            image_data = response.read()
+        
+        # Erstelle eine temporäre Datei
+        # `tempfile.NamedTemporaryFile` speichert das Bild auf der Festplatte
+        # und gibt den Pfad zurück. delete=False, damit die Datei nach dem Schließen
+        # des Context-Managers nicht sofort gelöscht wird, sondern erst später.
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            tmp_file.write(image_data)
+            temp_path = Path(tmp_file.name)
+        
+        # Versuche, die ursprüngliche Dateierweiterung hinzuzufügen, falls möglich
+        mime_type = response.info().get_content_type()
+        ext = ".jpg" # Default-Erweiterung
+        if "png" in mime_type:
+             ext = ".png"
+        elif "gif" in mime_type:
+             ext = ".gif"
+        # Die temporäre Datei umbenennen, um die korrekte Endung zu haben
+        new_path = temp_path.with_suffix(ext)
+        temp_path.rename(new_path)
+        
+        print(f"[i] Bild temporär gespeichert unter: {new_path}")
+        return new_path
+    except Exception as e:
+        print(f"[!] Konnte Bild nicht temporär speichern: {e}")
+        return None
+
 async def send_offer_from_file():
     if not OFFER_PATH.exists():
         print(f"[!] Angebotsdatei fehlt: {OFFER_PATH.name} (erwartet unter {OFFER_PATH})")
         return
+
+    temp_image_path: Optional[Path] = None
     try:
         offer = load_offer(OFFER_PATH)
         text_body = format_offer_text(offer)
@@ -186,17 +221,18 @@ async def send_offer_from_file():
             final_caption += f"\n\n🔗 *Direkt zum Angebot:*\n{affiliate_url}"
         
         
-        # Bild als Base64 laden
-        base64_img_data = None
+        # NEUE LOGIK: Bild temporär speichern, um den lokalen Pfad zu erhalten
         if img_url:
-            base64_img_data = load_image_as_base64(img_url)
+            temp_image_path = download_image_to_temp(img_url)
+        
         
         # Payload für den Versand vorbereiten
-        if base64_img_data:
-            # Sende als "sendImage" mit Base64-Daten
+        if temp_image_path:
+            # Sende als "openMediaPicker" mit dem lokalen Pfad
+            # Der Client wird diesen Pfad öffnen und das Bild hochladen/senden
             payload: Dict[str, Any] = {
-                "type": "sendImage", 
-                "base64_data": base64_img_data, 
+                "type": "openMediaPicker", 
+                "path": str(temp_image_path), # Hier ist der Pfad als String
                 "caption": final_caption # Der gesamte Text wird die Bildunterschrift
             }
         else:
@@ -204,9 +240,18 @@ async def send_offer_from_file():
             payload: Dict[str, Any] = {"type": "send", "text": final_caption}
 
         await broadcast(payload)
+
     except Exception as e:
         print(f"[!] Fehler beim Lesen/Formatieren: {e}")
-
+    
+    finally:
+        # AUFRÄUMEN: Temporäre Datei löschen
+        if temp_image_path and temp_image_path.exists():
+            try:
+                temp_image_path.unlink()
+                print(f"[i] Temporäre Bilddatei gelöscht: {temp_image_path}")
+            except Exception as e:
+                print(f"[!] Konnte temporäre Datei nicht löschen: {e}")
 # -------------------- Extras und Main --------------------
 
 def example_party_message() -> Dict[str, Any]:
@@ -234,6 +279,7 @@ async def stdin_loop():
     print("  'o'  → Angebot aus angebot.json senden (versucht Bild-Upload)")
     print("  'p'  → Party-Nachricht senden")
     print("  'b <Text>' → freien Text senden")
+    print("  'm <image>' → offne image dialog")
     print("  'q'  → quit")
     loop = asyncio.get_running_loop()
     while True:
@@ -261,6 +307,10 @@ async def stdin_loop():
 
         if line.startswith("b "):
             await broadcast({"type": "send", "text": line[2:]})
+            continue
+        if line.lower() == "m":           # m = media picker öffnen
+            #await broadcast({"type": "openMediaPicker"})
+            await send_offer_from_file()
             continue
 
         # Standard: ganze Zeile senden
