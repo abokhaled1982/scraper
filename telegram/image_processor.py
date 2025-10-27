@@ -10,16 +10,16 @@ import re
 # Maximale Dateigröße für Telegram-Bilder (50 MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024 
 
-# Erweitere Regex um Pfad-Segmente, die auf dynamische Größenänderung hindeuten, 
-# z.B. /max/1400xauto/, /300x300/, /w_500/.
+# Erweitere Regex um Pfad-Segmente, die auf dynamische Größenänderung hindeuten.
+# KORREKTUR: '&' als Trennzeichen HINZUGEFÜGT, um Parameter überall in der Query zu finden.
 FILTER_QUERY_RE = re.compile(
-    r'[/\\?](filters|fit-in|format|quality|resize|crop|width|height|w=|h=|auto|optmize|scale|smart|url=|[0-9]+x(auto|[0-9]+))', 
+    r'[/\\?&](filters|fit-in|format|quality|resize|crop|width|height|w=|h=|x=|y=|auto|optmize|scale|smart|url=|strip|trim|ex=|ey=|align|resizesource|unsharp|[0-9]+x(auto|[0-9]+))', 
     re.I
 )
-# Der neue Teil [0-9]+x(auto|[0-9]+) fängt Muster wie "1400xauto" oder "300x300" ab.
-# Formate/Endungen, die oft Probleme machen und konvertiert werden SOLLTEN, 
-# da Telethon/Telegram sie als Bildquelle nicht zuverlässig handhabt (z.B. WebP/animierte GIFs).
+# Formate/Endungen, die oft Probleme machen und konvertiert werden SOLLTEN
 PROBLEM_EXTENSIONS = (".webp", ".gif")
+# NEU: Alle Standard-Erweiterungen für die "No-Extension"-Prüfung
+STANDARD_EXTENSIONS = PROBLEM_EXTENSIONS + (".jpg", ".jpeg", ".png")
 
 _URL_RE = re.compile(r"^https?://", re.I)
 
@@ -54,6 +54,11 @@ def get_best_image_url(d: Dict[str, Any]) -> Optional[str]:
 def url_needs_local_processing(url: Optional[str]) -> bool:
     """
     Entscheidet heuristisch, ob das Bild heruntergeladen und konvertiert werden MUSS.
+    
+    Die Konvertierung ist notwendig, wenn:
+    1. Die URL Query-Parameter enthält, die auf dynamische Filterung/Skalierung hindeuten.
+    2. Die URL ein Format verwendet, das Telegram/Telethon Probleme bereiten kann (WebP, GIF).
+    3. Die URL keine Standard-Erweiterung (z.B. .jpg) enthält, da sie dann typischerweise dynamisch ist.
     """
     if not url:
         return False
@@ -64,55 +69,44 @@ def url_needs_local_processing(url: Optional[str]) -> bool:
     # 1. Prüfung auf Problemformate (WebP, GIF etc.)
     for ext in PROBLEM_EXTENSIONS:
         if parsed_path.endswith(ext):
-            # print(f"ℹ️ Lokale Konvertierung erforderlich: Problemformat '{ext}' erkannt in {url}")
             return True
-    
-    # 2. Prüfung auf komplexe URL-Filter/Query-Parameter (wie /filters:..., ?w=...)
+
+    # 2. Prüfung auf komplexe URL-Filter/Query-Parameter
     if FILTER_QUERY_RE.search(url):
-        # print(f"ℹ️ Lokale Konvertierung erforderlich: Komplexe Filter/Dynamik-URL erkannt in {url}")
-        
-        # NEUE INTELLIGENTE PRÜFUNG: Wenn die URL dynamisch ist UND keine Standard-Bildendung hat,
-        # ist die Wahrscheinlichkeit eines Telegram-Fehlers sehr hoch.
-        is_known_extension = parsed_path.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp'))
-        
-        # Wenn komplexe Filter gefunden wurden, aber keine Standard-Erweiterung,
-        # dann MUSS lokal verarbeitet werden (z.B. der coolblue-Fall).
-        if not is_known_extension:
-             # print(f"⚠️ Lokale Konvertierung erzwungen: Dynamik ohne Endung.")
-             return True
-        
-        # Wenn Filter da sind, aber eine Standard-Endung (.jpg) existiert, könnte Telegram es packen.
-        # Trotzdem: Bei Filtern ist Konvertierung sicherer, um Dateinamen-Fehler zu vermeiden.
         return True 
 
-    # 3. Standard-URL ohne erkannte Probleme
+    # 3. NEUE PRÜFUNG: Dynamische URLs ohne Standard-Erweiterung (fängt Ihre 3dmensionals-URL)
+    is_any_standard_extension_present = any(parsed_path.endswith(ext) for ext in STANDARD_EXTENSIONS)
+    
+    if not is_any_standard_extension_present:
+        # Die URL endet nicht auf .jpg, .png, .webp oder .gif. Dies ist ein Zeichen für eine 
+        # dynamisch generierte URL, die Telegram oft nicht verarbeiten kann.
+        return True
+
+    # 4. Standard-URL (z.B. https://host.de/bild.jpg ohne Queries)
     return False
-
-
-# ... (Ihre Funktion url_needs_local_processing bleibt unverändert)
 
 async def download_and_convert_to_jpg(url: Optional[str]) -> Optional[Path]:
     """
     Lädt ein Problem-Bild herunter, konvertiert es zu JPG und speichert es temporär.
     Wird nur aufgerufen, wenn url_needs_local_processing True ist.
-    
-    KORREKTUR: Jetzt mit User-Agent-Header, um 403-Fehler zu vermeiden.
     """
     if not url:
         return None
 
-    # 1. Nur den Pfad-Teil der URL ohne Query-Parameter und Fragment verwenden.
-    path_segment = url.split('?')[0].split('#')[0].split('/')[-1]
-
-    # 2. Alle ungültigen Dateisystemzeichen aus diesem Segment entfernen (durch '_').
-    base_name = ILLEGAL_FILENAME_CHARS_RE.sub('_', path_segment)
-    base_name = base_name.strip('_')
+    # 1. KORREKTUR: Die langen Pfad-Segmente werden NICHT mehr für den Dateinamen verwendet.
+    #    Ein zu langer Dateiname (über 259 Zeichen im gesamten Pfad) ist die Ursache für 
+    #    den "No such file or directory" (Errno 2) Fehler auf Windows-Systemen.
+    #    Wir verwenden einen kurzen, statischen Basisnamen. Die Eindeutigkeit wird
+    #    durch den Hash der URL am Ende gewährleistet.
+    base_name = 'conv_img'
     
-    if not base_name:
-        base_name = 'download'
-
-    temp_file = Path(tempfile.gettempdir()) / f"tg_img_conv_{base_name}_{hash(url)}.jpg"
+    # 2. Erstellung des temporären Pfades mit dem kurzen Basisnamen und dem Hash
+    temp_file = Path(tempfile.gettempdir()) / f"tg_img_{base_name}_{hash(url)}.jpg"
     
+    if temp_file.exists(): temp_file.unlink()  
+    
+    # ... der Rest der Funktion bleibt unverändert ...
     if temp_file.exists(): temp_file.unlink()
 
     print(f"📥 Starte asynchronen Download & Konvertierung (erforderlich): {url}")

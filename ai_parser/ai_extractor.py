@@ -33,11 +33,21 @@ class Produktinformation(BaseModel):
    
     produkt_id: str = Field(description="Die eindeutige Produktkennung wie ASIN, SKU oder Produktnummer. Falls keine gültige Produktkennung gefunden wird, verwende den String: **'produkt titel-der preis'**, wobei **alle Leerzeichen und Kommas** durch Bindestriche (-) ersetzt werden sollen")
     hauptprodukt_bilder: list[str] = Field(
-        description=(
-            "Eine Liste der relevantesten Produktbild-URLs als Strings. **WICHTIGE REGEL ZUR KORREKTUR:** Falls eine gefundene URL **relativ** ist (beginnt z.B. mit '/'), **MUSS** sie mithilfe der im Prompt bereitgestellten kanonischen Produkt-URL in eine **ABSOLUTE, vollständige Web-URL** umgewandelt werden (z.B. https://shop.de/p/o/1/bild.jpg). "
-            "**Intelligente Kriterien:** URLs, die für die detaillierte Produktansicht optimiert sind (hochauflösende JPGs, unterschiedliche Asset-IDs). **Ausgeschlossen** werden kleine PNG-Thumbnails, Marketing-Grafiken oder Shop-Logos."
-        )
+    description=(
+        "Eine Liste der relevantesten Produktbild-URLs als Strings. **Das LLM MUSS diese Prioritäten strikt einhalten:** "
+        
+        # 1. Höchste Priorität: Auflösung & Eindeutigkeit
+        "**1. Hohe Auflösung/Größe** (Idealerweise Breite > 800px). "
+        "**2. Eindeutige Produktfotos** – Schließe immer URLs aus, die Screenshots, Logos, Icons, oder generische Marketing-Grafiken darstellen (Negativ-Keywords wie 'screenshot', 'logo', 'icon', 'design ohne titel' deuten auf sekundäre Assets hin). "
+        
+        # 2. Konsistenz (NEU: Format-Konsistenz)
+        "**3. Format-Konsistenz:** Die ausgewählten Bilder **MÜSSEN** das dominierende Dateiformat (z.B. nur JPGs oder nur WebPs) der hochauflösenden Kandidaten verwenden. URLs mit abweichenden Formaten (z.B. ein PNG in einer JPG-Serie) sind **auszuschließen**."
+        "**4. Benennungs-Konsistenz:** Priorisiere Bilder, die Teil einer Serie sind (z.B. nummerierte Fotos oder gleiche Präfixe/Asset-IDs), da sie zusammengehörige Produktansichten sind."
+        
+        # 3. Technische Korrektur
+        "**WICHTIGE REGEL ZUR KORREKTUR:** Falls eine gefundene URL **relativ** ist (beginnt z.B. mit '/'), **MUSS** sie mithilfe der im Prompt bereitgestellten kanonischen Produkt-URL in eine **ABSOLUTE, vollständige Web-URL** umgewandelt werden (z.B. https://shop.de/bild.jpg)."
     )
+)
     url_des_produkts: str = Field(description="Die kanonische URL des Produkts. Verwende 'N/A', falls nicht gefunden.")
     bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1.")
     anzahl_reviews: int = Field(description="Die Gesamtzahl der Bewertungen.")

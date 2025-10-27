@@ -21,7 +21,7 @@ def clean_html_to_core_text(html_content: str) -> str:
 
     ignore_tags = [
         'script', 'style', 'header', 'footer', 'nav', 
-        'aside', 'form', 'iframe', 'noscript', 'button',
+         'iframe', 'noscript', 'button',
         'link', 'meta', 'svg', 'img', 'picture', 'source'
     ]
     
