@@ -157,7 +157,7 @@ def build_caption_html(
    
     # --- Daten für den Preis- & Coupon-Block ---
     p   = (d.get("price") or {}).get("raw")
-    o   = (d.get("original_price") or {}).get("raw")
+    o   = (d.get("original_price") or 0)
     pct_abs = _get_discount_percent_number(d)
     cnote  = d.get("coupon_note")
     exp    = _fmt_expires(d.get("expires_at"))

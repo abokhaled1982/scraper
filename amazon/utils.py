@@ -175,24 +175,21 @@ def map_ai_output_to_target_format(
     
     # ----------------------------- 2. PRICE & DISCOUNT MAPPING --------------------------------------
     price_info = parse_price_fn(extracted.get('akt_preis'))
-    original_price_info = parse_price_fn(extracted.get('uvp_preis'))
+    
     
     final_output['price'] = price_info
     final_output['brand'] = extracted.get('marke', 'N/A')
-    final_output['original_price'] = original_price_info
-    
-    current_value = price_info.get('value')
-    original_value = original_price_info.get('value')
-    final_output['market'] = extracted.get('marktplatz', 'N/A')
-    final_output['discount_amount'] = None
-    if current_value is not None and original_value is not None and original_value > current_value:
-        final_output['discount_amount'] = round(original_value - current_value, 2)
+    final_output['original_price'] = extracted.get('original_preis', 'N/A')     
+   
+   
+    final_output['discount_amount'] = extracted.get('discount_amount', 'N/A')
+  
         
     final_output['discount_percent'] = extracted.get('rabatt_prozent', 'N/A')
     
     # ----------------------------- 3. IMAGES (Kombination HTML + AI) --------------------------------------
     # Priorität: HTML-Bilder (deterministisch) > AI-Bilder > Fallback
-   
+    final_output['market'] = extracted.get('marktplatz', 'N/A')
     html_images = extracted.get('hauptprodukt_bilder', [])
     
     if html_images:

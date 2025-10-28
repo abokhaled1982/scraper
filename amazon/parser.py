@@ -149,9 +149,9 @@ def compute_discount_fields(
     discount_percent: Optional[float] = None
     final_after_coupon: Optional[float] = None
 
-    if price_val is not None and orig_val and orig_val > 0:
-        discount_amount = max(orig_val - price_val, 0)
-        discount_percent = (discount_amount / orig_val) * 100 if orig_val else None
+    # if price_val is not None and orig_val and orig_val > 0:
+    #     discount_amount = max(orig_val - price_val, 0)
+    #     discount_percent = (discount_amount / orig_val) * 100 if orig_val else None
 
     if price_val is not None and coupon_info:
         cpct = coupon_info.get("percent")
@@ -171,7 +171,7 @@ def compute_discount_fields(
         return round(x, 2) if isinstance(x, (int, float)) else None
 
     return {
-        "discount_amount": rnd(discount_amount),
+        "discount_amount": discount_amount,
         "discount_percent": rnd(discount_percent),
         "final_price_after_coupon": rnd(final_after_coupon),
     }
@@ -368,7 +368,7 @@ class AmazonProductParser:
         data.coupon_value = parse_coupon_value(data.coupon_text)
 
         comp = compute_discount_fields(data.price, data.original_price, data.coupon_value)
-        data.discount_amount = comp["discount_amount"]
+        #data.discount_amount = comp["discount_amount"]
         data.discount_percent = comp["discount_percent"] if comp["discount_percent"] is not None else explicit_pct
         data.final_price_after_coupon = comp["final_price_after_coupon"]
 

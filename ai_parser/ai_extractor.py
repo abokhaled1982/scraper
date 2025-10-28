@@ -24,10 +24,25 @@ class Produktinformation(BaseModel):
     akt_preis: str = Field(
         description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €). Dieses Feld MUSS den FINALEN, niedrigsten Preis nach Anwendung des HÖCHSTEN RABATTS (Code oder Aktion) enthalten. Der Wert muss berechnet und mit Währung angegeben werden."
     )
+
+    # NEUES FELD: Originalpreis
+    original_preis: str = Field(
+        description=(
+            "Der ursprüngliche, durchgestrichene Preis, der UVP, oder der Preis vor einem Rabatt (z.B. 49,99 €). "
+            "**WICHTIGE LOGIK:** Falls kein expliziter UVP/Originalpreis im Text gefunden wird (kein 'durchgestrichener Preis'), "
+            "MUSS dieser Wert dem berechneten **'akt_preis'** entsprechen. "
+            "Dies stellt sicher, dass dieses Feld niemals leer ist und die Logik konsistent bleibt, wenn kein Rabatt angewendet wird."
+        )
+    )
     
     # NEUE LOGIK: Muss den Rabatt vom UVP zum NEU berechneten akt_preis berechnen!
     rabatt_prozent: str = Field(
-        description="Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'. MUSS EXAKT VOM UVP ZUM FINALEN, BERECHNETEN 'akt_preis' AUSGERECHNET WERDEN. Das Ergebnis muss in Prozent ('-XX%') angegeben werden."
+        description=(
+            "Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'. MUSS EXAKT VOM 'original_preis' ZUM FINALEN, BERECHNETEN 'akt_preis' AUSGERECHNET WERDEN. "
+            "Wenn 'akt_preis' gleich 'original_preis' ist, MUSS dieses Feld **'N/A'** sein. "
+            "**WICHTIGE LOGIK:** Wenn das LLM nur den Rabattprozentsatz findet, MUSS es 'original_preis' oder 'akt_preis' berechnen, um die mathematische Logik zu erfüllen. "
+            "Das Ergebnis muss in Prozent ('-XX%') angegeben werden."
+        )
     )
     marktplatz: str = Field(description="Der Name des Marktplatzes/Shops (z.B. Amazon, Otto, MediaMarkt, oder 'N/A').")
    

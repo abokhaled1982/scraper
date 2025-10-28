@@ -225,14 +225,14 @@ class TelegramOfferRouter:
         self.client = await ensure_logged_in(LoginConfig.from_env())
         async with self.client:
             entity = await self._ensure_join_and_resolve(self.client, self.channel_ref)
-            print(f"🔎 Watcher aktiv: prüfe {OUT_DIR} alle {WATCH_SECS}s …")
+            print(f"🔎 Telegramm Watcher aktiv: prüfe {OUT_DIR} alle {WATCH_SECS}s …")
             while True:
                 try:
                     sent = await self._send_one_new_item(entity)
                     if not sent:
                         print("ℹ️ Nichts Neues gefunden.")
                 except Exception as e:
-                    print(f"❌ Fehler im Watcher: {e}")
+                    print(f"❌ Fehler im Watcher Telegram: {e}")
                 await asyncio.sleep(WATCH_SECS)
 
     async def run_once(self):
