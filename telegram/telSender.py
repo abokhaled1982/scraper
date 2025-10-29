@@ -16,7 +16,7 @@ from telethon.errors import UserAlreadyParticipantError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 # Dein bestehender Login-Helper
-from telegram.login_once import LoginConfig, ensure_logged_in, _ensure_join_and_resolve
+from telegram.login_once import LoginConfig, ensure_logged_in
 
 load_dotenv()
 
