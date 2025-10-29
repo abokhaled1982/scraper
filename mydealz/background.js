@@ -4,7 +4,8 @@
  *
  * - Scannen: alle 3 Sekunden.
  * - Klick: alle 10 Sekunden, direkt auf den Button im aktiven Tab.
- * - KORREKTUR: Vereinfachte Artikelsuche (getElementById) und Klick-Simulation für Robustheit.
+ * - PERSISTENZ: Verarbeitete Deal-IDs werden in chrome.storage.local gespeichert.
+ * - AUTO-RELOAD: Aktiver mydealz-Tab wird alle 30 Sekunden neu geladen.
  */
 
 let autoOpen = true;
@@ -12,9 +13,28 @@ let openInterval = null; // 10s-Intervall
 let scanInterval = null; // 3s-Intervall
 const OPEN_EVERY_MS = 10_000;
 const SCAN_EVERY_MS = 3_000;
+const RELOAD_EVERY_MS = 30_000; // 30 Sekunden
+const STORAGE_KEY = "processed_deal_ids"; // Schlüssel für chrome.storage
 
-const processed = new Set(); // Artikel-IDs, die bereits "bedient" wurden
+let lastReloadTime = 0;
+const processed = new Set(); // Artikel-IDs, die bereits "bedient" wurden (wird aus Storage geladen)
 const queue = []; // { id, selectorInfo: { id, index } }
+
+// --- Storage Funktionen ---
+
+// Lädt verarbeitete IDs beim Start aus dem lokalen Speicher
+async function loadProcessedIds() {
+  const result = await chrome.storage.local.get([STORAGE_KEY]);
+  const ids = result[STORAGE_KEY] || [];
+  ids.forEach((id) => processed.add(id));
+  updateBadge();
+  console.log(`[Deal-AutoClick] ${processed.size} verarbeitete Deals aus dem Speicher geladen.`);
+}
+
+// Speichert die aktuelle Liste der verarbeiteten IDs im lokalen Speicher
+function saveProcessedIds() {
+  chrome.storage.local.set({ [STORAGE_KEY]: Array.from(processed) });
+}
 
 // --- POPUP Messages optional
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -36,6 +56,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 function start() {
+  loadProcessedIds(); // *** NEU: IDs VOR dem Start laden ***
   startScanTimer();
   startOpenTimer();
   updateBadge();
@@ -44,7 +65,11 @@ function start() {
 
 function startScanTimer() {
   stopScanTimer();
-  scanInterval = setInterval(scanActiveTabOnce, SCAN_EVERY_MS);
+  // Scannt nun zusätzlich alle 3 Sekunden auf neue Deals und prüft, ob ein Reload nötig ist.
+  scanInterval = setInterval(() => {
+    scanActiveTabOnce();
+    checkForReload();
+  }, SCAN_EVERY_MS);
 }
 
 function stopScanTimer() {
@@ -63,6 +88,30 @@ function stopOpenTimer() {
   openInterval = null;
 }
 
+// *** Funktion: Prüft, ob der aktive Tab mydealz ist und neu geladen werden soll ***
+async function checkForReload() {
+  if (Date.now() - lastReloadTime < RELOAD_EVERY_MS) {
+    return; // Noch nicht Zeit für den nächsten Reload
+  }
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    // Prüfen, ob die URL mydealz enthält und es keine spezielle Chrome-Seite ist
+    if (tab?.id && tab.url && (tab.url.includes("mydealz.de") || tab.url.includes("mydealz.com"))) {
+      console.log("[Deal-AutoClick] Lade mydealz-Seite neu...");
+      chrome.tabs.reload(tab.id);
+      lastReloadTime = Date.now(); // Aktualisiere den Zeitstempel
+
+      // Leere die Warteschlange nach dem Neuladen, da alle Deals neu gescannt werden
+      queue.length = 0;
+      // 'processed' WIRD NICHT GELEERT, da es persistent ist!
+    }
+  } catch (e) {
+    // console.error("[Deal-AutoClick] Reload-Fehler:", e);
+  }
+}
+
 async function scanActiveTabOnce() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -77,7 +126,7 @@ async function scanActiveTabOnce() {
 
     for (const item of result) {
       if (!item?.id) continue;
-      if (processed.has(item.id)) continue;
+      if (processed.has(item.id)) continue; // **Prüft persistenten Status**
       if (!item.selectorInfo) continue;
 
       if (!queue.find((q) => q.id === item.id)) {
@@ -97,6 +146,7 @@ async function openNextInQueue() {
 
   const item = queue.shift();
   processed.add(item.id);
+  saveProcessedIds(); // *** NEU: Speichere den neuen Zustand nach dem Klicken ***
 
   const selectorInfo = item.selectorInfo;
   if (!selectorInfo) return;
@@ -127,25 +177,36 @@ async function openNextInQueue() {
   updateBadge();
 }
 
-// *** KORRIGIERTE Funktion: Führt den Klick im DOM des aktiven Tabs aus (mit Simulation) ***
+// *** KORRIGIERTE Funktion: Führt den Klick im DOM des aktiven Tabs aus (mit robuster Triggerung) ***
 function clickDealButton(selectorInfo) {
   // FINALER, ROBUSTER SELEKTOR
   const ALL_DEAL_BUTTONS = 'a[data-t="dealLink"], button[data-t="dealLink"], button.buttonWithCode-button, a.buttonWithCode-button';
 
-  // Hilfsfunktion zur Simulation eines echten Mausklicks
-  function simulateRealClick(element) {
+  // NEUE, ROBUSTERE KLICK-FUNKTION: Versucht native .click() vor Event-Simulation
+  function triggerClick(element) {
     if (!element) return false;
 
-    // Senden der Events, um JS-Listener auszulösen
-    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    // 1. Versuche, die native .click() Methode aufzurufen (Am zuverlässigsten)
+    try {
+      element.click();
+      return true;
+    } catch (e) {
+      // Fallback, wenn native click() fehlschlägt
+    }
 
-    return true;
+    // 2. Fallback: Event-Simulation
+    try {
+      element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      return true;
+    } catch {}
+
+    return false;
   }
 
   try {
-    // KORRIGIERTE SUCHE: Verlässt sich nur auf document.getElementById, da der Fallback fehlerhaft war.
+    // Artikelsuche
     const article = document.getElementById(selectorInfo.id);
     if (!article) return false;
 
@@ -159,10 +220,10 @@ function clickDealButton(selectorInfo) {
 
     if (!btn) return false;
 
-    // Klick ausführen mit SIMULATION
+    // Klick ausführen mit ROBUSTER Triggerung
     setTimeout(() => {
       try {
-        simulateRealClick(btn);
+        triggerClick(btn); // Aufruf der neuen, robusten Funktion
       } catch {}
     }, 50);
 
