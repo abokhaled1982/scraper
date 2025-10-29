@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Deal-Link-Logger",
+  "version": "1.2.0",
+  "description": "Findet Deal-Buttons in Artikel-Karten und öffnet alle 10 Sekunden den nächsten Deal.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Deal-Links", "default_popup": "popup.html" },
+
+ 
+  "content_scripts": []
+}

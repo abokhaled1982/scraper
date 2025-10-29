@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <title>Deal-Links</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Deal-Links</h1>
+      <label class="switch">
+        <input id="toggle-enabled" type="checkbox" />
+        <span class="slider"></span>
+        <span class="label">Logging</span>
+      </label>
+    </header>
+    <button id="auto-open">Auto-Open: Aus</button>
+
+    <div class="controls">
+      <button id="refresh">Jetzt aktualisieren</button>
+      <button id="copy-all">Alle kopieren</button>
+      <span id="count" class="muted"></span>
+    </div>
+
+    <ul id="links" class="list"></ul>
+
+    <footer>
+      <small class="muted">
+        Das Popup zeigt die zuletzt erkannten Links des aktuellen Tabs. Der
+        Background loggt sie alle 10 s, wenn „Logging“ aktiv ist.
+      </small>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
