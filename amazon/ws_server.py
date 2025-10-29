@@ -20,7 +20,7 @@ from config import (
     PRODUCKT_DIR,         # <- Sibling von inbox
     
 )
-from telegram.telObserver import send_url_to_observer
+#from telegram.telObserver import send_url_to_observer
 # websockets erst nach config importieren (reine Ordnungssache)
 import websockets
 
