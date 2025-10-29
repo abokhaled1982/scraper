@@ -95,18 +95,25 @@ function handleNewTab(tab) {
 }
 
 function logFinalUrlOnce(tabId, changeInfo, tab) {
-  // Nur reagieren, wenn es der erwartete Tab ist UND das Laden abgeschlossen ist
   if (tabId === expectedTabId && changeInfo.status === "complete") {
     const finalUrl = tab.url;
 
-    // Sende die finale URL über WebSocket
+    // URL über WebSocket senden
     sendUrlViaWebSocket(finalUrl);
 
-    // Listener entfernen und Tracking zurücksetzen
+    // Den neuen Tab schließen, nachdem die URL gesendet wurde
+    setTimeout(() => {
+      chrome.tabs.remove(tabId, () => {
+        console.log(`[Deal-AutoClick] Tab ${tabId} (${finalUrl}) geschlossen.`);
+      });
+    }, 1000); // 1 Sekunde warten, um sicherzustellen, dass alles geladen ist
+
+    // Listener entfernen und Reset
     chrome.tabs.onUpdated.removeListener(logFinalUrlOnce);
     expectedTabId = null;
   }
 }
+
 
 // -----------------------------------------------------
 // ### 3. HAUPT-SCHEDULER LOGIK
