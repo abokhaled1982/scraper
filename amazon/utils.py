@@ -177,7 +177,7 @@ def map_ai_output_to_target_format(
     price_info = parse_price_fn(extracted.get('akt_preis'))
     
     
-    final_output['price'] = price_info
+    final_output['price'] = price_info.get('raw', 'N/A')
     final_output['brand'] = extracted.get('marke', 'N/A')
     final_output['original_price'] = extracted.get('original_preis', 'N/A')     
    

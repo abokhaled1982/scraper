@@ -89,7 +89,7 @@ def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
     except Exception:
         val = None
 
-    return {"raw": t, "value": val, "currency_hint": currency}
+    return t
 
 def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
     """
@@ -195,7 +195,7 @@ class ProductData:
 
     # Preise
     price: Optional[Dict[str, Any]] = None
-    original_price: Optional[Dict[str, Any]] = None
+    original_price: Optional[str] = None
     discount_amount: Optional[float] = None
     discount_percent: Optional[float] = None
     coupon_text: Optional[str] = None
@@ -741,8 +741,8 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
     """
     Mappt ProductData -> BO…-Schema (Feldnamen + Struktur wie B0DSLBN5FS.json).
     """
-    price_obj = _price_obj_with_symbol(product.price)
-    orig_obj  = _price_obj_with_symbol(product.original_price)
+    price_obj = product.price
+    orig_obj  = product.original_price
     discount_percent_str = _format_discount_percent(product.price, product.original_price, product.discount_percent)
 
     rating_block = None
