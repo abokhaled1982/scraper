@@ -3,26 +3,172 @@
  * und führt alle 10s einen Klick auf den nächsten Deal-Button (im aktiven Tab) aus.
  *
  * - Scannen: alle 3 Sekunden.
- * - Klick: alle 10 Sekunden, direkt auf den Button im aktiven Tab.
+ * - Klick: alle 10 Sekunden.
  * - PERSISTENZ: Verarbeitete Deal-IDs werden in chrome.storage.local gespeichert.
  * - AUTO-RELOAD: Aktiver mydealz-Tab wird alle 30 Sekunden neu geladen.
+ * - WEBSOCKET: Sendet die finale URL des neuen Tabs an einen Server.
  */
 
+// --- KONFIGURATION ---
+const WEBSOCKET_URL = "ws://localhost:8765"; // 🎯 PASSE DIESE URL AN DEINEN SERVER AN!
+
 let autoOpen = true;
-let openInterval = null; // 10s-Intervall
-let scanInterval = null; // 3s-Intervall
+let openInterval = null;
+let scanInterval = null;
 const OPEN_EVERY_MS = 10_000;
 const SCAN_EVERY_MS = 3_000;
-const RELOAD_EVERY_MS = 30_000; // 30 Sekunden
-const STORAGE_KEY = "processed_deal_ids"; // Schlüssel für chrome.storage
+const RELOAD_EVERY_MS = 30_000;
+const STORAGE_KEY = "processed_deal_ids";
 
 let lastReloadTime = 0;
-const processed = new Set(); // Artikel-IDs, die bereits "bedient" wurden (wird aus Storage geladen)
-const queue = []; // { id, selectorInfo: { id, index } }
+let isDealClicking = false; // Flag, dass ein neuer Tab erwartet wird
+let expectedTabId = null; // ID des erwarteten neuen Tabs
+let websocket = null; // Das WebSocket-Objekt
+
+const processed = new Set();
+const queue = [];
+
+// -----------------------------------------------------
+// ### 1. WEBSOCKET LOGIK
+// -----------------------------------------------------
+
+function connectWebSocket() {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    return;
+  }
+
+  console.log("[WS] Versuche Verbindung zu starten...");
+  websocket = new WebSocket(WEBSOCKET_URL);
+
+  websocket.onopen = () => {
+    console.log("[WS] Verbindung erfolgreich hergestellt.");
+  };
+
+  websocket.onclose = () => {
+    console.warn("[WS] Verbindung geschlossen. Versuche in 5s erneut zu verbinden.");
+    websocket = null;
+    setTimeout(connectWebSocket, 5000); // Automatischer Reconnect
+  };
+
+  websocket.onerror = (error) => {
+    console.error("[WS] WebSocket Fehler:", error);
+    // onclose wird normalerweise danach aufgerufen
+  };
+}
+
+function sendUrlViaWebSocket(url) {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    const message = JSON.stringify({
+      type: "product_url",
+      url: url,
+      timestamp: new Date().toISOString(),
+    });
+    websocket.send(message);
+    console.log(`[WS] URL gesendet: ${url}`);
+  } else {
+    console.warn("[WS] Verbindung nicht offen. URL konnte nicht gesendet werden.");
+    // Man könnte hier die URL cachen und beim Reconnect senden
+  }
+}
+
+// -----------------------------------------------------
+// ### 2. TAB TRACKING LOGIK
+// -----------------------------------------------------
+
+function setupTabListener() {
+  chrome.tabs.onCreated.addListener(handleNewTab);
+}
+
+function handleNewTab(tab) {
+  if (!isDealClicking) {
+    return;
+  }
+
+  // Flag zurücksetzen, da ein Tab geöffnet wurde
+  isDealClicking = false;
+
+  // Speichere die ID, um das Laden zu verfolgen
+  expectedTabId = tab.id;
+
+  // Wir warten auf das 'complete' Status-Update
+  chrome.tabs.onUpdated.addListener(logFinalUrlOnce);
+}
+
+function logFinalUrlOnce(tabId, changeInfo, tab) {
+  // Nur reagieren, wenn es der erwartete Tab ist UND das Laden abgeschlossen ist
+  if (tabId === expectedTabId && changeInfo.status === "complete") {
+    const finalUrl = tab.url;
+
+    // Sende die finale URL über WebSocket
+    sendUrlViaWebSocket(finalUrl);
+
+    // Listener entfernen und Tracking zurücksetzen
+    chrome.tabs.onUpdated.removeListener(logFinalUrlOnce);
+    expectedTabId = null;
+  }
+}
+
+// -----------------------------------------------------
+// ### 3. HAUPT-SCHEDULER LOGIK
+// -----------------------------------------------------
+
+function start() {
+  loadProcessedIds();
+  setupTabListener(); // Tab-Tracking einrichten
+  connectWebSocket(); // WebSocket-Verbindung starten
+  startScanTimer();
+  startOpenTimer();
+  updateBadge();
+  console.log("[Deal-AutoClick] Background gestartet.");
+}
+
+// *** openNextInQueue MODIFIZIERT, um isDealClicking zu setzen ***
+async function openNextInQueue() {
+  if (!queue.length) return;
+  if (!autoOpen) return;
+
+  const item = queue.shift();
+  processed.add(item.id);
+  saveProcessedIds();
+
+  const selectorInfo = item.selectorInfo;
+  if (!selectorInfo) return;
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) {
+      console.warn("[Deal-AutoClick] Aktiver Tab nicht verfügbar.");
+      return;
+    }
+
+    // *** Setze die Flagge VOR dem Klick ***
+    isDealClicking = true;
+
+    // Führe den Klick im aktiven Tab aus
+    const [{ result: clicked } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: clickDealButton,
+      args: [selectorInfo],
+    });
+
+    if (clicked) {
+      console.log(`[Deal-AutoClick] Klick auf Artikel ${item.id} ausgelöst. Warte auf neuen Tab...`);
+    } else {
+      console.warn(`[Deal-AutoClick] Klick fehlgeschlagen.`);
+      isDealClicking = false;
+    }
+  } catch (e) {
+    console.warn("[Deal-AutoClick] Klick fehlgeschlagen:", e);
+    isDealClicking = false;
+  }
+
+  updateBadge();
+}
+
+// --- RESTLICHER VORHANDENER CODE (unverändert) ---
 
 // --- Storage Funktionen ---
 
-// Lädt verarbeitete IDs beim Start aus dem lokalen Speicher
 async function loadProcessedIds() {
   const result = await chrome.storage.local.get([STORAGE_KEY]);
   const ids = result[STORAGE_KEY] || [];
@@ -31,7 +177,6 @@ async function loadProcessedIds() {
   console.log(`[Deal-AutoClick] ${processed.size} verarbeitete Deals aus dem Speicher geladen.`);
 }
 
-// Speichert die aktuelle Liste der verarbeiteten IDs im lokalen Speicher
 function saveProcessedIds() {
   chrome.storage.local.set({ [STORAGE_KEY]: Array.from(processed) });
 }
@@ -55,17 +200,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-function start() {
-  loadProcessedIds(); // *** NEU: IDs VOR dem Start laden ***
-  startScanTimer();
-  startOpenTimer();
-  updateBadge();
-  console.log("[Deal-AutoClick] Background gestartet - Button-Klick im 10s Intervall");
-}
-
 function startScanTimer() {
   stopScanTimer();
-  // Scannt nun zusätzlich alle 3 Sekunden auf neue Deals und prüft, ob ein Reload nötig ist.
   scanInterval = setInterval(() => {
     scanActiveTabOnce();
     checkForReload();
@@ -88,24 +224,20 @@ function stopOpenTimer() {
   openInterval = null;
 }
 
-// *** Funktion: Prüft, ob der aktive Tab mydealz ist und neu geladen werden soll ***
 async function checkForReload() {
   if (Date.now() - lastReloadTime < RELOAD_EVERY_MS) {
-    return; // Noch nicht Zeit für den nächsten Reload
+    return;
   }
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    // Prüfen, ob die URL mydealz enthält und es keine spezielle Chrome-Seite ist
     if (tab?.id && tab.url && (tab.url.includes("mydealz.de") || tab.url.includes("mydealz.com"))) {
       console.log("[Deal-AutoClick] Lade mydealz-Seite neu...");
       chrome.tabs.reload(tab.id);
-      lastReloadTime = Date.now(); // Aktualisiere den Zeitstempel
+      lastReloadTime = Date.now();
 
-      // Leere die Warteschlange nach dem Neuladen, da alle Deals neu gescannt werden
       queue.length = 0;
-      // 'processed' WIRD NICHT GELEERT, da es persistent ist!
     }
   } catch (e) {
     // console.error("[Deal-AutoClick] Reload-Fehler:", e);
@@ -126,7 +258,7 @@ async function scanActiveTabOnce() {
 
     for (const item of result) {
       if (!item?.id) continue;
-      if (processed.has(item.id)) continue; // **Prüft persistenten Status**
+      if (processed.has(item.id)) continue;
       if (!item.selectorInfo) continue;
 
       if (!queue.find((q) => q.id === item.id)) {
@@ -139,44 +271,6 @@ async function scanActiveTabOnce() {
   }
 }
 
-// *** Klickt den nächsten Button im aktiven Tab ***
-async function openNextInQueue() {
-  if (!queue.length) return;
-  if (!autoOpen) return;
-
-  const item = queue.shift();
-  processed.add(item.id);
-  saveProcessedIds(); // *** NEU: Speichere den neuen Zustand nach dem Klicken ***
-
-  const selectorInfo = item.selectorInfo;
-  if (!selectorInfo) return;
-
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      console.warn("[Deal-AutoClick] Aktiver Tab nicht verfügbar.");
-      return;
-    }
-
-    // Führe den Klick im aktiven Tab aus
-    const [{ result: clicked } = {}] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: clickDealButton,
-      args: [selectorInfo], // Übergabe der Button-Information
-    });
-
-    if (clicked) {
-      console.log(`[Deal-AutoClick] Button für Artikel ${item.id} erfolgreich geklickt. Neues Tab öffnet sich.`);
-    } else {
-      console.warn(`[Deal-AutoClick] Button für Artikel ${item.id} nicht gefunden oder Klick fehlgeschlagen.`);
-    }
-  } catch (e) {
-    console.warn("[Deal-AutoClick] Klick fehlgeschlagen:", e);
-  }
-
-  updateBadge();
-}
-
 // *** KORRIGIERTE Funktion: Führt den Klick im DOM des aktiven Tabs aus (mit robuster Triggerung) ***
 function clickDealButton(selectorInfo) {
   // FINALER, ROBUSTER SELEKTOR
@@ -185,16 +279,10 @@ function clickDealButton(selectorInfo) {
   // NEUE, ROBUSTERE KLICK-FUNKTION: Versucht native .click() vor Event-Simulation
   function triggerClick(element) {
     if (!element) return false;
-
-    // 1. Versuche, die native .click() Methode aufzurufen (Am zuverlässigsten)
     try {
       element.click();
       return true;
-    } catch (e) {
-      // Fallback, wenn native click() fehlschlägt
-    }
-
-    // 2. Fallback: Event-Simulation
+    } catch (e) {}
     try {
       element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
       element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
@@ -251,7 +339,6 @@ function extractArticleTargetsInPage() {
   // 1) Alle Artikel-Karten finden
   const articles = document.querySelectorAll("article.thread.cept-thread-item");
   articles.forEach((article) => {
-    // ID wird korrekt aus dem 'id'-Attribut des Artikels gezogen (z.B. "thread_2659628")
     const id = article.getAttribute("id") || article.dataset?.tD || null;
     if (!id) return;
 
@@ -259,10 +346,8 @@ function extractArticleTargetsInPage() {
     const dealButtons = article.querySelectorAll(ALL_DEAL_BUTTONS);
 
     if (dealButtons.length > 0) {
-      // Wir nehmen den ersten Button (Index 0)
       out.push({
         id,
-        // Speichern der ID und des Index des Buttons, um ihn später gezielt zu klicken
         selectorInfo: { id, index: 0 },
       });
     }
