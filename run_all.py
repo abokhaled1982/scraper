@@ -67,6 +67,7 @@ PASSWORD         = os.getenv("TELEGRAM_PASSWORD")
 
 ROUTER_NAME      = os.getenv("SESSION_NAME", "main_session")
 OBSERVER_NAME    = os.getenv("OBS_SESSION_NAME", "observer_session")
+SENDER_NAME      = os.getenv("OBS_SEND_OBSERVER_NAME", "observer_sender_session")    # NEU: Sender
 ROUTER_CHANNEL   = os.getenv("CHANNEL_INVITE_URL", "").strip()
 OBSERVER_CHANNEL = os.getenv("OBS_CHANNEL_INVITE_URL", "").strip()
 
@@ -175,8 +176,8 @@ def print_login_step(msg: str):
     print(f"[Telegram Login] {msg}")
     
 async def do_telegram_login_check():
-    """Stellt sicher, dass Router- und Observer-Session gültig sind."""
-    print("\n--- Starte sequentiellen Telegram-Login-Check ---")
+    """Stellt sicher, dass Router-, Receiver- und Sender-Session gültig sind."""
+    print("\n--- Starte sequentiellen Telegram-Login-Check (3 Sessions) ---")
     
     router_cfg = LoginConfig(
         api_id=API_ID, api_hash=API_HASH, session_name=ROUTER_NAME, session_dir=SESSION_DIR,
@@ -186,18 +187,21 @@ async def do_telegram_login_check():
         api_id=API_ID, api_hash=API_HASH, session_name=OBSERVER_NAME, session_dir=SESSION_DIR,
         phone=PHONE, password=PASSWORD,
     )
-    
-    # Führt den 2-stufigen Login aus (Router -> Observer)
-    ok1, ok2 = await ensure_both_sessions_sequential(
-        router_cfg, observer_cfg, on_step=print_login_step
+    sender_cfg = LoginConfig( # NEUE SENDER-CFG
+        api_id=API_ID, api_hash=API_HASH, session_name=SENDER_NAME, session_dir=SESSION_DIR,
+        phone=PHONE, password=PASSWORD,
     )
     
-    if not (ok1 and ok2):
-        raise SystemExit("❌ Telegram-Login fehlgeschlagen. Abbruch.")
+    # Führt den 3-stufigen Login aus (Router -> Receiver -> Sender)
+    ok1, ok2, ok3 = await ensure_both_sessions_sequential(
+        router_cfg, observer_cfg, sender_cfg, on_step=print_login_step
+    )
     
-    print("✅ Telegram-Login für Router & Observer abgeschlossen.")
+    if not (ok1 and ok2 and ok3):
+        raise SystemExit("❌ Einer der Telegram-Logins fehlgeschlagen. Abbruch.")
+    
+    print("✅ Telegram-Login für Router, Receiver & Sender abgeschlossen.")
     print("---------------------------------------------------\n")
-
 # ----------------------------------------------------------
 # Main Supervisor
 # ----------------------------------------------------------
@@ -226,6 +230,7 @@ async def main():
     # Beide starten parallel als Subprozesse, da der Login bereits abgeschlossen ist.
     tel_router = await spawn("telegram_router", PY, "-m", "telegram.telRouter")
     tel_observer = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
+    tel_sender = await spawn("telegram_sender", PY, "-m", "telegram.telSender") # NEU: Sender-Prozess starten
 
     # Liste aller Prozesse für die Überwachung und das Beenden
     procs: List[Tuple[str, asyncio.subprocess.Process]] = [
@@ -235,6 +240,8 @@ async def main():
         ("product_parser", product_parser),
         ("telegram_router", tel_router),
         ("telegram_observer", tel_observer),
+        ("telegram_sender", tel_sender), # NEU
+        
     ]
     for n, p in procs:
         print(f"[supervisor] started {n} (pid={p.pid})")
@@ -271,7 +278,7 @@ async def main():
     await terminate(product_opener,  "product_opener")
     await terminate(deals_watcher,   "deals_watcher")
     await terminate(ws_server,       "ws_server")
-
+    await terminate(tel_sender,      "telegram_sender") # NEU: Sender beenden
     print("[supervisor] all stopped")
 
 if __name__ == "__main__":
