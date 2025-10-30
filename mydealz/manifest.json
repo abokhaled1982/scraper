@@ -1,13 +1,49 @@
 {
   "manifest_version": 3,
-  "name": "Deal-Link-Logger",
-  "version": "1.2.0",
-  "description": "Findet Deal-Buttons in Artikel-Karten und öffnet alle 10 Sekunden den nächsten Deal.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" },
-  "action": { "default_title": "Deal-Links", "default_popup": "popup.html" },
-
- 
-  "content_scripts": []
+  "name": "Modular Deal Scraper",
+  "version": "1.0",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "scripting",
+    "webRequest",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*.mydealz.de/*",
+    "*://*.mydealz.com/*",
+    "*://*.dealdoktor.de/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Deal Scheduler",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.mydealz.de/*", "*://*.mydealz.com/*"],
+      "js": ["content_mydealz.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.dealdoktor.de/*"],
+      "js": ["content_dealdoktor.js"],
+      "run_at": "document_idle"
+    },
+     {
+      "matches": ["*://*.mein-deal.com/*"],
+      "js": ["content_meindeals.js"],
+      "run_at": "document_idle"
+    },
+     
+    {
+     "matches": ["*://www.sparwelt.de/*"],
+      "js": ["content_sparwelt.js"] ,
+      "run_at": "document_idle"
+    }
+    
+  ]
 }

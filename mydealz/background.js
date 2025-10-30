@@ -1,12 +1,9 @@
 /**
- * Background-Scheduler: scannt den aktiven Tab nach Artikel-Deals
- * und führt alle 10s einen Klick auf den nächsten Deal-Button (im aktiven Tab) aus.
- *
- * - Scannen: alle 3 Sekunden.
- * - Klick: alle 10 Sekunden.
- * - PERSISTENZ: Verarbeitete Deal-IDs werden in chrome.storage.local gespeichert.
- * - AUTO-RELOAD: Aktiver mydealz-Tab wird alle 30 Sekunden neu geladen.
- * - WEBSOCKET: Sendet die finale URL des neuen Tabs an einen Server.
+ * Background-Scheduler (Zentral):
+ * - Verwaltet die Timing-Intervalle (Scan, Klick, Reload).
+ * - Verwaltet den globalen Status (processed IDs, queue, autoOpen).
+ * - Sendet Nachrichten an die Content-Skripte im aktiven Tab.
+ * - Führt WebSocket- und Tab-Tracking-Logik aus.
  */
 
 // --- KONFIGURATION ---
@@ -27,6 +24,12 @@ let websocket = null; // Das WebSocket-Objekt
 
 const processed = new Set();
 const queue = [];
+
+// Liste der URLs, die neu geladen werden sollen (falls sie der aktive Tab sind)
+const RELOAD_PATTERNS = [
+  "mydealz.de", "mydealz.com",
+  "dealdoktor.de"
+];
 
 // -----------------------------------------------------
 // ### 1. WEBSOCKET LOGIK
@@ -67,7 +70,6 @@ function sendUrlViaWebSocket(url) {
     console.log(`[WS] URL gesendet: ${url}`);
   } else {
     console.warn("[WS] Verbindung nicht offen. URL konnte nicht gesendet werden.");
-    // Man könnte hier die URL cachen und beim Reconnect senden
   }
 }
 
@@ -114,22 +116,20 @@ function logFinalUrlOnce(tabId, changeInfo, tab) {
   }
 }
 
-
 // -----------------------------------------------------
 // ### 3. HAUPT-SCHEDULER LOGIK
 // -----------------------------------------------------
 
 function start() {
   loadProcessedIds();
-  setupTabListener(); // Tab-Tracking einrichten
-  connectWebSocket(); // WebSocket-Verbindung starten
+  setupTabListener();
+  connectWebSocket();
   startScanTimer();
   startOpenTimer();
   updateBadge();
   console.log("[Deal-AutoClick] Background gestartet.");
 }
 
-// *** openNextInQueue MODIFIZIERT, um isDealClicking zu setzen ***
 async function openNextInQueue() {
   if (!queue.length) return;
   if (!autoOpen) return;
@@ -138,9 +138,6 @@ async function openNextInQueue() {
   processed.add(item.id);
   saveProcessedIds();
 
-  const selectorInfo = item.selectorInfo;
-  if (!selectorInfo) return;
-
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) {
@@ -148,33 +145,58 @@ async function openNextInQueue() {
       return;
     }
 
-    // *** Setze die Flagge VOR dem Klick ***
+    // *** Setze die Flagge VOR dem Senden des Klickbefehls ***
     isDealClicking = true;
 
-    // Führe den Klick im aktiven Tab aus
-    const [{ result: clicked } = {}] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: clickDealButton,
-      args: [selectorInfo],
+    // Sende eine Nachricht an das Content-Skript, um den Klick auszuführen
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      type: "CLICK_DEAL",
+      dealId: item.id
     });
 
-    if (clicked) {
+    if (response?.clicked) {
       console.log(`[Deal-AutoClick] Klick auf Artikel ${item.id} ausgelöst. Warte auf neuen Tab...`);
     } else {
-      console.warn(`[Deal-AutoClick] Klick fehlgeschlagen.`);
+      console.warn(`[Deal-AutoClick] Klick fehlgeschlagen oder Seite nicht aktiv.`);
       isDealClicking = false;
     }
   } catch (e) {
-    console.warn("[Deal-AutoClick] Klick fehlgeschlagen:", e);
+    console.warn("[Deal-AutoClick] Klick oder Nachricht fehlgeschlagen:", e.message);
     isDealClicking = false;
   }
 
   updateBadge();
 }
 
-// --- RESTLICHER VORHANDENER CODE (unverändert) ---
+async function scanActiveTabOnce() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url) return;
 
-// --- Storage Funktionen ---
+    // Sende eine Nachricht an das Content-Skript, um Deals zu extrahieren
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      type: "SCAN_DEALS"
+    });
+
+    if (!Array.isArray(response?.deals)) return;
+
+    for (const dealId of response.deals) {
+      if (!dealId) continue;
+      if (processed.has(dealId)) continue;
+
+      // Füge den Deal in die Queue ein (jetzt nur ID)
+      if (!queue.find((q) => q.id === dealId)) {
+        queue.push({ id: dealId });
+      }
+    }
+    updateBadge();
+  } catch (e) {
+    // Wenn kein Content-Skript zuhört (andere Website), ist das normal.
+    // console.debug("[Deal-AutoClick] Scan-Fehler:", e.message);
+  }
+}
+
+// --- RESTLICHER CODE (Unverändert, aber auf die neue Logik bezogen) ---
 
 async function loadProcessedIds() {
   const result = await chrome.storage.local.get([STORAGE_KEY]);
@@ -188,7 +210,7 @@ function saveProcessedIds() {
   chrome.storage.local.set({ [STORAGE_KEY]: Array.from(processed) });
 }
 
-// --- POPUP Messages optional
+// --- POPUP Messages
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg?.type) {
     case "GET_STATE":
@@ -239,92 +261,19 @@ async function checkForReload() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (tab?.id && tab.url && (tab.url.includes("mydealz.de") || tab.url.includes("mydealz.com"))) {
-      console.log("[Deal-AutoClick] Lade mydealz-Seite neu...");
+    if (!tab?.id || !tab.url) return;
+
+    // Prüfe, ob die URL neu geladen werden soll
+    const shouldReload = RELOAD_PATTERNS.some(pattern => tab.url.includes(pattern));
+
+    if (shouldReload) {
+      console.log(`[Deal-AutoClick] Seite neu laden: ${tab.url}...`);
       chrome.tabs.reload(tab.id);
       lastReloadTime = Date.now();
-
-      queue.length = 0;
+      queue.length = 0; // Leere Queue nach Reload
     }
   } catch (e) {
     // console.error("[Deal-AutoClick] Reload-Fehler:", e);
-  }
-}
-
-async function scanActiveTabOnce() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return;
-
-    const [{ result } = {}] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      func: extractArticleTargetsInPage,
-    });
-
-    if (!Array.isArray(result)) return;
-
-    for (const item of result) {
-      if (!item?.id) continue;
-      if (processed.has(item.id)) continue;
-      if (!item.selectorInfo) continue;
-
-      if (!queue.find((q) => q.id === item.id)) {
-        queue.push(item);
-      }
-    }
-    updateBadge();
-  } catch (e) {
-    // console.debug("[Deal-AutoClick] scan error:", e);
-  }
-}
-
-// *** KORRIGIERTE Funktion: Führt den Klick im DOM des aktiven Tabs aus (mit robuster Triggerung) ***
-function clickDealButton(selectorInfo) {
-  // FINALER, ROBUSTER SELEKTOR
-  const ALL_DEAL_BUTTONS = 'a[data-t="dealLink"], button[data-t="dealLink"], button.buttonWithCode-button, a.buttonWithCode-button';
-
-  // NEUE, ROBUSTERE KLICK-FUNKTION: Versucht native .click() vor Event-Simulation
-  function triggerClick(element) {
-    if (!element) return false;
-    try {
-      element.click();
-      return true;
-    } catch (e) {}
-    try {
-      element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-      return true;
-    } catch {}
-
-    return false;
-  }
-
-  try {
-    // Artikelsuche
-    const article = document.getElementById(selectorInfo.id);
-    if (!article) return false;
-
-    // Suche alle relevanten Buttons im Artikel
-    const allButtons = article.querySelectorAll(ALL_DEAL_BUTTONS);
-    let btn = allButtons[selectorInfo.index];
-
-    if (!btn && allButtons.length > 0) {
-      btn = allButtons[0]; // Fallback auf den ersten gefundenen Button
-    }
-
-    if (!btn) return false;
-
-    // Klick ausführen mit ROBUSTER Triggerung
-    setTimeout(() => {
-      try {
-        triggerClick(btn); // Aufruf der neuen, robusten Funktion
-      } catch {}
-    }, 50);
-
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -332,35 +281,6 @@ function updateBadge() {
   const text = queue.length ? String(Math.min(queue.length, 99)) : "";
   chrome.action.setBadgeText({ text });
   chrome.action.setBadgeBackgroundColor({ color: autoOpen ? "#0B874B" : "#999999" });
-}
-
-/**
- * Läuft IM TAB und extrahiert aus der Seite alle relevanten Artikel-Ziele.
- * Rückgabe: Array<{ id, selectorInfo? }>
- */
-function extractArticleTargetsInPage() {
-  const out = [];
-  // FINALER, ROBUSTER SELEKTOR
-  const ALL_DEAL_BUTTONS = 'a[data-t="dealLink"], button[data-t="dealLink"], button.buttonWithCode-button, a.buttonWithCode-button';
-
-  // 1) Alle Artikel-Karten finden
-  const articles = document.querySelectorAll("article.thread.cept-thread-item");
-  articles.forEach((article) => {
-    const id = article.getAttribute("id") || article.dataset?.tD || null;
-    if (!id) return;
-
-    // 2) Deal-Button suchen und Index speichern
-    const dealButtons = article.querySelectorAll(ALL_DEAL_BUTTONS);
-
-    if (dealButtons.length > 0) {
-      out.push({
-        id,
-        selectorInfo: { id, index: 0 },
-      });
-    }
-  });
-
-  return out;
 }
 
 // Badge initial bei Start
