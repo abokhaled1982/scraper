@@ -13,7 +13,9 @@
   "host_permissions": [
     "*://*.mydealz.de/*",
     "*://*.mydealz.com/*",
-    "*://*.dealdoktor.de/*"
+    "*://*.dealdoktor.de/*",
+    "*://*.dealbunny.de/*",
+    "*://*.mytopdeals.net/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -37,13 +39,16 @@
       "matches": ["*://*.mein-deal.com/*"],
       "js": ["content_meindeals.js"],
       "run_at": "document_idle"
-    },
-     
+    },     
     {
-     "matches": ["*://www.sparwelt.de/*"],
-      "js": ["content_sparwelt.js"] ,
+     "matches": ["*://*.dealbunny.de/*"],
+      "js": ["content_dealbunny.js"] ,
+      "run_at": "document_idle"
+    },
+    {
+     "matches": ["*://*.mytopdeals.net/*"],
+      "js": ["content_mytopdeals.js"] ,
       "run_at": "document_idle"
     }
-    
   ]
 }
