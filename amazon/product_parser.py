@@ -93,7 +93,7 @@ def process_with_ai_parser(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
         
-        #cleanup_temp_files()
+        cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}", data_mapped
 
@@ -133,7 +133,7 @@ def process_one(fp: Path, reg: Dict) -> Tuple[bool, str]:
                 reg["asins"][asin] = out_path.name
             save_registry(reg, REGISTRY_PATH) 
 
-            fp.unlink(missing_ok=True)
+            #fp.unlink(missing_ok=True)
             return True, f"AMAZON OK -> {out_path.name}"
             
         else:
@@ -151,7 +151,7 @@ def process_one(fp: Path, reg: Dict) -> Tuple[bool, str]:
             
     except Exception as e:
         tb = traceback.format_exc()
-        move_to_failed(fp, f"ROUTER/VERARBEITUNGSFEHLER: {e}\n\n{tb}", FAILED_DIR)
+       # move_to_failed(fp, f"ROUTER/VERARBEITUNGSFEHLER: {e}\n\n{tb}", FAILED_DIR)
         return False, f"ROUTER ERR {fp.name}: {e}"
 
 

@@ -142,18 +142,34 @@ def compute_discount_fields(
       - discount_percent
       - final_price_after_coupon
     """
-    price_val = price_obj.get("value") if isinstance(price_obj, dict) else None
-    orig_val = original_price_obj.get("value") if isinstance(original_price_obj, dict) else None
+    orig_val=0
+    price_val=0
+
+    if (price_obj):
+        temp_string = price_obj.replace('€', '') 
+        # 2. Ersetze das Komma durch einen Punkt
+        number_string = temp_string.replace(',', '.') # Ergebnis: '139.99'
+        # 3. Konvertiere in eine Gleitkommazahl (Float)
+        price_val = float(number_string)
+   
+   
+    if (original_price_obj):
+
+        temp_string = original_price_obj.replace('€', '')  # Ergebnis: '139,99'
+        # 2. Ersetze das Komma durch einen Punkt
+        number_string = temp_string.replace(',', '.') # Ergebnis: '139.99'
+        # 3. Konvertiere in eine Gleitkommazahl (Float)
+        orig_val = float(number_string)
 
     discount_amount: Optional[float] = None
     discount_percent: Optional[float] = None
     final_after_coupon: Optional[float] = None
 
-    # if price_val is not None and orig_val and orig_val > 0:
-    #     discount_amount = max(orig_val - price_val, 0)
-    #     discount_percent = (discount_amount / orig_val) * 100 if orig_val else None
+    if price_val is not None and orig_val and orig_val > 0:
+        discount_amount = max(orig_val - price_val, 0)
+        discount_percent = (discount_amount / orig_val) * 100 if orig_val else None
 
-    if price_val is not None and coupon_info:
+    if price_obj is not None and coupon_info:
         cpct = coupon_info.get("percent")
         camt = coupon_info.get("amount")
         if cpct:
@@ -163,7 +179,9 @@ def compute_discount_fields(
                 pass
         elif camt:
             try:
-                final_after_coupon = max(price_val - camt, 0)
+                final_after_coupon_temp = max(price_val - camt, 0)
+                final_after_coupon_str = f"{final_after_coupon_temp:.2f}"
+                final_after_coupon=final_after_coupon_str.replace('.', ',') + "€"
             except Exception:
                 pass
 
@@ -173,7 +191,7 @@ def compute_discount_fields(
     return {
         "discount_amount": discount_amount,
         "discount_percent": rnd(discount_percent),
-        "final_price_after_coupon": rnd(final_after_coupon),
+        "final_price_after_coupon": final_after_coupon,
     }
 
 def first_nonempty(*vals: Optional[str]) -> Optional[str]:
@@ -343,34 +361,39 @@ class AmazonProductParser:
 
         # ggf. explizit angezeigte Ersparnis
         explicit_savings = self._select_text(
-            "#corePrice_feature_div span.savingsPercentage",
-            ".priceBlockSavingsString",
-        )
-        explicit_pct = None
-        if explicit_savings:
-            m = re.search(r"(\-?\d{1,3}[.,]?\d?)\s?%", explicit_savings)
-            if m:
-                try:
-                    explicit_pct = float(m.group(1).replace(",", "."))
-                except Exception:
-                    pass
+                "#corePrice_feature_div span.savingsPercentage",
+                ".priceBlockSavingsString",
+                "span.savingPriceOverride.savingsPercentage",  # <--- HIER IST DEIN NEUER SELEKTOR
+            )
+       
+        explicit_pct = parse_discount_percent(explicit_savings)
+        if explicit_pct is not None:
+            explicit_pct = f"{explicit_pct:.0f}%"
 
-        coupon_text = self._select_text(
-            "#promoPriceBlockMessage_feature_div",
-            "#couponFeatureDiv li",
-            "span.couponBadge",
-            "span#couponText",
-            "span[data-csa-c-content-id='couponBadge']",
-            "div#promo_feature_div span",
-            "div#coupon_feature_div span",
-        )
+        # NEUE LOGIK FÜR STRUKTURIERTEN COUPON (20,00€ Rabatt)
+        structured_coupon_price = self._select_text("label.ct-coupon-checkbox-label span.a-offscreen")
+        coupon_text = None
+        if structured_coupon_price:
+            # Erstelle einen Text, der von parse_coupon_value verstanden wird
+            coupon_text = f"{structured_coupon_price} Rabatt"
+        else:
+            # Fallback zur Suche nach unstrukturiertem Coupon Text
+            coupon_text = self._select_text(
+                "#promoPriceBlockMessage_feature_div",
+                "#couponFeatureDiv li",
+                "span.couponBadge",
+                "span#couponText",
+                "span[data-csa-c-content-id='couponBadge']",
+                "div#promo_feature_div span",
+                "div#coupon_feature_div span",
+            )
         data.coupon_text = norm_space(coupon_text) if coupon_text else None
         data.coupon_value = parse_coupon_value(data.coupon_text)
 
         comp = compute_discount_fields(data.price, data.original_price, data.coupon_value)
         #data.discount_amount = comp["discount_amount"]
-        data.discount_percent = comp["discount_percent"] if comp["discount_percent"] is not None else explicit_pct
-        data.final_price_after_coupon = comp["final_price_after_coupon"]
+        data.discount_percent = "-"+ explicit_pct if explicit_pct else "N/A"
+        data.price =  comp["final_price_after_coupon"]  if price_text else data.price
 
     def extract_availability_and_delivery(self, data: ProductData) -> None:
         data.availability = self._select_text("#availability span", "#availability", "#outOfStock")
@@ -698,7 +721,6 @@ def _currency_symbol_from_raw(raw: Optional[str]) -> str:
         return m.group(1)
     return "EUR"
 
-def _price_obj_with_symbol(price_obj: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
     Passt Preisobjekt an BO-Schema an: currency_hint enthält das SYMBOL (z. B. '€').
     """
@@ -711,28 +733,22 @@ def _price_obj_with_symbol(price_obj: Optional[Dict[str, Any]]) -> Optional[Dict
         "currency_hint": _currency_symbol_from_raw(raw)
     }
 
-def _format_discount_percent(price_obj: Optional[Dict[str, Any]],
-                             original_price_obj: Optional[Dict[str, Any]],
-                             explicit_pct: Optional[float]) -> Optional[str]:
+def parse_discount_percent(explicit_savings: Optional[str]) -> Optional[float]:
     """
-    Formatiert Rabatt-Prozent als String wie '-40%'.
-    Nimmt, wenn vorhanden, explicit_pct; sonst aus price/original berechnet.
+    Parses the discount percentage (e.g., '-24 %', '24%', '24') from a string
+    and returns it as a positive floating-point number (absolute value).
+
+    Example: "-24 %" -> 24.0
     """
-    def _val(p):
-        return p.get("value") if isinstance(p, dict) else None
+    if not explicit_savings:
+        return None
 
-    if explicit_pct is not None:
-        try:
-            return f"-{int(round(float(explicit_pct)))}%"
-        except Exception:
-            pass
+    import re
 
-    pv = _val(price_obj)
-    ov = _val(original_price_obj)
-    if pv is not None and ov and ov > 0 and pv <= ov:
+    m = re.search(r"(\-?\d{1,3}[.,]?\d?)\s?%", explicit_savings)
+    if m:
         try:
-            pct = round((1 - pv / ov) * 100)
-            return f"-{int(pct)}%"
+            return abs(float(m.group(1).replace(",", ".")))
         except Exception:
             return None
     return None
@@ -743,7 +759,7 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
     """
     price_obj = product.price
     orig_obj  = product.original_price
-    discount_percent_str = _format_discount_percent(product.price, product.original_price, product.discount_percent)
+    discount_percent_str =product.discount_percent if product.discount_percent else None
 
     rating_block = None
     if product.rating_value is not None or product.review_count is not None:
@@ -769,7 +785,7 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
             amt = product.coupon_value.get("amount")
             cur = product.coupon_value.get("currency_hint") or ""
             try:
-                coboun_more = f"Spare {float(amt):g} {cur}".strip()
+                coboun_more =product.coupon_text
             except Exception:
                 coboun_more = f"Spare {amt} {cur}".strip()
     if not coboun_more and product.coupon_text:
