@@ -133,7 +133,7 @@ def process_one(fp: Path, reg: Dict) -> Tuple[bool, str]:
                 reg["asins"][asin] = out_path.name
             save_registry(reg, REGISTRY_PATH) 
 
-            #fp.unlink(missing_ok=True)
+            fp.unlink(missing_ok=True)
             return True, f"AMAZON OK -> {out_path.name}"
             
         else:
