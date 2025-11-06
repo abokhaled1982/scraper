@@ -6,9 +6,11 @@ amazon_parser_pro.py
 Professional, robust, and extensible Amazon product HTML parser.
 
 Wichtig:
-- Die Parsing-Logik bleibt unverändert robust.
-- NEU (entscheidend für dich): Eine Mapping-Schicht `to_b0_schema(product)`,
-  die die FELDNAMEN und STRUKTUR 1:1 an das BO…-Schema angleicht.
+- Dedizierte, robuste Preisberechnung (compute_final_price_and_discounts)
+  unter Berücksichtigung sequenzieller Doppelrabatte.
+- Feld discount_reason_summary für die saubere Erklärung der Preisreduzierung.
+- Mapping-Schicht (to_b0_schema) für vollständige Datenübertragung.
+- NEU: Logik zur Erstellung von 'rabatt_details' für UX/UI (kurz & effektiv).
 
 Benutzung (Standalone):
     python parser.py --inbox inbox --out out
@@ -48,48 +50,13 @@ def extract_html_from_js_wrapper(raw: str) -> str:
     m = re.search(r"(<\s*!doctype\b.*?>|<\s*html\b)", raw, flags=re.I | re.S)
     return raw[m.start():] if m else raw
 
-def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
+def clean_price(text: Optional[str]) -> Optional[str]:
     """
-    Normalisiert Preise wie '€ 1.234,56' oder '$1,234.56' -> {'raw','value','currency_hint'}
-    currency_hint: ISO (EUR/USD/GBP/JPY), intern für Berechnung.
+    Normalisiert Preise (zurück auf String, da interne Berechnung Strings nutzt)
     """
     if not text:
         return None
-    t = text.strip()
-
-    currency = None
-    cm = re.search(r"(€|EUR|\$|USD|£|GBP|¥|JPY)", t, re.I)
-    if cm:
-        currency = (
-            cm.group(1)
-            .upper()
-            .replace("$", "USD")
-            .replace("€", "EUR")
-            .replace("£", "GBP")
-            .replace("¥", "JPY")
-        )
-
-    # Ziffern und Trenner behalten
-    num = re.sub(r"[^0-9,.\-]", "", t)
-
-    # Heuristik: EU-Dezimal
-    if num.count(",") and not num.count("."):
-        num_eu = num.replace(".", "")
-        if "," in num_eu:
-            head, _, tail = num_eu.rpartition(",")
-            num_std = head.replace(",", "") + "." + tail
-        else:
-            num_std = num_eu
-    else:
-        # US-Stil oder gemischt
-        num_std = num.replace(",", "")
-
-    try:
-        val = float(num_std)
-    except Exception:
-        val = None
-
-    return t
+    return text.strip()
 
 def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
     """
@@ -131,78 +98,192 @@ def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
 
     return {"percent": None, "amount": None, "currency_hint": None}
 
-def compute_discount_fields(
-    price_obj: Optional[Dict[str, Any]],
-    original_price_obj: Optional[Dict[str, Any]],
+def parse_price_string_to_float(price_string: Optional[str]) -> float:
+    """Konvertiert Preis-String (z.B. "139,99€") in Float (z.B. 139.99)."""
+    if not price_string:
+        return 0.0
+    
+    # Entferne Währungssymbole und Whitespace
+    temp_string = re.sub(r"[^\d.,]", "", price_string)
+    
+    # Heuristik: Bestimme das Dezimaltrennzeichen
+    if temp_string.count(',') > 0 and temp_string.count('.') == 0:
+        # EU-Format
+        number_string = temp_string.replace('.', '').replace(',', '.')
+    elif temp_string.count('.') > 0 and temp_string.count(',') == 0:
+        # US-Format
+        number_string = temp_string.replace(',', '')
+    else:
+        # Komplex (Fallback)
+        if temp_string.count('.') > 0 and temp_string.rfind('.') > temp_string.rfind(','):
+             number_string = temp_string.replace(',', '')
+        elif temp_string.count(',') > 0 and temp_string.rfind(',') > temp_string.rfind('.'):
+             number_string = temp_string.replace('.', '').replace(',', '.')
+        else:
+            number_string = temp_string.replace(',', '')
+    
+    try:
+        return float(number_string)
+    except ValueError:
+        return 0.0
+
+
+def format_discount_summary_for_ux(
+    original_price_string: Optional[str],
+    current_price_string: Optional[str],
     coupon_info: Optional[Dict[str, Any]],
-) -> Dict[str, Optional[float]]:
+) -> str:
     """
-    Berechnet:
-      - discount_amount
-      - discount_percent
-      - final_price_after_coupon
+    Erstellt den kurzen, effektiven Rabatt-Text nach dem gewünschten UX/UI-Schema:
+    'Rabatt: -26% zusätzlich -10,0 €/Kasse' oder '-10€ Guthaben'.
     """
-    orig_val=0
-    price_val=0
-
-    if (price_obj):
-        temp_string = price_obj.replace('€', '') 
-        # 2. Ersetze das Komma durch einen Punkt
-        number_string = temp_string.replace(',', '.') # Ergebnis: '139.99'
-        # 3. Konvertiere in eine Gleitkommazahl (Float)
-        price_val = float(number_string)
-   
-   
-    if (original_price_obj):
-
-        temp_string = original_price_obj.replace('€', '')  # Ergebnis: '139,99'
-        # 2. Ersetze das Komma durch einen Punkt
-        number_string = temp_string.replace(',', '.') # Ergebnis: '139.99'
-        # 3. Konvertiere in eine Gleitkommazahl (Float)
-        orig_val = float(number_string)
-
-    discount_amount: Optional[float] = None
-    discount_percent: Optional[float] = None
-    final_after_coupon: Optional[float] = None
-
-    if price_val is not None and orig_val and orig_val > 0:
-        discount_amount = max(orig_val - price_val, 0)
-        discount_percent = (discount_amount / orig_val) * 100 if orig_val else None
-
-    if price_obj is not None and coupon_info:
+    orig_val = parse_price_string_to_float(original_price_string)
+    price_val = parse_price_string_to_float(current_price_string)
+    
+    # 1. Streichpreis-Rabatt-Teil (z.B. Rabatt: -26%)
+    streich_rabatt_str = ""
+    if orig_val > 0 and price_val > 0 and orig_val > price_val:
+        rabatt_betrag_pct = orig_val - price_val
+        rabatt_prozent_pct = (rabatt_betrag_pct / orig_val) * 100
+        streich_rabatt_str = f"Rabatt: -{rabatt_prozent_pct:.0f}%"
+        
+    # 2. Coupon-Rabatt-Teil (z.B. zusätzlich -10,0 €/Kasse)
+    coupon_rabatt_str = ""
+    if coupon_info:
         cpct = coupon_info.get("percent")
         camt = coupon_info.get("amount")
-        if cpct:
-            try:
-                final_after_coupon_temp = max(price_val * (1 - cpct / 100.0), 0)
-                final_after_coupon_str = f"{final_after_coupon_temp:.2f}"
-                final_after_coupon=final_after_coupon_str.replace('.', ',') + "€"
-            except Exception:
-                pass
-        elif camt:
-            try:
-                final_after_coupon_temp = max(price_val - camt, 0)
-                final_after_coupon_str = f"{final_after_coupon_temp:.2f}"
-                final_after_coupon=final_after_coupon_str.replace('.', ',') + "€"
-            except Exception:
-                pass
-    
-    # Rückgabe des Endpreises als String (z.B. "39,97€")
-    if isinstance(final_after_coupon, float):
-        final_after_coupon_str = f"{final_after_coupon:.2f}".replace('.', ',') + "€"
-    elif isinstance(final_after_coupon, str):
-        final_after_coupon_str = final_after_coupon
-    else:
-        final_after_coupon_str = None
+        currency_hint = coupon_info.get('currency_hint') or '€'
         
+        if cpct:
+            # Beispiel: 50 % Coupon
+            coupon_rabatt_str = f"zusätzlich -{cpct:.0f}%/Kasse"
+        elif camt:
+            # Beispiel: 10,00 € Coupon
+            # Verwende formatierte Zahl und das Währungssymbol
+            amount_str = f"{camt:.1f}".replace('.', ',')
+            coupon_rabatt_str = f"zusätzlich -{amount_str} {currency_hint}/Kasse"
+
+    # 3. Zusammenfügen der Teile
+    if streich_rabatt_str and coupon_rabatt_str:
+        # Fall: Doppelrabatt (Rabatt: -26% zusätzlich -10,0 €/Kasse)
+        return f"{streich_rabatt_str} {coupon_rabatt_str}"
+    elif coupon_rabatt_str:
+        # Fall: Nur Coupon (z.B. -10€ Guthaben)
+        if coupon_info.get("amount"):
+             amount_str = f"{coupon_info.get('amount'):.0f}".replace('.', ',')
+             currency_hint = coupon_info.get('currency_hint') or '€'
+             return f"-{amount_str}{currency_hint} Guthaben"
+        elif coupon_info.get("percent"):
+             return f"-{coupon_info.get('percent'):.0f}% Coupon"
+    
+    # Fall: Nur Streichpreis oder kein Rabatt
+    if streich_rabatt_str:
+         return streich_rabatt_str
+         
+    return "Kein Rabatt"
+
+def compute_final_price_and_discounts(
+    original_price_string: Optional[str],
+    current_price_string: Optional[str],
+    coupon_info: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Berechnet den finalen Preis, den Gesamtrabatt und generiert eine Zusammenfassung.
+    Berücksichtigt sequentielle Doppelrabatte (Streichpreis dann Coupon).
+
+    Args:
+        original_price_string (str): Der durchgestrichene Listenpreis (z.B. "59,97€").
+        current_price_string (str): Der Preis vor Coupon (z.B. "39,97€").
+        coupon_info (dict): Parsed Coupon-Werte.
+
+    Returns:
+        dict: Enthält final_price_after_coupon, discount_amount, discount_percent (total),
+              und discount_reason_summary.
+    """
+    orig_val = parse_price_string_to_float(original_price_string)
+    price_val = parse_price_string_to_float(current_price_string)
+
+    # Initiale Werte
+    final_after_coupon: float = price_val
+    discount_amount: float = 0.0
+    
+    summary_parts: List[str] = []
+    
+    # 1. Streichpreis-Rabatt (Originalpreis -> Preis VOR Coupon)
+    if orig_val > 0 and price_val > 0 and orig_val > price_val:
+        rabatt_betrag_pct = orig_val - price_val
+        rabatt_prozent_pct = (rabatt_betrag_pct / orig_val) * 100
+        # Rabatt auf nächste volle Zahl runden (wie Amazon es oft macht)
+        summary_parts.append(f"Preisreduzierung ({rabatt_prozent_pct:.0f}%) vom Listenpreis")
+        discount_amount += rabatt_betrag_pct
+        
+    # 2. Coupon-Abzug (Preis VOR Coupon -> Endpreis)
+    coupon_amount: Optional[float] = None
+    
+    if coupon_info and current_price_string and price_val > 0:
+        cpct = coupon_info.get("percent")
+        camt = coupon_info.get("amount")
+        currency_hint = coupon_info.get('currency_hint') or '€'
+        
+        coupon_prefix = "Zusätzlich Coupon-Rabatt von"
+        
+        if cpct:
+            # Prozentualer Coupon
+            final_after_coupon = max(price_val * (1 - cpct / 100.0), 0)
+            coupon_amount = price_val - final_after_coupon
+            summary_parts.append(f"{coupon_prefix} {cpct:.0f} %")
+            
+        elif camt:
+            # Absoluter Coupon
+            coupon_amount = camt
+            final_after_coupon = max(price_val - camt, 0)
+            summary_parts.append(f"{coupon_prefix} {camt:.2f} {currency_hint} (fester Betrag)")
+
+        discount_amount += (coupon_amount or 0)
+        
+    # 3. Finaler Gesamt-Rabatt (Originalpreis -> Endpreis)
+    discount_percent_total: Optional[float] = None
+    if orig_val > 0 and final_after_coupon < orig_val:
+        discount_percent_total = ((orig_val - final_after_coupon) / orig_val) * 100
+        
+    # 4. Rabatt-Zusammenfassung generieren (Langer Text)
+    if not summary_parts and price_val > 0 and orig_val == price_val:
+        final_summary = "Kein Rabatt gefunden (Vollpreis)."
+    elif not summary_parts and (price_val == 0 and orig_val == 0) or (price_val == 0 and orig_val > 0):
+        final_summary = "Preisinformationen unvollständig oder Artikel kostenlos."
+    else:
+        final_summary = "Endpreis ermittelt durch: " + ". + ".join(summary_parts) + "."
+
+    # 5. Formatierung des Endpreises
+    final_after_coupon_str = f"{final_after_coupon:.2f}".replace('.', ',') + "€"
+    
     def rnd(x: Optional[float]) -> Optional[float]:
+        # Rundung auf zwei Dezimalstellen
         return round(x, 2) if isinstance(x, (int, float)) else None
 
     return {
-        "discount_amount": discount_amount,
-        "discount_percent": rnd(discount_percent),
-        "final_price_after_coupon": final_after_coupon_str, # Rückgabe als String (z.B. "39,97€")
+        "discount_amount": rnd(discount_amount),
+        "discount_percent": rnd(discount_percent_total), # Gesamt-Prozent (Original -> Endpreis)
+        "final_price_after_coupon": final_after_coupon_str, 
+        "discount_reason_summary": final_summary,
     }
+
+
+def parse_discount_percent(explicit_savings: Optional[str]) -> Optional[float]:
+    """
+    Parses the discount percentage (e.g., '-24 %', '24%', '24') from a string
+    and returns it as a positive floating-point number (absolute value).
+    """
+    if not explicit_savings:
+        return None
+
+    m = re.search(r"(\-?\d{1,3}[.,]?\d?)\s?%", explicit_savings)
+    if m:
+        try:
+            return abs(float(m.group(1).replace(",", ".")))
+        except Exception:
+            return None
+    return None
 
 def first_nonempty(*vals: Optional[str]) -> Optional[str]:
     for v in vals:
@@ -222,14 +303,14 @@ class ProductData:
     asin: Optional[str] = None
 
     # Preise
-    price: Optional[Dict[str, Any]] = None
-    original_price: Optional[str] = None
-    discount_amount: Optional[float] = None
-    discount_percent: Optional[float] = None
+    price: Optional[str] = None # String des aktuellen Preises (z.B. "39,97€", VOR Coupon)
+    original_price: Optional[str] = None # String des Listenpreises (z.B. "59,97€")
+    discount_amount: Optional[float] = None # Gesamt-Rabatt-Betrag (Original -> Endpreis)
+    discount_percent: Optional[str] = None # Gesamt-Rabatt-Prozent (Original -> Endpreis)
     coupon_text: Optional[str] = None
     coupon_value: Dict[str, Any] = field(default_factory=dict)
-    # final_price_after_coupon speichert den berechneten Endpreis (z.B. "39,97€")
-    final_price_after_coupon: Optional[str] = None 
+    final_price_after_coupon: Optional[str] = None # Der tatsächliche Endpreis NACH allen Rabatten
+    discount_reason_summary: Optional[str] = None # NEUES FELD: Zusammenfassung der Rabattgründe (Langversion)
 
     # Verfügbarkeit / Versand
     availability: Optional[str] = None
@@ -282,7 +363,7 @@ class AmazonProductParser:
         except Exception:
             self.soup = BeautifulSoup(self.html_text, "html.parser")
 
-    # --- Helpers ---
+    # --- Helpers (Unverändert) ---
 
     def _select_text(self, *selectors: str) -> Optional[str]:
         for sel in selectors:
@@ -313,7 +394,7 @@ class AmazonProductParser:
                 return m.group(1) if m.groups() else m.group(0)
         return None
 
-    # --- Extractors ---
+    # --- Extractors (Unverändert) ---
 
     def extract_core(self, data: ProductData) -> None:
         data.title = self._select_text(
@@ -350,6 +431,7 @@ class AmazonProductParser:
         data.asin = asin
 
     def extract_prices(self, data: ProductData) -> None:
+        # 1. Aktueller Preis (Reduziert oder Vollpreis) - Preis VOR Coupon
         price_text = self._select_text(
             "#corePrice_feature_div span.a-price span.a-offscreen",
             "#priceblock_ourprice",
@@ -357,8 +439,9 @@ class AmazonProductParser:
             "#priceblock_saleprice",
             "span.a-price.aok-align-center .a-offscreen",
         )
-        data.price = clean_price(price_text) if price_text else None
+        data.price = clean_price(price_text) # Speichert den String
 
+        # 2. Durchgestrichener Preis (Listenpreis / UVP)
         list_price_text = self._select_text(
             "#price span.a-text-price .a-offscreen",
             ".priceBlockStrikePriceString",
@@ -368,28 +451,23 @@ class AmazonProductParser:
             "span.a-price[data-a-strike='true'] .a-offscreen",
             "td.a-span12 span.a-color-secondary.a-text-strike",
         )
-        # KORREKTUR: Setzt original_price nur, wenn ein durchgestrichener Preis gefunden wird. Ansonsten None.
+        
+        # 3. Bestimmung des Originalpreises (Fallback auf data.price, wenn kein Streichpreis)
         data.original_price = clean_price(list_price_text) if list_price_text else data.price
 
-        # ggf. explizit angezeigte Ersparnis
+        # 4. Explizite Ersparnis (Prozent) - Nur zur Info, nicht für Berechnung
         explicit_savings = self._select_text(
                 "#corePrice_feature_div span.savingsPercentage",
                 ".priceBlockSavingsString",
-                "span.savingPriceOverride.savingsPercentage",  # <--- HIER IST DEIN NEUER SELEKTOR
+                "span.savingPriceOverride.savingsPercentage",  
             )
        
-        explicit_pct = parse_discount_percent(explicit_savings)
-        if explicit_pct is not None:
-            explicit_pct = f"{explicit_pct:.0f}%"
-
-        # NEUE LOGIK FÜR STRUKTURIERTEN COUPON (20,00€ Rabatt)
+        # 5. Coupon-Erkennung
         structured_coupon_price = self._select_text("label.ct-coupon-checkbox-label span.a-offscreen")
         coupon_text = None
         if structured_coupon_price:
-            # Erstelle einen Text, der von parse_coupon_value verstanden wird
-            coupon_text = f"{structured_coupon_price} Rabatt "
+            coupon_text = f"{structured_coupon_price} Rabatt"
         else:
-            # Fallback zur Suche nach unstrukturiertem Coupon Text
             coupon_text = self._select_text(
                 "#promoPriceBlockMessage_feature_div",
                 "#couponFeatureDiv li",
@@ -402,15 +480,25 @@ class AmazonProductParser:
         data.coupon_text = norm_space(coupon_text) if coupon_text else None
         data.coupon_value = parse_coupon_value(data.coupon_text)
 
-        # Übergebe data.price (Preis vor Coupon) und original_price an die Berechnung
-        comp = compute_discount_fields(data.price, data.original_price, data.coupon_value)
-        #data.discount_amount = comp["discount_amount"]
-        data.discount_percent = "-"+ explicit_pct if explicit_pct else "N/A"
+        # 6. Preisberechnung (NEU: Saubere Funktion für alle Berechnungen)
+        comp = compute_final_price_and_discounts(
+            data.original_price, 
+            data.price, 
+            data.coupon_value
+        )
         
-        # KORREKTUR: Speichert den Endpreis NACH Coupon im dafür vorgesehenen Feld
-        data.final_price_after_coupon = comp["final_price_after_coupon"] if comp["final_price_after_coupon"] is not None else price_text
-        # data.price wird NICHT mehr überschrieben und behält den Preis VOR Coupon (als Dict).
-        # Die alte Zeile: data.price =  comp["final_price_after_coupon"]  if price_text else data.price WURDE ENTFERNT.
+        # Speichere die Ergebnisse der Berechnung in den Produktfeldern
+        data.discount_amount = comp["discount_amount"]
+        
+        # Formatiere den Gesamt-Prozent-Rabatt als String (z.B. "-81%")
+        data.discount_percent = f"-{comp['discount_percent']:.0f}%" if comp["discount_percent"] else "N/A"
+        
+        # Speichere den Endpreis NACH Coupon
+        data.final_price_after_coupon = comp["final_price_after_coupon"]
+        
+        # Speichere die Zusammenfassung des Rabattgrundes
+        data.discount_reason_summary = comp["discount_reason_summary"]
+
 
     def extract_availability_and_delivery(self, data: ProductData) -> None:
         data.availability = self._select_text("#availability span", "#availability", "#outOfStock")
@@ -430,7 +518,7 @@ class AmazonProductParser:
         data.returns_text = first_nonempty(
             self._select_text("#returns_policy", "a#returns-policy-anchor", "#RETURNS_POLICY a", "div#retail-seller_profile_container"),
             self._select_text("a#freeReturns", "div#RETURNS_POLICY", "span#FREE_RETURNS"),
-            self._find_by_regex([r"Kostenlose Rückgabe", r"free returns"]),
+            self._find_by_regex([r"(Kostenlose Rückgabe|free returns)"]),
         )
         if data.returns_text:
             data.free_returns = bool(re.search(r"(Kostenlose Rückgabe|free returns)", data.returns_text, flags=re.I))
@@ -524,7 +612,7 @@ class AmazonProductParser:
             except Exception:
                 pass
 
-    # ---- PRODUCT INFO / TECH DETAILS ----
+    # ---- PRODUCT INFO / TECH DETAILS (Unverändert) ----
     def _normalize_info_key(self, k: str) -> str:
         """De/En-Schlüssel → stabile snake_case Keys."""
         k_norm = norm_space(k).lower()
@@ -725,95 +813,59 @@ class AmazonProductParser:
         return data
 
 # ---------------------------------------------------------------------------
-# Schema Mapping -> "BO..."-Struktur (wie B0DSLBN5FS.json)
-#   Ändert nur die Ausgabestruktur – nicht das Parsing!
+# Schema Mapping -> "BO..."-Struktur (Feldnamen werden hier auf das ZIEL-Schema gemappt)
 # ---------------------------------------------------------------------------
-
-def _currency_symbol_from_raw(raw: Optional[str]) -> str:
-    """Aus raw-Preistext Symbol extrahieren (€, $, £, ¥); Fallback: 'EUR'."""
-    if not raw:
-        return "EUR"
-    m = re.search(r"(€|\$|£|¥)", raw)
-    if m:
-        return m.group(1)
-    return "EUR"
-
-    """
-    Passt Preisobjekt an BO-Schema an: currency_hint enthält das SYMBOL (z. B. '€').
-    """
-    if not price_obj:
-        return None
-    raw = price_obj.get("raw") or ""
-    return {
-        "raw": raw or None,
-        "value": price_obj.get("value"),
-        "currency_hint": _currency_symbol_from_raw(raw)
-    }
-
-def parse_discount_percent(explicit_savings: Optional[str]) -> Optional[float]:
-    """
-    Parses the discount percentage (e.g., '-24 %', '24%', '24') from a string
-    and returns it as a positive floating-point number (absolute value).
-
-    Example: "-24 %" -> 24.0
-    """
-    if not explicit_savings:
-        return None
-
-    import re
-
-    m = re.search(r"(\-?\d{1,3}[.,]?\d?)\s?%", explicit_savings)
-    if m:
-        try:
-            return abs(float(m.group(1).replace(",", ".")))
-        except Exception:
-            return None
-    return None
 
 def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
     """
-    Mappt ProductData -> BO…-Schema (Feldnamen + Struktur wie B0DSLBN5FS.json).
+    Mappt ProductData -> BO…-Schema (Feldnamen + Struktur wie B0DSLBN5FS.json),
+    wobei alle Felder übertragen werden.
     """
-    price_obj = product.price
-    orig_obj  = product.original_price
-    discount_percent_str =product.discount_percent if product.discount_percent else None
+    price_obj = product.price # Aktueller Preis String (VOR Coupon)
+    orig_obj  = product.original_price # Originalpreis String
+    discount_percent_str =product.discount_percent if product.discount_percent else "N/A"
 
-    # KORREKTUR: Bestimme den finalen Preis für das 'price' Feld im Schema
-    # Nutze den Endpreis nach Coupon, falls berechnet, ansonsten den Basispreis (price_obj).
-    final_price_for_schema = product.final_price_after_coupon if product.final_price_after_coupon is not None else price_obj
+    # Nutze den Endpreis nach Coupon.
+    final_price_for_schema = product.final_price_after_coupon
 
+    # Rating Block
     rating_block = None
     if product.rating_value is not None or product.review_count is not None:
         rating_block = {"value": product.rating_value, "counts": product.review_count}
 
+    # Features / Bullets
     features_list = product.bullets or []
     feature_text = " • ".join(features_list) if features_list else None
     description_text = product.description or None
 
+    # Units Sold
+    units_sold: Optional[str] = None
     if product.purchases_past_month is not None:
         units_sold = f"{product.purchases_past_month}{'+' if product.purchases_past_month_is_plus else ''} im letzten Monat"
-    else:
-        units_sold = "N/A"
+    elif product.purchases_past_month_raw:
+        units_sold = product.purchases_past_month_raw
 
+    # Coupon Details
     coboun_more = None
     if product.coupon_value:
         if product.coupon_value.get("percent"):
             try:
                 coboun_more = f"Spare {int(round(product.coupon_value['percent']))} %"
             except Exception:
-                coboun_more = None
+                coboun_more = product.coupon_text
         elif product.coupon_value.get("amount") is not None:
             amt = product.coupon_value.get("amount")
-            cur = product.coupon_value.get("currency_hint") or ""
+            cur = product.coupon_value.get("currency_hint") or "€"
             try:
-                coboun_more =product.coupon_text
+                coboun_more = product.coupon_text
             except Exception:
-                coboun_more = f"Spare {amt} {cur}".strip()
+                coboun_more = f"Spare {amt:.2f} {cur}".strip()
     if not coboun_more and product.coupon_text:
         coboun_more = product.coupon_text
 
     coboun_block = {"code": "N/A", "code_details": "N/A", "more": coboun_more}
 
+    # Affiliate URL / Shortlink
     affiliate_url = None
     if product.asin:
         affiliate_url = f"https://www.amazon.de/dp/{product.asin}"
@@ -824,46 +876,87 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Technische Details (flattern/übertragen)
+    tech_details_flat: Dict[str, Any] = product.product_info.get("normalized", {})
+
+    # NEU: Generieren des kurzen UX-Textes für rabatt_details
+    rabatt_kurztext = format_discount_summary_for_ux(
+        product.original_price, 
+        product.price, 
+        product.coupon_value
+    )
+
+
     out = {
+        # CORE / IDENTITÄT
         "title": product.title or None,
         "market":"AMAZON",
         "affiliate_url": affiliate_url,
         "brand": product.brand or None,
         "product_id": product.asin or None,
-        "price": final_price_for_schema,        # <--- Nutzt den Endpreis NACH Abzug
-        "original_price": orig_obj,             # <--- Nutzt den geparsten Originalpreis (oder None)
+
+        # PREISE / RABATTE
+        "price": final_price_for_schema,        # Endpreis (NACH Coupon/Rabatt)
+        "original_price": orig_obj,             # Höchster Basispreis
         "discount_amount": product.discount_amount,
-        "discount_percent": discount_percent_str,
-        "rating": rating_block,
+        "discount_percent": discount_percent_str, # Gesamt-Rabatt in %
         "coupon_text": product.coupon_text or None,
         "coupon_value": {
             "percent": product.coupon_value.get("percent") if product.coupon_value else None,
             "amount": product.coupon_value.get("amount") if product.coupon_value else None,
             "currency_hint": product.coupon_value.get("currency_hint") if product.coupon_value else None,
         },
-        "rabatt_details": None,
+        # HIER WIRD DER KURZE UX-TEXT GESPEICHERT
+        "rabatt_details": rabatt_kurztext, 
+        # HIER WIRD DER LANGE TEXT GESPEICHERT
+        "rabatt_details_lang": product.discount_reason_summary, 
+        "coboun": coboun_block,
+
+        # SOCIAL PROOF
+        "rating": rating_block,
+        "review_count": product.review_count,
+        "answered_questions": product.answered_questions,
+        "units_sold": units_sold,
+        "purchases_past_month": product.purchases_past_month,
+        "purchases_past_month_is_plus": product.purchases_past_month_is_plus,
+
+        # HÄNDLER / VERFÜGBARKEIT
+        "seller_name": product.seller_name or None,
+        "buybox_sold_by": product.buybox_sold_by or None,
+        "seller_rating_percent": product.seller_rating_percent,
+        "bestseller_rank_text": product.bestseller_rank,
+        "availability": product.availability or None,
+        "is_prime": product.is_prime,
+        "shipping_info": product.shipping_cost_text or None,
+        "delivery_date": product.delivery_date or None,
+        "returns_text": product.returns_text,
+        "free_returns": product.free_returns,
+
+        # INHALT / MEDIEN
         "images": product.images or [],
         "features": features_list,
         "feature_text": feature_text,
-        "description": None,             # im Beispiel null
-        "description_text": description_text,
-        "coboun": coboun_block,
-        "units_sold": units_sold,
-        "seller_name": product.seller_name or None,
-        "availability": product.availability or None,
-        "shipping_info": product.shipping_cost_text or None,
+        "description": description_text,
+        "bullets": features_list, # Dupliziere für Redundanz
+        "variants": product.variants,
+        "badges": product.badges,
+        "deal_badge": product.deal_badge,
+
+        # TECHNISCHE DETAILS (aus 'product_info' geflattet)
+        "technical_details": tech_details_flat,
+
+        # QUELLE
+        "_source_file": product._source_file,
     }
     return out
 
 # ---------------------------------------------------------------------------
-# CLI (optional: schreibt BO-Schema direkt in out/)
+# CLI (unverändert)
 # ---------------------------------------------------------------------------
 
 class InboxPipeline:
     """
     Liest HTML aus --inbox und schreibt JSON nach --out.
-    Hier (bewusst) Standard: ORIGINAL-Parsing-Struktur.
-    Für BO-Schema: nutze product_parser.py (Daemon) oder passe unten an.
     """
     def __init__(self, inbox_dir: Path, out_dir: Path):
         self.inbox_dir = inbox_dir
@@ -895,9 +988,8 @@ class InboxPipeline:
                     product._source_file = str(fp.resolve())
 
                     out_json = self.out_dir / f"{fp.stem}.json"
-                    # HINWEIS: Standardmäßig original asdict; wenn du
-                    # BO-Schema willst, tausche asdict(product) gegen to_b0_schema(product)
-                    data = asdict(product)
+                    # Wende das BO-Schema Mapping an
+                    data = to_b0_schema(product)
                     with out_json.open("w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
 
