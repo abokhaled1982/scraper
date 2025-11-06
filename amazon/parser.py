@@ -174,7 +174,9 @@ def compute_discount_fields(
         camt = coupon_info.get("amount")
         if cpct:
             try:
-                final_after_coupon = max(price_val * (1 - cpct / 100.0), 0)
+                final_after_coupon_temp = max(price_val * (1 - cpct / 100.0), 0)
+                final_after_coupon_str = f"{final_after_coupon_temp:.2f}"
+                final_after_coupon=final_after_coupon_str.replace('.', ',') + "€"
             except Exception:
                 pass
         elif camt:
@@ -184,14 +186,22 @@ def compute_discount_fields(
                 final_after_coupon=final_after_coupon_str.replace('.', ',') + "€"
             except Exception:
                 pass
-
+    
+    # Rückgabe des Endpreises als String (z.B. "39,97€")
+    if isinstance(final_after_coupon, float):
+        final_after_coupon_str = f"{final_after_coupon:.2f}".replace('.', ',') + "€"
+    elif isinstance(final_after_coupon, str):
+        final_after_coupon_str = final_after_coupon
+    else:
+        final_after_coupon_str = None
+        
     def rnd(x: Optional[float]) -> Optional[float]:
         return round(x, 2) if isinstance(x, (int, float)) else None
 
     return {
         "discount_amount": discount_amount,
         "discount_percent": rnd(discount_percent),
-        "final_price_after_coupon": final_after_coupon,
+        "final_price_after_coupon": final_after_coupon_str, # Rückgabe als String (z.B. "39,97€")
     }
 
 def first_nonempty(*vals: Optional[str]) -> Optional[str]:
@@ -218,7 +228,8 @@ class ProductData:
     discount_percent: Optional[float] = None
     coupon_text: Optional[str] = None
     coupon_value: Dict[str, Any] = field(default_factory=dict)
-    final_price_after_coupon: Optional[float] = None
+    # final_price_after_coupon speichert den berechneten Endpreis (z.B. "39,97€")
+    final_price_after_coupon: Optional[str] = None 
 
     # Verfügbarkeit / Versand
     availability: Optional[str] = None
@@ -357,7 +368,8 @@ class AmazonProductParser:
             "span.a-price[data-a-strike='true'] .a-offscreen",
             "td.a-span12 span.a-color-secondary.a-text-strike",
         )
-        data.original_price = clean_price(list_price_text) if list_price_text else None
+        # KORREKTUR: Setzt original_price nur, wenn ein durchgestrichener Preis gefunden wird. Ansonsten None.
+        data.original_price = clean_price(list_price_text) if list_price_text else data.price
 
         # ggf. explizit angezeigte Ersparnis
         explicit_savings = self._select_text(
@@ -375,7 +387,7 @@ class AmazonProductParser:
         coupon_text = None
         if structured_coupon_price:
             # Erstelle einen Text, der von parse_coupon_value verstanden wird
-            coupon_text = f"{structured_coupon_price} Rabatt"
+            coupon_text = f"{structured_coupon_price} Rabatt "
         else:
             # Fallback zur Suche nach unstrukturiertem Coupon Text
             coupon_text = self._select_text(
@@ -390,10 +402,15 @@ class AmazonProductParser:
         data.coupon_text = norm_space(coupon_text) if coupon_text else None
         data.coupon_value = parse_coupon_value(data.coupon_text)
 
+        # Übergebe data.price (Preis vor Coupon) und original_price an die Berechnung
         comp = compute_discount_fields(data.price, data.original_price, data.coupon_value)
         #data.discount_amount = comp["discount_amount"]
         data.discount_percent = "-"+ explicit_pct if explicit_pct else "N/A"
-        data.price =  comp["final_price_after_coupon"]  if price_text else data.price
+        
+        # KORREKTUR: Speichert den Endpreis NACH Coupon im dafür vorgesehenen Feld
+        data.final_price_after_coupon = comp["final_price_after_coupon"] if comp["final_price_after_coupon"] is not None else price_text
+        # data.price wird NICHT mehr überschrieben und behält den Preis VOR Coupon (als Dict).
+        # Die alte Zeile: data.price =  comp["final_price_after_coupon"]  if price_text else data.price WURDE ENTFERNT.
 
     def extract_availability_and_delivery(self, data: ProductData) -> None:
         data.availability = self._select_text("#availability span", "#availability", "#outOfStock")
@@ -761,6 +778,10 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
     orig_obj  = product.original_price
     discount_percent_str =product.discount_percent if product.discount_percent else None
 
+    # KORREKTUR: Bestimme den finalen Preis für das 'price' Feld im Schema
+    # Nutze den Endpreis nach Coupon, falls berechnet, ansonsten den Basispreis (price_obj).
+    final_price_for_schema = product.final_price_after_coupon if product.final_price_after_coupon is not None else price_obj
+
     rating_block = None
     if product.rating_value is not None or product.review_count is not None:
         rating_block = {"value": product.rating_value, "counts": product.review_count}
@@ -809,8 +830,8 @@ def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
         "affiliate_url": affiliate_url,
         "brand": product.brand or None,
         "product_id": product.asin or None,
-        "price": price_obj,
-        "original_price": orig_obj,
+        "price": final_price_for_schema,        # <--- Nutzt den Endpreis NACH Abzug
+        "original_price": orig_obj,             # <--- Nutzt den geparsten Originalpreis (oder None)
         "discount_amount": product.discount_amount,
         "discount_percent": discount_percent_str,
         "rating": rating_block,
