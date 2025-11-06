@@ -443,6 +443,9 @@ class AmazonProductParser:
 
         # 2. Durchgestrichener Preis (Listenpreis / UVP)
         list_price_text = self._select_text(
+            # NEU: Sehr spezifisch für UVP-Blöcke (basierend auf Ihrem Beispiel)
+            "span.basisPrice .a-offscreen", 
+            # Bereits vorhandene, stabile Selektoren
             "#price span.a-text-price .a-offscreen",
             ".priceBlockStrikePriceString",
             "#priceblock_ourprice_row .a-text-strike",
