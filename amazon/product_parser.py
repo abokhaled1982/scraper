@@ -220,8 +220,8 @@ def extract_core_html_data(html_content: str) -> Dict[str, Any]:
   
     
     return {
-        "title_html": title,
-        "affiliate_url": url      
+        "title": title,
+        "url": url      
     }
 
 
@@ -273,7 +273,8 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
     print(f"\n[SCHRITT 1/2: HTML-PROZESSOR]")
    
     isAmazon:bool=False
-    amazon_product_url=""
+    product_url=""
+    product_title=""
     if not html_path.exists():
         raise FileNotFoundError(f"HTML-Quelldatei nicht gefunden: {html_path}")    
       
@@ -287,9 +288,12 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
     print("-> Starte Extraktion der Bild-Kandidaten...")
     if(isAmazon):
          bild_kandidaten = product.images
-         amazon_product_url=product.product_info["shortlink"]
+         product_url=product.product_info["shortlink"]
     else:
+        core_data=extract_core_html_data(raw_html)
         bild_kandidaten = extrahiere_produktbilder_aus_html(raw_html)
+        product_url=core_data.get("url","N/A")
+        product_title=core_data.get("title","N/A")
     
    
     #print(f" 	-> Gefundene Bild-Kandidaten: {len(bild_kandidaten.split(' | ')) if bild_kandidaten != 'N/A' else 0} URLs/Deskriptoren.")
@@ -307,7 +311,8 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
         "clean_text": clean_text,
         "isAmazon":isAmazon,
         "bild_kandidaten": bild_kandidaten,
-        "amazon_product_url":amazon_product_url
+        "product_url":product_url,
+        "product_title":product_title
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,12 +365,12 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
         
-        #cleanup_temp_files()
+        cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}"
 
     except Exception as e:
-        #cleanup_temp_files()
+        cleanup_temp_files()
         raise Exception(f"AI-Pipeline/Mapping Fehler: {e}")
 
 

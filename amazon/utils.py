@@ -31,13 +31,7 @@ def _sha1_bytes(b: bytes) -> str:
     """Berechnet den SHA1-Hash der übergebenen Bytes."""
     return hashlib.sha1(b).hexdigest() 
 
-def _sha1_file(fp: Path) -> str:
-    """Berechnet den SHA1-Hash einer Datei."""
-    try:
-        return _sha1_bytes(fp.read_bytes())
-    except Exception:
-        return _sha1_bytes(_read_text(fp).encode("utf-8", errors="ignore"))
-    
+   
 def move_to_failed(fp: Path, reason: str, FAILED_DIR: Path) -> None:
     """Verschiebt die Quelldatei und den Fehlergrund in den Fehler-Ordner."""
     FAILED_DIR.mkdir(parents=True, exist_ok=True)
@@ -154,14 +148,18 @@ def map_ai_output_to_target_format(
     final_output = TARGET_SCHEMA_TEMPLATE.copy()
     #can I in the futre read it also
     isAmazon=ai_input.get('isAmazon', False)
-
+    
     if isAmazon:
-        final_output['affiliate_url'] = ai_input.get("amazon_product_url","N/A")
+        final_output['affiliate_url'] = ai_input.get("product_url","N/A")
+    elif extracted.get('url_des_produkts')!="N/A":
+         final_output['affiliate_url'] =  extracted.get('url_des_produkts')
     else:
-         final_output['affiliate_url'] =   extracted.get('url_des_produkts')
-     
-    final_output['title'] = extracted.get('produkt_titel', 'N/A')   
-       
+        final_output['affiliate_url'] = ai_input.get("product_url","N/A")
+
+    if extracted.get('produkt_titel')!="N/A":    
+        final_output['title'] = extracted.get('produkt_titel')   
+    else:
+        final_output['title'] = ai_input.get('product_title', 'N/A')
     # PRODUKT-ID: AI-ID > Fallback
     extracted_product_id = extracted.get('produkt_id') 
 
