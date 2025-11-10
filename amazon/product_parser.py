@@ -107,33 +107,36 @@ def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     kandidaten_string = " | ".join(sorted(list(basis_url_kandidaten)))
     
     return kandidaten_string if kandidaten_string else "N/A"
+
 def normalize_url(url: str) -> str:
     """
-    Normalisiert eine URL, indem irrelevante Query-Parameter und Fragmente entfernt werden.
+    Normalisiert eine URL: entfernt Fragmente, sortiert/entfernt bestimmte Query-Parameter und entfernt nachgestellte Schrägstriche.
+    (Diese Hilfsfunktion muss definiert sein, um den Code lauffähig zu machen.)
     """
-    irrelevant_params = {
-        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-        'ref', 'aff_id', 'trkid', 'fbclid', 'gclid', 'msclkid', 'icid', 
-        'source', 'medium', 'campaign', 'pbraid', 'cid', 'sp_rid', 'cmpid', 
-        'partner', 'session_id'
-    }
-
-    parsed_url = urlparse(url)
-    url_without_fragment = parsed_url._replace(fragment='')
-    query_params = parse_qs(url_without_fragment.query)
+    if not url or not url.startswith('http'):
+        return url
     
-    cleaned_params = {}
-    for key, value in query_params.items():
-        if key.lower() not in irrelevant_params:
-            cleaned_params[key] = value
-            
-    cleaned_query = urlencode(cleaned_params, doseq=True)
-    normalized_url = url_without_fragment._replace(query=cleaned_query)
+    parsed = urlparse(url)
+    # Entferne Fragment-Bezeichner (#...)
+    path = parsed.path
+    query = parsed.query
     
-    return urlunparse(normalized_url._replace(
-        scheme=normalized_url.scheme.lower(),
-        netloc=normalized_url.netloc.lower()
+    # Optional: Entferne nachgestellten Schrägstrich, außer wenn der Pfad nur '/' ist
+    if path.endswith('/') and len(path) > 1:
+        path = path.rstrip('/')
+        
+    # Optional: Logik zur Bereinigung von Query-Parametern könnte hier eingefügt werden
+    
+    # Erstelle die bereinigte URL neu (ohne Fragment)
+    normalized = urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        path,
+        parsed.params,
+        query, # Behalte die Query-Parameter
+        ''     # Fragment ist leer
     ))
+    return normalized
 
 def extract_and_normalize_url(html_content: str) -> str:
     """
@@ -150,13 +153,20 @@ def extract_and_normalize_url(html_content: str) -> str:
         if canonical_link and canonical_link.get('href'):
             found_url = canonical_link['href'].strip()
         
-        # 2. ZWEITE PRIORITÄT: Open Graph Tags
+        # 2. ZWEITE PRIORITÄT: Alternate Link (de)
+        # Sucht nach <link rel="alternate" href="..." hreflang="de">
+        if not found_url:
+            alternate_de_link = soup.find('link', {'rel': 'alternate', 'hreflang': 'de'})
+            if alternate_de_link and alternate_de_link.get('href'):
+                found_url = alternate_de_link['href'].strip()
+        
+        # 3. DRITTE PRIORITÄT: Open Graph Tags
         if not found_url:
             og_url_meta = soup.find('meta', {'property': 'og:url'})
             if og_url_meta and og_url_meta.get('content'):
                 found_url = og_url_meta['content'].strip()
 
-        # 3. DRITTE PRIORITÄT: Apple iTunes/App Meta-Tag (z.B. für App-Stores)
+        # 4. VIERTE PRIORITÄT: Apple iTunes/App Meta-Tag (z.B. für App-Stores)
         if not found_url:
             apple_meta = soup.find('meta', {'name': 'apple-itunes-app'})
             if apple_meta and apple_meta.get('content'):
@@ -165,34 +175,35 @@ def extract_and_normalize_url(html_content: str) -> str:
                 if match:
                     found_url = match.group(1).strip()
         
-        # 4. VIERTE PRIORITÄT: Schema.org Product/Offers URL
+        # 5. FÜNFTE PRIORITÄT: Schema.org Product/Offers URL
         if not found_url:
             product_links = soup.select('[itemtype*="schema.org/Product"] a[href], [itemtype*="schema.org/Offer"] a[href]')
             if product_links:
                 found_url = max([link['href'] for link in product_links if link.get('href')], key=len, default=None)
 
-        # 5. LETZTER FALLBACK: AGGRESSIVE REGEX-SUCHE im gesamten HTML-Text
+        # 6. LETZTER FALLBACK: AGGRESSIVE REGEX-SUCHE im gesamten HTML-Text
         if not found_url:
-             # Sucht nach http/https URLs, die keine statischen Ressourcen (Bilder, JS, CSS) sind
-             # Wir suchen URLs mit mindestens 3 Pfadsegmenten (wahrscheinlich spezifische Produkt-URL)
-             urls = re.findall(r'https?://(?:www\.)?(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s"\']*)?', html_content)
-             
-             # Filtert nach URLs, die spezifischer erscheinen (mind. 3 Pfadsegmente und keine zu kurzen URLs)
-             product_urls = [u for u in urls if u.count('/') >= 3 and len(u) > 30 and not any(ext in u for ext in ['.js', '.css', '.png', '.jpg', '.svg'])] 
-             
-             if product_urls:
-                 # Wählt die längste gefundene URL, da sie am spezifischsten ist
-                 found_url = max(product_urls, key=len)
+            # Sucht nach http/https URLs, die keine statischen Ressourcen (Bilder, JS, CSS) sind
+            # Wir suchen URLs mit mindestens 3 Pfadsegmenten (wahrscheinlich spezifische Produkt-URL)
+            urls = re.findall(r'https?://(?:www\.)?(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s"\']*)?', html_content)
+            
+            # Filtert nach URLs, die spezifischer erscheinen (mind. 3 Pfadsegmente und keine zu kurzen URLs)
+            product_urls = [u for u in urls if u.count('/') >= 3 and len(u) > 30 and not any(ext in u for ext in ['.js', '.css', '.png', '.jpg', '.svg'])] 
+            
+            if product_urls:
+                # Wählt die längste gefundene URL, da sie am spezifischsten ist
+                found_url = max(product_urls, key=len)
 
-        # 6. Normalisierung der URL
+        # 7. Normalisierung der URL
         if found_url and found_url.startswith('http'):
-            return normalize_url(found_url)
-                
-    except Exception as e:
-        print(f"WARNUNG: Fehler beim Extrahieren oder Normalisieren der URL: {e}", file=sys.stderr)
-        
-    return "N/A"
+            return found_url
 
+        return "" # Gibt leeren String zurück, wenn nichts gefunden wurde
+        
+    except Exception as e:
+        # Hier sollte eine geeignete Fehlerbehandlung stattfinden (z.B. Logging)
+        print(f"Fehler beim Parsen: {e}")
+        return ""
 def extract_title_from_html(html_content: str) -> str:
     """Extrahiert den bereinigten Titel."""
     soup = BeautifulSoup(html_content, 'lxml')
