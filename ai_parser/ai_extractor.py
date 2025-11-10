@@ -15,11 +15,6 @@ load_dotenv()
 
 # --- 1. LLM-DATENMODELLE ---
 
-class Gutschein(BaseModel):
-    """Repräsentiert spezifische Gutschein-Informationen."""
-    details: str = Field(description="Der gefundene Gutscheintext, z.B. '5% Rabatt mit Code X' ODER 'N/A'.")
-    code: str = Field(description="Der Gutscheincode oder 'N/A', falls kein Code gefunden wurde.")
-
 class Produktinformation(BaseModel):
     """Strukturierte Daten, die von der Produktseite extrahiert werden sollen."""
     produkt_titel: str = Field(description="Der vollständige und präzise Titel des Produkts.")
@@ -161,9 +156,8 @@ def extract_and_save_data(llm_input_data: json, output_path: Path):
 
     final_output = {
         "source_file": llm_input_data.get("source_file", "N/A"),
-        "product_title": llm_input_data.get("product_title", "N/A"), 
-        "asin": llm_input_data.get("asin", "N/A"), 
-        "raw_bild_kandidaten": bild_kandidaten_str,
+        "product_title": llm_input_data.get("product_title", "N/A"),
+        "raw_bild_kandidaten": bild_kandidaten,
         "clean_text": clean_text,
         "extracted_data": result,
     }
