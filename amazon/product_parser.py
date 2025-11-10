@@ -10,7 +10,7 @@ ARCHITEKTUR: Nutzt fachlich getrennte Module (utils, html_parser, data_mapper, a
 from __future__ import annotations
 import json, time, traceback
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import  Tuple, Dict
 import sys
 import uuid 
 
@@ -26,7 +26,7 @@ from utils import (
 
 # Importe für Amazon und AI-Pipeline
 from parser import AmazonProductParser, to_b0_schema 
-from ai_parser.html_processor import process_html_to_llm_input,extract_core_html_data 
+from product_parser2 import process_html_to_llm_input,extract_core_html_data 
 from ai_parser.ai_extractor import extract_and_save_data 
 
 

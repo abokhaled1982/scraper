@@ -797,16 +797,41 @@ class AmazonProductParser:
                 data.product_info["shortlink"] = shortlink
 
     # --- Public API ---
+    def extract_images(self, data: ProductData) -> None:
+        # Bilder
+        seen: set = set()
 
+        # 1. Bildquellen aus dynamischen Attributen ('data-a-dynamic-image')
+        for img_container in self.soup.select("img[data-a-dynamic-image]"):
+            raw = img_container.get("data-a-dynamic-image", "")
+            urls = re.findall(r'"(https?://[^"]+)"', raw)
+            
+            for u in urls:
+                if u not in seen and u.startswith("http"):
+                    seen.add(u)
+                    # <<< HIER WIRD DIE URL DEM ARRAY HINZUGEFÜGT >>>
+                    data.images.append(u) 
+        
+        # 2. Bildquellen aus statischen Attributen (src, data-src, data-old-hires)
+        for img in self.soup.select("#imgTagWrapperId img, #altImages img, img#landingImage, #main-image-container img"):
+            src = img.get("src") or img.get("data-src") or img.get("data-old-hires")
+            
+            if src and src.startswith("http") and src not in seen:
+                seen.add(src)
+                # <<< HIER WIRD DIE URL DEM ARRAY HINZUGEFÜGT >>>
+                data.images.append(src)
+
+    
     def parse(self) -> ProductData:
         data = ProductData()
         self.extract_core(data)
-        self.extract_prices(data)
-        self.extract_availability_and_delivery(data)
-        self.extract_social_proof(data)
-        self.extract_ranking_and_vendor(data)
-        self.extract_product_info(data)
-        self.extract_content(data)
+        #self.extract_prices(data)
+        #self.extract_availability_and_delivery(data)
+        #self.extract_social_proof(data)
+        #self.extract_ranking_and_vendor(data)
+        #self.extract_product_info(data)
+        #self.extract_content(data)
+        self.extract_images(data)
         self.extract_shortlink(data)
         return data
 

@@ -10,8 +10,18 @@ import sys
 
 # ----------------------------- ALLGEMEINE HILFSFUNKTIONEN (DATEI/REGISTRY) --------------------------------------
 
+def is_amazon_html(html_content: str) -> bool:
+    """Entscheidet anhand von Amazon-spezifischen Merkmalen, ob es eine Produktseite ist."""
+    if any(tag in html_content for tag in [
+        'id="productTitle"', 'id="ASIN"', 'data-asin=',
+        'class="a-section a-spacing-none"', 'id="twisterDiv"'
+        ]):
+        return True
+    return False
+
 def _read_text(fp: Path) -> str:
     """Liest den Dateiinhalt als Text."""
+    print(f" 	-> Read HTML-File: {fp.resolve()}")
     try:
         return fp.read_text(encoding="utf-8", errors="ignore")
     except Exception:
@@ -109,6 +119,8 @@ def parse_price_string(price_str: str) -> Dict[str, Any]:
         "currency_hint": currency_hint
     }
 # --- ZIEL-SCHEMA TEMPLATE ---
+
+
 TARGET_SCHEMA_TEMPLATE = {
     "title": "N/A", "affiliate_url": "N/A", "brand": "N/A", "product_id": "N/A",
     "market": "N/A", # <-- NEU: Marktplatz
@@ -124,9 +136,8 @@ TARGET_SCHEMA_TEMPLATE = {
 
 
 def map_ai_output_to_target_format(
-    ai_output: Dict[str, Any], 
-    html_core_data: Dict[str, Any], 
-    parse_price_fn: callable
+    ai_output: Dict[str, Any]
+   
 ) -> Dict[str, Any]:
     """
     Mappt die extrahierten Daten aus dem AI-Output und den HTML-Kerndaten 
@@ -143,81 +154,67 @@ def map_ai_output_to_target_format(
     # ----------------------------- 1. CORE PRODUCT IDENTIFIER (Kombination HTML + AI) --------------------------------------
     
     # TITEL: Priorität: HTML-geparster Titel > AI-geparster Titel > Input-Titel
-    html_title = html_core_data.get('title_html', 'N/A')
+  
     extracted_title = extracted.get('produkt_titel')
     input_title = ai_output.get('product_title', 'N/A') 
     
     
     if extracted_title != 'N/A':
-        final_output['title'] = extracted_title
-    elif html_title:
-        final_output['title'] = html_title
+        final_output['title'] = extracted_title   
     else:
         final_output['title'] = input_title
 
     # AFFILIATE URL: Priorität: HTML-URL (sauber und normalisiert) > AI-URL > Fallback
-    html_url = html_core_data.get('affiliate_url', 'N/A')
+   
     extracted_url = extracted.get('url_des_produkts') 
 
-    final_output['affiliate_url'] = html_url
+   
     if final_output['affiliate_url'] == 'N/A' and extracted_url and extracted_url != 'N/A':
          final_output['affiliate_url'] = extracted_url
-         
+    else:
+      final_output['affiliate_url'] = 'N/A'       
     # PRODUKT-ID: AI-ID > Fallback
     extracted_product_id = extracted.get('produkt_id') 
 
     if extracted_product_id and extracted_product_id != 'N/A':
         final_output['product_id'] = extracted_product_id
     else:
-        final_output['product_id'] = 'N/A'
-    
+        final_output['product_id'] = 'N/A'   
    
     
     # ----------------------------- 2. PRICE & DISCOUNT MAPPING --------------------------------------
-    price_info = parse_price_fn(extracted.get('akt_preis'))
+    #price_info = parse_price_fn(extracted.get('akt_preis'))    
     
-    
-    final_output['price'] = price_info.get('raw', 'N/A')
+    final_output['price'] = extracted.get('akt_preis', 'N/A')
     final_output['brand'] = extracted.get('marke', 'N/A')
-    final_output['original_price'] = extracted.get('original_preis', 'N/A')     
-   
-   
+    final_output['original_price'] = extracted.get('original_preis', 'N/A')  
     final_output['discount_amount'] = extracted.get('discount_amount', 'N/A')
-  
-        
-    final_output['discount_percent'] = extracted.get('rabatt_prozent', 'N/A')
-    
+    final_output['discount_percent'] = extracted.get('rabatt_prozent', 'N/A')    
     # ----------------------------- 3. IMAGES (Kombination HTML + AI) --------------------------------------
     # Priorität: HTML-Bilder (deterministisch) > AI-Bilder > Fallback
     final_output['market'] = extracted.get('marktplatz', 'N/A')
-    html_images = extracted.get('hauptprodukt_bilder', [])
-    
+    html_images = extracted.get('hauptprodukt_bilder', [])    
     if html_images:
         final_output['images'] = html_images   
     else:
-        final_output['images'] = []
-    
+        final_output['images'] = []    
     # ----------------------------- 4. RATING & COUPON & WEITERE FELDER (AI) --------------------------------------
     final_output['rating'] = {
         "value": extracted.get('bewertung_wert', 0.0),
         "counts": extracted.get('anzahl_reviews', 0)
-    }
-    
+    }    
     final_output['coupon'] = {
         "code": extracted.get('gutschein_code', 'N/A'),
         "code_details": extracted.get('gutschein_details', 'N/A'), 
         "more": extracted.get('rabatt_text', 'N/A')
-    }
-    
+    }    
     final_output['units_sold'] = extracted.get('anzahl_verkauft', 'N/A')
     final_output['seller_name'] = extracted.get('haendler_verkaeufer', 'N/A')
     final_output['availability'] = extracted.get('verfuegbarkeit', 'N/A')
     final_output['shipping_info'] = extracted.get('lieferinformation', 'N/A')
-
     # TEXT FELDER
     ai_features = extracted.get('features')
-    final_output['features'] = ai_features if isinstance(ai_features, list) else []
-        
+    final_output['features'] = ai_features if isinstance(ai_features, list) else []        
     final_output['feature_text'] = extracted.get('feature_text')
     final_output['description'] = extracted.get('beschreibung') 
     
