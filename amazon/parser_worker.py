@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Tuple, List
 
 from config import PRODUCT_LIST_PATH, LOCK_FILE
-from angebot import parse_deals_from_html  # <-- use the deals-page parser now
+from amazon.amzon_dealsList_parser import parse_deals_from_html  # <-- use the deals-page parser now
 
 # ---- file locking (POSIX preferred; no hard dep for Windows) ----
 try:

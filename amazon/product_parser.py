@@ -30,7 +30,7 @@ from utils import (
 
 from ai_parser.ai_extractor import extract_and_save_data 
 
-from parser import AmazonProductParser, to_b0_schema 
+from amazon.amazon_parser import AmazonProductParser
 
 
 load_dotenv() 
