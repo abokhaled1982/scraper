@@ -23,10 +23,10 @@ from utils import (
     _read_text, _sha1_file, move_to_failed, load_registry, 
     save_registry, write_summary_append, pick_oldest_html, parse_price_string,map_ai_output_to_target_format
 )
-from html_parser import extract_core_html_data
+
 # Importe für Amazon und AI-Pipeline
 from parser import AmazonProductParser, to_b0_schema 
-from ai_parser.html_processor import process_html_to_llm_input 
+from ai_parser.html_processor import process_html_to_llm_input,extract_core_html_data 
 from ai_parser.ai_extractor import extract_and_save_data 
 
 
