@@ -5,39 +5,18 @@ amazon_parser_pro.py
 --------------------
 Professional, robust, and extensible Amazon product HTML parser.
 
-Key additions in this version
------------------------------
-- Parses "wie viel gekauft" (e.g., "100+ gekauft Mal im letzten Monat")
-  -> purchases_past_month, purchases_past_month_is_plus, purchases_past_month_raw
-- Extracts "Produktinformationen" / "Technische Daten" sections including:
-  Hersteller, Modellnummer, Abmessungen, Gewicht, Herkunftsland, Erstverfügbarkeit, etc.
-  -> product_info (normalized dict + raw keys preserved)
+Wichtig:
+- Dedizierte, robuste Preisberechnung (compute_final_price_and_discounts)
+  unter Berücksichtigung sequenzieller Doppelrabatte (Listenpreis -> Sichtpreis -> Kasse/Coupon).
+- 'discount_reason_summary' erklärt die Schritte knapp & eindeutig.
+- 'rabatt_details' liefert einen sehr kurzen, UI-tauglichen Text.
+- Mapping-Schicht (to_b0_schema) gibt ein kompaktes Zielschema aus.
 
-Design goals
-------------
-- Offline parsing of locally saved Amazon product pages
-- Robust against DOM variations (multiple selectors + regex fallbacks)
-- Clean architecture: utils -> parser (extractors) -> pipeline
-- Outputs:
-    out/<file>.json (per product)
-    out/summary.jsonl (one product JSON per line)
-- No CSV.
+Benutzung (Standalone):
+    python parser.py --inbox inbox --out out
 
-Usage
------
-    # Parse default folder "inbox" and write JSON to "out"
-    python amazon_parser_pro.py
-
-    # Custom folders
-    python amazon_parser_pro.py --inbox "C:\\data\\inbox" --out "C:\\data\\out"
-
-Dependencies
-------------
+Abhängigkeiten:
     pip install bs4 lxml
-
-Legal
------
-Parsing Amazon HTML may be subject to Amazon's terms. Use on offline files.
 """
 
 from __future__ import annotations
@@ -46,7 +25,7 @@ import argparse
 import json
 import re
 import sys
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -61,69 +40,35 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 def norm_space(s: Optional[str]) -> str:
-    """Collapse whitespace and strip."""
+    """Whitespace normalisieren und trimmen."""
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 def extract_html_from_js_wrapper(raw: str) -> str:
     """
-    Some scrapers store HTML embedded in a JS string/assignment.
-    We trim everything before the first '<html' or '<!doctype'.
+    Falls HTML in einer JS-Variable eingewickelt ist, ab <html…> oder <!doctype…> extrahieren.
     """
     m = re.search(r"(<\s*!doctype\b.*?>|<\s*html\b)", raw, flags=re.I | re.S)
     return raw[m.start():] if m else raw
 
-def clean_price(text: Optional[str]) -> Optional[Dict[str, Any]]:
+def clean_price(text: Optional[str]) -> Optional[str]:
     """
-    Normalize prices like '€ 1.234,56' or '$1,234.56' -> {'raw', 'value', 'currency_hint'}
+    Normalisiert Preise (zurück auf String, da interne Berechnung Strings nutzt).
     """
     if not text:
         return None
-    t = text.strip()
-
-    currency = None
-    cm = re.search(r"(€|EUR|\$|USD|£|GBP|¥|JPY)", t, re.I)
-    if cm:
-        currency = (
-            cm.group(1)
-            .upper()
-            .replace("$", "USD")
-            .replace("€", "EUR")
-            .replace("£", "GBP")
-            .replace("¥", "JPY")
-        )
-
-    # keep digits and separators
-    num = re.sub(r"[^0-9,.\-]", "", t)
-
-    # heuristic: EU decimal
-    if num.count(",") and not num.count("."):
-        num_eu = num.replace(".", "")
-        if "," in num_eu:
-            head, _, tail = num_eu.rpartition(",")
-            num_std = head.replace(",", "") + "." + tail
-        else:
-            num_std = num_eu
-    else:
-        # US style or mixed
-        num_std = num.replace(",", "")
-
-    try:
-        val = float(num_std)
-    except Exception:
-        val = None
-
-    return {"raw": t, "value": val, "currency_hint": currency}
+    return text.strip()
 
 def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
     """
-    Parse coupon hints like "10% coupon" or "€5 coupon".
-    Returns {"percent": float|None, "amount": float|None, "currency_hint": str|None}
+    Coupons/Kassenhinweise wie '10% Coupon' oder '5 € an der Kasse' -> {'percent','amount','currency_hint'}
+    Prozent hat Vorrang, wenn beides vorkommt.
     """
     if not text:
         return {"percent": None, "amount": None, "currency_hint": None}
+
     t = text.strip()
 
-    # percentage
+    # Prozent z. B. "10%", "10 %"
     m_pct = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", t)
     if m_pct:
         try:
@@ -132,7 +77,7 @@ def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # absolute
+    # Absolutbetrag inkl. Währung
     m_abs = re.search(r"(€|EUR|\$|USD|£|GBP|¥|JPY)?\s*([0-9][0-9.,]*)", t, flags=re.I)
     if m_abs:
         cur = m_abs.group(1)
@@ -157,51 +102,193 @@ def parse_coupon_value(text: Optional[str]) -> Dict[str, Any]:
 
     return {"percent": None, "amount": None, "currency_hint": None}
 
-def compute_discount_fields(
-    price_obj: Optional[Dict[str, Any]],
-    original_price_obj: Optional[Dict[str, Any]],
+def parse_price_string_to_float(price_string: Optional[str]) -> float:
+    """Konvertiert Preis-String (z.B. '139,99€') in Float (z.B. 139.99)."""
+    if not price_string:
+        return 0.0
+
+    temp_string = re.sub(r"[^\d.,]", "", price_string)
+
+    # Heuristik: EU vs. US
+    if temp_string.count(",") > 0 and temp_string.count(".") == 0:
+        number_string = temp_string.replace(".", "").replace(",", ".")
+    elif temp_string.count(".") > 0 and temp_string.count(",") == 0:
+        number_string = temp_string.replace(",", "")
+    else:
+        if temp_string.count(".") > 0 and temp_string.rfind(".") > temp_string.rfind(","):
+            number_string = temp_string.replace(",", "")
+        elif temp_string.count(",") > 0 and temp_string.rfind(",") > temp_string.rfind("."):
+            number_string = temp_string.replace(".", "").replace(",", ".")
+        else:
+            number_string = temp_string.replace(",", "")
+
+    try:
+        return float(number_string)
+    except ValueError:
+        return 0.0
+
+# ---------------------------------------------------------------------------
+# Rabatt-Label (kurz) – kompakt & eindeutig für die UI
+# ---------------------------------------------------------------------------
+
+def build_short_discount_label(
+    original_price_string: Optional[str],
+    current_price_string: Optional[str],
     coupon_info: Optional[Dict[str, Any]],
-) -> Dict[str, Optional[float]]:
+    kasse_info: Optional[Dict[str, Any]],
+) -> str:
     """
-    Compute:
-      - discount_amount
-      - discount_percent
-      - final_price_after_coupon
-    Based on price, original/list price, and optional coupon.
+    Erzeugt einen sehr kurzen, eindeutigen Rabatt-Text, z. B.:
+      '-33% + -5€/Kasse + -10% Coupon'
+    Falls keine Reduktion erkennbar: 'Kein Rabatt'
     """
-    price_val = price_obj.get("value") if isinstance(price_obj, dict) else None
-    orig_val = original_price_obj.get("value") if isinstance(original_price_obj, dict) else None
+    parts: List[str] = []
 
-    discount_amount: Optional[float] = None
-    discount_percent: Optional[float] = None
-    final_after_coupon: Optional[float] = None
+    # Listenpreis -> Sichtpreis
+    o = parse_price_string_to_float(original_price_string)
+    p = parse_price_string_to_float(current_price_string)
+    if o > 0 and p > 0 and o > p:
+        pct = round((o - p) / o * 100)
+        if pct > 0:
+            parts.append(f"-{pct}%")
 
-    if price_val is not None and orig_val and orig_val > 0:
-        discount_amount = max(orig_val - price_val, 0)
-        discount_percent = (discount_amount / orig_val) * 100 if orig_val else None
+    # Kasse (Prozent, dann Betrag)
+    if kasse_info:
+        k_pct = kasse_info.get("percent")
+        k_amt = kasse_info.get("amount")
+        k_cur = (kasse_info.get("currency_hint") or "€").replace("EUR", "€")
+        if k_pct:
+            parts.append(f"-{int(round(k_pct))}%/Kasse")
+        if k_amt:
+            parts.append(f"-{int(round(k_amt))}{k_cur}/Kasse")
 
-    if price_val is not None and coupon_info:
-        cpct = coupon_info.get("percent")
-        camt = coupon_info.get("amount")
-        if cpct:
-            try:
-                final_after_coupon = max(price_val * (1 - cpct / 100.0), 0)
-            except Exception:
-                pass
-        elif camt:
-            try:
-                final_after_coupon = max(price_val - camt, 0)
-            except Exception:
-                pass
+    # Coupon (Prozent, dann Betrag)
+    if coupon_info:
+        c_pct = coupon_info.get("percent")
+        c_amt = coupon_info.get("amount")
+        c_cur = (coupon_info.get("currency_hint") or "€").replace("EUR", "€")
+        if c_pct:
+            parts.append(f"-{int(round(c_pct))}% Coupon")
+        if c_amt:
+            parts.append(f"-{int(round(c_amt))}{c_cur} Coupon")
 
-    def rnd(x: Optional[float]) -> Optional[float]:
-        return round(x, 2) if isinstance(x, (int, float)) else None
+    return " + ".join(parts) if parts else "Kein Rabatt"
+
+# ---------------------------------------------------------------------------
+# Finale Preisberechnung (einzige, robuste Funktion)
+# ---------------------------------------------------------------------------
+
+def compute_final_price_and_discounts(
+    original_price_string: Optional[str],
+    current_price_string: Optional[str],
+    coupon_info: Optional[Dict[str, Any]] = None,
+    kasse_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Berechnet Endpreis + Gesamtrabatt sequentiell und deterministisch.
+
+    Reihenfolge:
+      1) Basispreis = current_price (wenn fehlend -> original_price; sonst 0)
+      2) Prozentuale Checkout-Rabatte (erst Kasse %, dann Coupon %)
+      3) Feste Beträge (erst Kasse €, dann Coupon €)
+
+    Rückgabe:
+      - final_price_after_coupon (formatiert, EUR)
+      - discount_amount (Gesamtersparnis in €)
+      - discount_percent (Gesamt in %, relativ zum Listenpreis – wenn vorhanden)
+      - discount_reason_summary (knappe Erklärung der Schritte)
+    """
+    def _fmt_eur(value: float) -> str:
+        return f"{value:.2f}".replace(".", ",") + "€"
+
+    def _apply_percent(base: float, pct: float) -> Tuple[float, float]:
+        new_price = max(base * (1 - pct / 100.0), 0.0)
+        return new_price, base - new_price
+
+    def _apply_amount(base: float, amt: float) -> Tuple[float, float]:
+        new_price = max(base - amt, 0.0)
+        return new_price, base - new_price
+
+    def _read(info: Optional[dict]) -> Tuple[Optional[float], Optional[float], str]:
+        if not info:
+            return None, None, "€"
+        return info.get("percent"), info.get("amount"), (info.get("currency_hint") or "€").replace("EUR", "€")
+
+    # Eingänge normalisieren
+    orig_val = parse_price_string_to_float(original_price_string)
+    price_val = parse_price_string_to_float(current_price_string)
+    base_price = price_val or orig_val or 0.0
+
+    # Streichpreis-Info (nur für Darstellung/Prozent-Total)
+    list_reduction_pct = None
+    if orig_val > 0 and price_val > 0 and orig_val > price_val:
+        list_reduction_pct = (orig_val - price_val) / orig_val * 100.0
+
+    k_pct, k_amt, k_cur = _read(kasse_info)
+    c_pct, c_amt, c_cur = _read(coupon_info)
+
+    # Sequentielle Anwendung
+    running = base_price
+    total_checkout_amt = 0.0
+    steps: List[str] = []
+
+    if list_reduction_pct is not None and list_reduction_pct > 0:
+        steps.append(f"Reduzierung vom Listenpreis (-{list_reduction_pct:.0f}%)")
+
+    # Prozent zuerst (Kasse → Coupon)
+    if k_pct:
+        running, saved = _apply_percent(running, float(k_pct))
+        total_checkout_amt += saved
+        steps.append(f"Kasse: -{float(k_pct):.0f}%")
+
+    if c_pct:
+        running, saved = _apply_percent(running, float(c_pct))
+        total_checkout_amt += saved
+        steps.append(f"Coupon: -{float(c_pct):.0f}%")
+
+    # Danach feste Beträge (Kasse → Coupon)
+    if k_amt:
+        running, saved = _apply_amount(running, float(k_amt))
+        total_checkout_amt += saved
+        steps.append(f"Kasse: -{float(k_amt):.2f} {k_cur}")
+
+    if c_amt:
+        running, saved = _apply_amount(running, float(c_amt))
+        total_checkout_amt += saved
+        steps.append(f"Coupon: -{float(c_amt):.2f} {c_cur}")
+
+    final_price = running
+
+    # Gesamt-Rabatt in € und %
+    if orig_val > 0:
+        total_discount_amt = orig_val - final_price
+        total_discount_pct = max(min((total_discount_amt / orig_val) * 100.0, 100.0), 0.0)
+    else:
+        total_discount_amt = base_price - final_price
+        total_discount_pct = None  # ohne Listenpreis ist %-Angabe nicht sinnvoll
+
+    long_summary = "Endpreis ermittelt durch: " + " + ".join(steps) + "." if steps else "Kein Rabatt gefunden (Vollpreis)."
 
     return {
-        "discount_amount": rnd(discount_amount),
-        "discount_percent": rnd(discount_percent),
-        "final_price_after_coupon": rnd(final_after_coupon),
+        "discount_amount": round(total_discount_amt, 2),
+        "discount_percent": round(total_discount_pct, 2) if total_discount_pct is not None else None,
+        "final_price_after_coupon": _fmt_eur(final_price),
+        "discount_reason_summary": long_summary,
     }
+
+def parse_discount_percent(explicit_savings: Optional[str]) -> Optional[float]:
+    """
+    Extrahiert Prozent (z. B. '-24 %', '24%', '24') als positive Zahl.
+    """
+    if not explicit_savings:
+        return None
+    m = re.search(r"(\-?\d{1,3}[.,]?\d?)\s?%", explicit_savings)
+    if m:
+        try:
+            return abs(float(m.group(1).replace(",", ".")))
+        except Exception:
+            return None
+    return None
 
 def first_nonempty(*vals: Optional[str]) -> Optional[str]:
     for v in vals:
@@ -215,21 +302,24 @@ def first_nonempty(*vals: Optional[str]) -> Optional[str]:
 
 @dataclass
 class ProductData:
-    # Core identity
+    # Identität
     title: Optional[str] = None
     brand: Optional[str] = None
     asin: Optional[str] = None
 
-    # Pricing
-    price: Optional[Dict[str, Any]] = None
-    original_price: Optional[Dict[str, Any]] = None
-    discount_amount: Optional[float] = None
-    discount_percent: Optional[float] = None
+    # Preise
+    price: Optional[str] = None  # Sichtpreis (VOR Coupon/Kasse)
+    original_price: Optional[str] = None  # Listenpreis/UVP (durchgestrichen)
+    discount_amount: Optional[float] = None  # Gesamtersparnis (Original -> Endpreis)
+    discount_percent: Optional[str] = None   # Gesamtersparnis in % (als String, z. B. "-33%")
     coupon_text: Optional[str] = None
+    kasse_rabatt_text: Optional[str] = None
+    kasse_rabatt_value: Dict[str, Any] = field(default_factory=dict)  # <-- Korrigierter Typ
     coupon_value: Dict[str, Any] = field(default_factory=dict)
-    final_price_after_coupon: Optional[float] = None
+    final_price_after_coupon: Optional[str] = None  # Endpreis NACH allen Rabatten
+    discount_reason_summary: Optional[str] = None   # Erklärung der Preisfindung
 
-    # Availability / delivery
+    # Verfügbarkeit / Versand
     availability: Optional[str] = None
     is_prime: bool = False
     shipping_cost_text: Optional[str] = None
@@ -238,7 +328,7 @@ class ProductData:
     returns_days: Optional[int] = None
     returns_text: Optional[str] = None
 
-    # Social proof
+    # Social Proof
     rating_value: Optional[float] = None
     review_count: Optional[int] = None
     answered_questions: Optional[int] = None
@@ -246,13 +336,13 @@ class ProductData:
     purchases_past_month_is_plus: Optional[bool] = None
     purchases_past_month_raw: Optional[str] = None
 
-    # Ranking / vendor
+    # Ranking / Händler
     bestseller_rank: Optional[str] = None
     seller_name: Optional[str] = None
     seller_rating_percent: Optional[int] = None
     buybox_sold_by: Optional[str] = None
 
-    # Content
+    # Inhalte
     variants: Dict[str, str] = field(default_factory=dict)
     bullets: List[str] = field(default_factory=list)
     description: Optional[str] = None
@@ -260,10 +350,10 @@ class ProductData:
     badges: List[str] = field(default_factory=list)
     deal_badge: Optional[str] = None
 
-    # Product info / tech details
+    # Produktinfos (Technische Daten)
     product_info: Dict[str, Any] = field(default_factory=dict)
-    affiliate_url: Optional[str] = None  # <— diese Zeile hinzufügen
-    # File provenance
+
+    # Quelle
     _source_file: Optional[str] = None
 
 # ---------------------------------------------------------------------------
@@ -271,10 +361,7 @@ class ProductData:
 # ---------------------------------------------------------------------------
 
 class AmazonProductParser:
-    """
-    Encapsulates parsing logic for a single HTML document.
-    Extend by adding methods or enriching selector pools.
-    """
+    """Parser für eine einzelne Amazon-Produktseite (offline HTML)."""
 
     def __init__(self, html_text: str):
         self.html_text = extract_html_from_js_wrapper(html_text)
@@ -283,9 +370,10 @@ class AmazonProductParser:
         except Exception:
             self.soup = BeautifulSoup(self.html_text, "html.parser")
 
-    # --- small helpers bound to soup ---
+    # --- Helpers ---
 
     def _select_text(self, *selectors: str) -> Optional[str]:
+        """Erstes matchendes Element aus Selectors holen, normalisierten Text zurückgeben."""
         for sel in selectors:
             el = self.soup.select_one(sel)
             if el:
@@ -314,7 +402,7 @@ class AmazonProductParser:
                 return m.group(1) if m.groups() else m.group(0)
         return None
 
-    # --- extractors ---
+    # --- Extractors ---
 
     def extract_core(self, data: ProductData) -> None:
         data.title = self._select_text(
@@ -330,7 +418,7 @@ class AmazonProductParser:
             "tr.po-brand td.a-span9 span",
             "div#bylineInfo_feature_div",
         )
-        # ASIN via tables or data-asin
+        # ASIN
         asin = None
         for table in self.soup.select("table, div#detailBulletsWrapper_feature_div, div#productDetails_detailBullets_sections1"):
             cells = table.select("th, td")
@@ -351,6 +439,10 @@ class AmazonProductParser:
         data.asin = asin
 
     def extract_prices(self, data: ProductData) -> None:
+        """
+        Extrahiert Sichtpreis/Listenpreis + Coupon und 'an der Kasse' und berechnet den Endpreis.
+        """
+        # 1) Aktueller Sichtpreis (VOR Checkout-Rabatten)
         price_text = self._select_text(
             "#corePrice_feature_div span.a-price span.a-offscreen",
             "#priceblock_ourprice",
@@ -358,49 +450,55 @@ class AmazonProductParser:
             "#priceblock_saleprice",
             "span.a-price.aok-align-center .a-offscreen",
         )
-        data.price = clean_price(price_text) if price_text else None
+        data.price = clean_price(price_text)
 
+        # 2) Durchgestrichener Preis (Listenpreis/UVP)
         list_price_text = self._select_text(
-            "#price span.a-text-price .a-offscreen",
-            ".priceBlockStrikePriceString",
-            "#priceblock_ourprice_row .a-text-strike",
-            "#price-basis span.a-offscreen",
-            "span.a-price.a-text-price .a-offscreen",
-            "span.a-price[data-a-strike='true'] .a-offscreen",
-            "td.a-span12 span.a-color-secondary.a-text-strike",
+            "span.basisPrice .a-offscreen",
+            "#price span.a-text-price .a-offscreen"
         )
         data.original_price = clean_price(list_price_text) if list_price_text else None
 
-        # explicit savings %
-        explicit_savings = self._select_text(
-            "#corePrice_feature_div span.savingsPercentage",
-            ".priceBlockSavingsString",
-        )
-        explicit_pct = None
-        if explicit_savings:
-            m = re.search(r"(\-?\d{1,3}[.,]?\d?)\s?%", explicit_savings)
-            if m:
-                try:
-                    explicit_pct = float(m.group(1).replace(",", "."))
-                except Exception:
-                    pass
-
+        # 3) Coupon (z. B. "10% Coupon" oder "5 € Coupon")
         coupon_text = self._select_text(
-            "#promoPriceBlockMessage_feature_div",
-            "#couponFeatureDiv li",
+            "span.couponLabelText",
             "span.couponBadge",
             "span#couponText",
-            "span[data-csa-c-content-id='couponBadge']",
-            "div#promo_feature_div span",
-            "div#coupon_feature_div span",
         )
         data.coupon_text = norm_space(coupon_text) if coupon_text else None
         data.coupon_value = parse_coupon_value(data.coupon_text)
 
-        comp = compute_discount_fields(data.price, data.original_price, data.coupon_value)
+        # 4) Rabatt an der Kasse (Success-Alert o.ä.)
+        kasse_text = self._select_text(
+            "span[data-csa-c-type='item'] div.a-alert-inline-success div.a-alert-content",
+            "div.a-box-inner.a-alert-container .a-alert-content",
+            "#promoPriceBlockMessage_feature_div",
+            "#couponFeatureDiv li",
+            "div#promo_feature_div span",
+            "div#coupon_feature_div span",
+        )
+        data.kasse_rabatt_text = norm_space(kasse_text) if kasse_text else None
+        data.kasse_rabatt_value = parse_coupon_value(data.kasse_rabatt_text)
+
+        # 5) Fallback: Wenn gar kein Listenpreis existiert, lassen wir ihn None (Prozent dann 'N/A')
+        #    Die Berechnung nutzt in diesem Fall den Sichtpreis als Basis.
+
+        # 6) Finale Berechnung
+        comp = compute_final_price_and_discounts(
+            data.original_price,
+            data.price,
+            data.coupon_value,
+            data.kasse_rabatt_value
+        )
+
+        # Ergebnisse speichern
         data.discount_amount = comp["discount_amount"]
-        data.discount_percent = comp["discount_percent"] if comp["discount_percent"] is not None else explicit_pct
+        if comp["discount_percent"] is not None:
+            data.discount_percent = f"-{comp['discount_percent']:.0f}%"
+        else:
+            data.discount_percent = "N/A"
         data.final_price_after_coupon = comp["final_price_after_coupon"]
+        data.discount_reason_summary = comp["discount_reason_summary"]
 
     def extract_availability_and_delivery(self, data: ProductData) -> None:
         data.availability = self._select_text("#availability span", "#availability", "#outOfStock")
@@ -420,7 +518,7 @@ class AmazonProductParser:
         data.returns_text = first_nonempty(
             self._select_text("#returns_policy", "a#returns-policy-anchor", "#RETURNS_POLICY a", "div#retail-seller_profile_container"),
             self._select_text("a#freeReturns", "div#RETURNS_POLICY", "span#FREE_RETURNS"),
-            self._find_by_regex([r"Kostenlose Rückgabe", r"free returns"]),
+            self._find_by_regex([r"(Kostenlose Rückgabe|free returns)"]),
         )
         if data.returns_text:
             data.free_returns = bool(re.search(r"(Kostenlose Rückgabe|free returns)", data.returns_text, flags=re.I))
@@ -467,7 +565,7 @@ class AmazonProductParser:
                 except Exception:
                     pass
 
-        # --- "Bought in past month" / "gekauft im letzten Monat" (handles "100+ gekauft ...")
+        # „Gekauft im letzten Monat“ (z. B. „100+ gekauft …“)
         purchases_raw = self._find_by_regex(
             [
                 r"(\d[\d\.\,]*\+?)\s*(?:bought in the past month|bought in past month)",
@@ -483,7 +581,6 @@ class AmazonProductParser:
                 data.purchases_past_month = val
                 data.purchases_past_month_is_plus = True if is_plus else False
             except Exception:
-                # fallback: try to catch "100+" where formatting is odd
                 m = re.search(r"(\d+)\s*\+", purchases_raw)
                 if m:
                     data.purchases_past_month = int(m.group(1))
@@ -517,10 +614,9 @@ class AmazonProductParser:
 
     # ---- PRODUCT INFO / TECH DETAILS ----
     def _normalize_info_key(self, k: str) -> str:
-        """Normalize German/English keys to stable snake_case."""
+        """De/En-Schlüssel → stabile snake_case Keys."""
         k_norm = norm_space(k).lower()
         mapping = {
-            # de -> en (common)
             "hersteller": "manufacturer",
             "marke": "brand",
             "modellnummer": "model_number",
@@ -547,21 +643,18 @@ class AmazonProductParser:
             "herstellerreferenz": "manufacturer_reference",
             "modellar": "model_number",
         }
-        # try simple mapping first
         if k_norm in mapping:
             return mapping[k_norm]
-        # generic normalize
         k_norm = re.sub(r"[^a-z0-9]+", "_", k_norm).strip("_")
         return k_norm
 
     def _collect_key_values(self, container) -> Dict[str, str]:
         """
-        Given a details container (table/div list), try to read key->value pairs.
-        Works with various Amazon layouts.
+        Liest Key/Value-Paare aus diversen Layouts (Tabellen, dl/dd, po-rows).
         """
         kv: Dict[str, str] = {}
 
-        # 1) Key in <th>, value in next <td>
+        # 1) Klassisch: th/td
         for row in container.select("tr"):
             th = row.find("th")
             td = row.find("td")
@@ -571,7 +664,7 @@ class AmazonProductParser:
                 if key and val:
                     kv[key] = val
 
-        # 2) Detail bullets (dt/dd like)
+        # 2) dl/dt/dd
         for dl in container.select("dl"):
             dts = dl.select("dt")
             dds = dl.select("dd")
@@ -581,9 +674,8 @@ class AmazonProductParser:
                 if key and val:
                     kv[key] = val
 
-        # 3) Bullet list inside detail wrapper
+        # 3) Bullets mit bold key
         for li in container.select("li"):
-            # pattern: <span class="a-text-bold">Key:</span> Value
             bold = li.select_one("span.a-text-bold")
             if bold:
                 key = norm_space(bold.get_text()).rstrip(":")
@@ -591,7 +683,7 @@ class AmazonProductParser:
                 if key and val:
                     kv[key] = val
 
-        # 4) A newer "po-" table structure (mobile/desktop)
+        # 4) Neues "po-" Layout
         for row in container.select("div.po-row, div.po-item, tr.po-row"):
             lab = row.select_one(".po-attribute-name, .a-span3, th")
             val = row.select_one(".po-attribute-value, .a-span9, td")
@@ -603,12 +695,9 @@ class AmazonProductParser:
         return kv
 
     def extract_product_info(self, data: ProductData) -> None:
-        """
-        Parse 'Produktinformationen' / 'Technische Daten' blocks from various layouts.
-        """
+        """Produktinformationen / Technische Daten einsammeln."""
         info_blocks = []
 
-        # Classic details sections
         for sel in [
             "#productDetails_detailBullets_sections1",
             "#productDetails_techSpec_section_1",
@@ -620,21 +709,17 @@ class AmazonProductParser:
             if el:
                 info_blocks.append(el)
 
-        # A+ and mobile layouts may use "po-" prefixed containers
         for el in self.soup.select("div#poExpander, div#poDocumentCarousel, div#technicalSpecifications_feature_div"):
             info_blocks.append(el)
 
-        # Aggregate key-values
         raw_kv: Dict[str, str] = {}
         for blk in info_blocks:
             raw_kv.update(self._collect_key_values(blk))
 
-        # Normalize keys
         normalized: Dict[str, Any] = {}
         for k, v in raw_kv.items():
             nk = self._normalize_info_key(k)
             if nk in normalized and normalized[nk] != v:
-                # Keep first, also store under nk__alt if different
                 suffix = 2
                 while f"{nk}__alt{suffix}" in normalized:
                     suffix += 1
@@ -642,20 +727,15 @@ class AmazonProductParser:
             else:
                 normalized[nk] = v
 
-        # If manufacturer missing but brand present, set as fallback
         if "manufacturer" not in normalized and data.brand:
             normalized["manufacturer"] = data.brand
-
-        # If ASIN missing but we have data.asin
         if "asin" not in normalized and data.asin:
             normalized["asin"] = data.asin
 
-        data.product_info = {                      # original keys as seen on page
-            "normalized": normalized  # normalized keys for stable usage
-        }
+        data.product_info = {"normalized": normalized}
 
     def extract_content(self, data: ProductData) -> None:
-        # variants (size/color)
+        # Varianten
         for block in self.soup.select("div#twister, div#variation_size_name, div#variation_color_name"):
             label = block.select_one("label")
             lab = norm_space(label.get_text()) if label else None
@@ -664,7 +744,7 @@ class AmazonProductParser:
             if lab or sel:
                 data.variants[lab or "variant"] = sel
 
-        # bullets
+        # Bullets
         bullets = [
             norm_space(li.get_text())
             for li in self.soup.select("#feature-bullets li:not(.aok-hidden)")
@@ -672,7 +752,7 @@ class AmazonProductParser:
         ]
         data.bullets = bullets
 
-        # description
+        # Beschreibung
         for sel in ["#productDescription", "div#aplus_feature_div", "div#productDescription_feature_div"]:
             el = self.soup.select_one(sel)
             if el:
@@ -681,7 +761,7 @@ class AmazonProductParser:
                     data.description = desc
                     break
 
-        # images
+        # Bilder
         seen: set = set()
         for img_container in self.soup.select("img[data-a-dynamic-image]"):
             raw = img_container.get("data-a-dynamic-image", "")
@@ -696,53 +776,193 @@ class AmazonProductParser:
                 seen.add(src)
                 data.images.append(src)
 
-        # badges
+        # Badges
         for b in self.soup.select("span.badge-label, span.a-badge-label-inner, i.a-icon-amazons-choice, i.a-icon-bestseller"):
             t = norm_space(b.get_text())
             if t and t not in data.badges:
                 data.badges.append(t)
 
-        # deal badge / promo keywords
+        # Deal-Hinweise
         data.deal_badge = first_nonempty(
             self._select_text("span#dealBadge_feature_div", "span.a-badge-label-inner", "span.dealBadge"),
             self._find_by_regex([r"(Lightning Deal|Blitzangebot|Prime Day|Angebot des Tages|Deal)"]),
         )
-   
+
     def extract_shortlink(self, data: ProductData) -> None:
-        """
-        Extracts Amazon shortlink from id='amzn-ss-text-shortlink-textarea'
-        Example:
-            <textarea id="amzn-ss-text-shortlink-textarea" class="amzn-ss-text-shortlink-textarea">https://amzn.to/3xyz</textarea>
-        """
+        """Extrahiert Amazon-Shortlink (z. B. amzn.to), falls vorhanden."""
         el = self.soup.select_one("#amzn-ss-text-shortlink-textarea.amzn-ss-text-shortlink-textarea")
         if el:
             shortlink = norm_space(el.get_text() or el.get("value") or "")
             if shortlink:
-               data.affiliate_url = shortlink
-    # --- public API ---
+                data.product_info["shortlink"] = shortlink
 
+    # --- Public API ---
+    def extract_images(self, data: ProductData) -> None:
+        # Bilder
+        seen: set = set()
+
+        # 1. Bildquellen aus dynamischen Attributen ('data-a-dynamic-image')
+        for img_container in self.soup.select("img[data-a-dynamic-image]"):
+            raw = img_container.get("data-a-dynamic-image", "")
+            urls = re.findall(r'"(https?://[^"]+)"', raw)
+            
+            for u in urls:
+                if u not in seen and u.startswith("http"):
+                    seen.add(u)
+                    # <<< HIER WIRD DIE URL DEM ARRAY HINZUGEFÜGT >>>
+                    data.images.append(u) 
+        
+        # 2. Bildquellen aus statischen Attributen (src, data-src, data-old-hires)
+        for img in self.soup.select("#imgTagWrapperId img, #altImages img, img#landingImage, #main-image-container img"):
+            src = img.get("src") or img.get("data-src") or img.get("data-old-hires")
+            
+            if src and src.startswith("http") and src not in seen:
+                seen.add(src)
+                # <<< HIER WIRD DIE URL DEM ARRAY HINZUGEFÜGT >>>
+                data.images.append(src)
+
+    
     def parse(self) -> ProductData:
         data = ProductData()
         self.extract_core(data)
-        self.extract_prices(data)
-        self.extract_availability_and_delivery(data)
-        self.extract_social_proof(data)
-        self.extract_ranking_and_vendor(data)
-        self.extract_product_info(data)   # NEW
-        self.extract_content(data)
+        #self.extract_prices(data)
+        #self.extract_availability_and_delivery(data)
+        #self.extract_social_proof(data)
+        #self.extract_ranking_and_vendor(data)
+        #self.extract_product_info(data)
+        #self.extract_content(data)
+        self.extract_images(data)
         self.extract_shortlink(data)
-
         return data
 
 # ---------------------------------------------------------------------------
-# Ingestion Pipeline
+# Schema Mapping -> Ziel-Struktur
+# ---------------------------------------------------------------------------
+
+def to_b0_schema(product: "ProductData") -> Dict[str, Any]:
+    """
+    Mappt ProductData -> Zielschema (kompakt & UI-freundlich).
+    """
+    price_obj = product.price
+    orig_obj = product.original_price
+    discount_percent_str = product.discount_percent if product.discount_percent else "N/A"
+
+    # Endpreis ist der relevante Preis fürs Frontend
+    final_price_for_schema = product.final_price_after_coupon
+
+    # Rating Block
+    rating_block = None
+    if product.rating_value is not None or product.review_count is not None:
+        rating_block = {"value": product.rating_value, "counts": product.review_count}
+
+    # Features / Bullets
+    features_list = product.bullets or []
+    feature_text = " • ".join(features_list) if features_list else None
+    description_text = product.description or None
+
+    # Units Sold
+    units_sold: Optional[str] = None
+    if product.purchases_past_month is not None:
+        units_sold = f"{product.purchases_past_month}{'+' if product.purchases_past_month_is_plus else ''} im letzten Monat"
+    elif product.purchases_past_month_raw:
+        units_sold = product.purchases_past_month_raw
+
+    # Coupon-Block (nur zur Anzeige; Code nicht geparst)
+    coboun_more = None
+    if product.coupon_text:
+        coboun_more = product.coupon_text
+    coboun_block = {"code": "N/A", "code_details": "N/A", "more": coboun_more}
+
+    # Affiliate URL / Shortlink
+    affiliate_url = None
+    if product.asin:
+        affiliate_url = f"https://www.amazon.de/dp/{product.asin}"
+    try:
+        shortlink = product.product_info.get("shortlink")
+        if shortlink:
+            affiliate_url = shortlink
+    except Exception:
+        pass
+
+    # Technische Details (geflattet)
+    tech_details_flat: Dict[str, Any] = product.product_info.get("normalized", {})
+
+    # Kurzer Rabatt-Text (komplett, inkl. Kasse & Coupon)
+    rabatt_kurztext = build_short_discount_label(
+        product.original_price,
+        product.price,
+        product.coupon_value,
+        product.kasse_rabatt_value
+    )
+
+    out = {
+        # CORE / IDENTITÄT
+        "title": product.title or None,
+        "market": "AMAZON",
+        "affiliate_url": affiliate_url,
+        "brand": product.brand or None,
+        "product_id": product.asin or None,
+
+        # PREISE / RABATTE
+        "price": final_price_for_schema,          # Endpreis (NACH allen Rabatten)
+        "original_price": orig_obj,               # Listenpreis (falls vorhanden)
+        "discount_amount": product.discount_amount,
+        "discount_percent": discount_percent_str, # Gesamt-Rabatt in %
+        "coupon_text": product.coupon_text or None,
+        "coupon_value": {
+            "percent": product.coupon_value.get("percent") if product.coupon_value else None,
+            "amount": product.coupon_value.get("amount") if product.coupon_value else None,
+            "currency_hint": product.coupon_value.get("currency_hint") if product.coupon_value else None,
+        },
+        "rabatt_details": rabatt_kurztext,                 # kurz & eindeutig
+        "rabatt_details_lang": product.discount_reason_summary,  # Erklärung
+
+        # SOCIAL PROOF
+        "rating": rating_block,
+        "review_count": product.review_count,
+        "answered_questions": product.answered_questions,
+        "units_sold": units_sold,
+        "purchases_past_month": product.purchases_past_month,
+        "purchases_past_month_is_plus": product.purchases_past_month_is_plus,
+
+        # HÄNDLER / VERFÜGBARKEIT
+        "seller_name": product.seller_name or None,
+        "buybox_sold_by": product.buybox_sold_by or None,
+        "seller_rating_percent": product.seller_rating_percent,
+        "bestseller_rank_text": product.bestseller_rank,
+        "availability": product.availability or None,
+        "is_prime": product.is_prime,
+        "shipping_info": product.shipping_cost_text or None,
+        "delivery_date": product.delivery_date or None,
+        "returns_text": product.returns_text,
+        "free_returns": product.free_returns,
+
+        # INHALT / MEDIEN
+        "images": product.images or [],
+        "features": features_list,
+        "feature_text": feature_text,
+        "description": description_text,
+        "bullets": features_list,  # Dupliziert für Redundanz
+        "variants": product.variants,
+        "badges": product.badges,
+        "deal_badge": product.deal_badge,
+
+        # TECHNISCHE DETAILS
+        "technical_details": tech_details_flat,
+
+        # QUELLE
+        "_source_file": product._source_file,
+    }
+    return out
+
+# ---------------------------------------------------------------------------
+# CLI
 # ---------------------------------------------------------------------------
 
 class InboxPipeline:
     """
-    Reads all supported files from an input folder and writes JSON outputs.
+    Liest HTML aus --inbox und schreibt JSON nach --out.
     """
-
     def __init__(self, inbox_dir: Path, out_dir: Path):
         self.inbox_dir = inbox_dir
         self.out_dir = out_dir
@@ -773,10 +993,12 @@ class InboxPipeline:
                     product._source_file = str(fp.resolve())
 
                     out_json = self.out_dir / f"{fp.stem}.json"
+                    # Zielschema anwenden
+                    data = to_b0_schema(product)
                     with out_json.open("w", encoding="utf-8") as f:
-                        json.dump(asdict(product), f, ensure_ascii=False, indent=2)
+                        json.dump(data, f, ensure_ascii=False, indent=2)
 
-                    summary_out.write(json.dumps(asdict(product), ensure_ascii=False) + "\n")
+                    summary_out.write(json.dumps(data, ensure_ascii=False) + "\n")
 
                     parsed += 1
                     print(f"[OK] {fp.name} -> {out_json.name}")
@@ -787,10 +1009,6 @@ class InboxPipeline:
         print(f"\nSummary: parsed={parsed}, errors={errors}, out={self.out_dir}")
         print(f"Summary file: {summary_path}")
         return parsed, errors
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser(description="Robust Amazon product HTML parser (offline).")

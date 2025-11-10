@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "Modular Deal Scraper",
+  "version": "1.0",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "scripting",
+    "webRequest",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*.mydealz.de/*",
+    "*://*.mydealz.com/*",
+    "*://*.dealdoktor.de/*",
+    "*://*.dealbunny.de/*",
+    "*://*.mytopdeals.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Deal Scheduler",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.mydealz.de/*", "*://*.mydealz.com/*"],
+      "js": ["content_mydealz.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.dealdoktor.de/*"],
+      "js": ["content_dealdoktor.js"],
+      "run_at": "document_idle"
+    },
+     {
+      "matches": ["*://*.mein-deal.com/*"],
+      "js": ["content_meindeals.js"],
+      "run_at": "document_idle"
+    },     
+    {
+     "matches": ["*://*.dealbunny.de/*"],
+      "js": ["content_dealbunny.js"] ,
+      "run_at": "document_idle"
+    },
+    {
+     "matches": ["*://*.mytopdeals.net/*"],
+      "js": ["content_mytopdeals.js"] ,
+      "run_at": "document_idle"
+    }
+  ]
+}

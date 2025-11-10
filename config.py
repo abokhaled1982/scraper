@@ -11,7 +11,7 @@ OUT_DIR = DATA_DIR / "out"
 PRODUCKT_DIR = DATA_DIR / "produckt"   # <- NEBEN inbox
 
 # Input- und Output-Pfade
-HTML_SOURCE_FILE = DATA_DIR / "html" / "ebay.html" 
+HTML_SOURCE_FILE = DATA_DIR / "html" / "playstation.html"
 TEMP_LLM_INPUT_FILE = DATA_DIR / "llm_input" / "llm_input.json"
 
 

@@ -260,6 +260,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return;
     }
 
+    if (msg?.type === "CLOSE_CURRENT_TAB") {
+      const tabId = _sender.tab?.id;
+      if (tabId) {
+        // Schließe den Tab, der die Nachricht gesendet hat
+        await chrome.tabs.remove(tabId).catch(e => console.error("Error closing tab:", e));
+        console.log(`[bg] Closed tab with ID: ${tabId}`);
+        sendResponse({ ok: true, closed: tabId });
+        return;
+      }
+      sendResponse({ ok: false, error: "no_tab_id" });
+      return;
+    }
+
     if (msg?.type === "DOWNLOAD_FILE") {
       const { filename, content, mime = "text/html;charset=utf-8" } = msg;
       try {

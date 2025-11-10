@@ -1,12 +1,4 @@
-# ai_extractor.py
-"""
-Definiert die Pydantic-Datenmodelle und die Logik zur LLM-gestützten Extraktion.
-
-AKTUALISIERUNGEN: 
-1. Der LLM-Prompt wurde aktualisiert, um die aus dem HTML-Parser 
-   vorangestellte 'KANONISCHE URL' im bereinigten Text zu priorisieren.
-2. Die Anweisung zur Sortierung der Bilder (Hauptbild an Index 0) wird beibehalten.
-"""
+# ai_extractor.py — CLEANED VERSION
 
 import os
 import json
@@ -21,12 +13,7 @@ load_dotenv()
 
 # --- 1. LLM-DATENMODELLE ---
 
-class Produktbild(BaseModel):
-    """Repräsentiert eine URL des Hauptproduktbildes mit ihrem Größendeskriptor."""
-    url: str = Field(description="Die absolute URL zur Bilddatei.")
-    groessen_deskriptor: str = Field(
-        description="Der Breiten- oder Dichte-Deskriptor, z.B. '480w' (Mobile), '1200w' (Desktop) oder '2x' (Retina). Wähle den besten Deskriptor, der zur URL passt, oder schätze diesen ('1x' als Standard)."
-    )
+# --- 1. LLM-DATENMODELLE ---
 
 class Gutschein(BaseModel):
     """Repräsentiert spezifische Gutschein-Informationen."""
@@ -35,134 +22,143 @@ class Gutschein(BaseModel):
 
 class Produktinformation(BaseModel):
     """Strukturierte Daten, die von der Produktseite extrahiert werden sollen."""
-    titel: str = Field(description="Der vollständige, aussagekräftige Produkt-Titel aus dem Text.")
-    sku_asin: str = Field(description="Die eindeutige Produktnummer (ASIN, SKU, EAN, MPN oder eine ähnliche Produktkennung) aus dem Text. Gib 'N/A' an, wenn keine gefunden wird.")
-    
-    # Feld für die Produkt-URL
-    url_des_produkts: str = Field(description="Die vollständige und bereinigte URL der Produktseite. PRIORITY: Extrahiere diese aus dem Abschnitt 'KANONISCHE URL VOM PARSER' im bereinigten Text, falls vorhanden.")
-
+    produkt_titel: str = Field(description="Der vollständige und präzise Titel des Produkts.")
     marke: str = Field(description="Die Marke oder der Hersteller des Produkts.")
-    akt_preis: str = Field(description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €).")
-    uvp_preis: str = Field(description="Der ursprüngliche Preis (UVP) vor dem Rabatt oder 'N/A'.")
-    rabatt_prozent: str = Field(description="Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'.")
-    rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für einen Rabatt, z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', 'Sonderpreis', 'Befristetes Angebot' oder 'N/A'.")
-
-    bewertung: str = Field(description="Die numerische Produktbewertung auf einer 5er-Skala. Erkenne und extrahiere den Wert aus möglichst vielen Varianten, z. B.: "
-        "• Deutsch: 'X,X von 5 Sternen', 'X.X von 5', 'Bewertung: X,0/5', 'Durchschnitt: X,X/5', 'X,X Sterne', 'Note X,X/5', '⭐ X,X/5' "
-        "• Englisch: 'X.X out of 5', 'Rated X.X/5', 'X/5 stars', 'average rating X.X/5', 'X.X ★ out of 5' "
-        "• Weitere Muster: 'X,X / 5', 'X.X/ 5', 'X von fünf', 'X/5⭐', '★ X,X von 5', 'X,0 /5', 'X (von 5)' "
-        "• Erlaube Dezimaltrennzeichen ',' oder '.' sowie optionale Leerzeichen/Symbole (★, ⭐, Stern(e), stars). "
-        "Normalisierung: Ersetze Komma durch Punkt und gib immer mit Dezimalpunkt zurück (z. B. '4,4' → '4.4'). "
-        "Ganzzahlen (z. B. '4 von 5', '4/5') als '4.0' ausgeben. "
-        "Skalen-Annahme: Nur 5er-Skala akzeptieren; verwende die Zahl nur, wenn der Kontext klar '… von 5', '/5', 'out of 5' impliziert "
-        "oder 'Sterne/stars' unmittelbar genannt sind. Andernfalls ignorieren (z. B. 'Top 5', '5 Sterne-System' sind zu ignorieren). "
-        "Mehrfachvorkommen: Wähle die prominenteste/aggregierte Produktbewertung (nicht einzelne Nutzerkommentare). "
-        "Bereich: Werte außerhalb 0–5 verwerfen. "
-        "Fallback: Bei fehlenden/unbrauchbaren Daten '0.0'.")
-    anzahl_bewertungen: str = Field(description="Die Gesamtzahl der Bewertungen/Rezensionen. Erkenne Varianten in unterschiedlichen Sprachen und Schreibweisen, z. B.: "
-        "• Deutsch: '(123 Kundenrezensionen)', '1.234 Bewertungen', 'über 1.000 Rezensionen', 'Basierend auf 37 Bewertungen' "
-        "• Englisch: '1,234 reviews', '1.2K ratings', '2M reviews', 'based on 37 reviews' "
-        "• Weitere: '12 345 Rezensionen' (geschützte Leerzeichen), '12 345 reviews' (Leerzeichen als Tausendertrennzeichen), '≈1.2k', '1.2k+' "
-        "Extrahiere NUR die Zahl, entferne Klammern, Wörter und Trennzeichen (Punkt, Komma, Leerzeichen, schmale/geschützte Leerzeichen). "
-        "Kompakt-Notation auflösen: '1,2K'/'1.2k' → '1200'; '2M' → '2000000'; '3B' → '3000000000'. Suffixe case-insensitive (k/m/b). "
-        "Ungefähre Angaben ('~', '≈', '+', 'über', 'mehr als', 'more than') ignorieren und nur die Zahl umsetzen. "
-        "Wenn explizit 'keine Bewertungen', 'no reviews', '0 Bewertungen' o. ä., dann '0'. "
-        "Bei Mehrfachzahlen wähle diejenige, die ausdrücklich die Gesamtmenge der Rezensionen bezeichnet (meist gemeinsam mit Wörtern wie 'Bewertungen', 'Rezensionen', 'reviews', 'ratings'). "
-        "Fallback: Bei fehlenden/unklaren Daten 'N/A'.")
-
-    gutschein: Gutschein = Field(description="Informationen über Gutscheine.")
-    verfuegbarkeit: str = Field(description="Die Verfügbarkeit des Produkts, z.B. 'Auf Lager' oder 'Nicht auf Lager'.")
-    produkt_highlights: list[str] = Field(description="Eine Liste der wichtigsten Produktmerkmale/Highlights (Bullet-Points).")
-    images: list[Produktbild] = Field(
-        description="Eine Liste der relevantesten URLs des Hauptproduktbildes, wobei nur die beste/größte URL pro Bild mit ihrem Größendeskriptor angegeben wird."
+    
+    # NEUE LOGIK: Muss den finalen, niedrigsten Preis berechnen!
+    akt_preis: str = Field(
+        description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €). Dieses Feld MUSS den FINALEN, niedrigsten Preis nach Anwendung des HÖCHSTEN RABATTS (Code oder Aktion) enthalten. Der Wert muss berechnet und mit Währung angegeben werden."
     )
 
-
-# --- 2. LLM-LOGIK UND IMPLEMENTIERUNG ---
+    # NEUES FELD: Originalpreis
+    original_preis: str = Field(
+        description=(
+            "Der ursprüngliche, durchgestrichene Preis, der UVP, oder der Preis vor einem Rabatt (z.B. 49,99 €). "
+            "**WICHTIGE LOGIK:** Falls kein expliziter UVP/Originalpreis im Text gefunden wird (kein 'durchgestrichener Preis'), "
+            "MUSS dieser Wert dem berechneten **'akt_preis'** entsprechen. "
+            "Dies stellt sicher, dass dieses Feld niemals leer ist und die Logik konsistent bleibt, wenn kein Rabatt angewendet wird."
+        )
+    )
+    
+    # NEUE LOGIK: Muss den Rabatt vom UVP zum NEU berechneten akt_preis berechnen!
+    rabatt_prozent: str = Field(
+        description=(
+            "Der Rabatt in Prozent, z.B. '-35%' oder 'N/A'. MUSS EXAKT VOM 'original_preis' ZUM FINALEN, BERECHNETEN 'akt_preis' AUSGERECHNET WERDEN. "
+            "Wenn 'akt_preis' gleich 'original_preis' ist, MUSS dieses Feld **'N/A'** sein. "
+            "**WICHTIGE LOGIK:** Wenn das LLM nur den Rabattprozentsatz findet, MUSS es 'original_preis' oder 'akt_preis' berechnen, um die mathematische Logik zu erfüllen. "
+            "Das Ergebnis muss in Prozent ('-XX%') angegeben werden."
+        )
+    )
+    marktplatz: str = Field(description="Der Name des Marktplatzes/Shops (z.B. Amazon, Otto, MediaMarkt, oder 'N/A').")
+   
+    produkt_id: str = Field(description="Die eindeutige Produktkennung wie ASIN, SKU oder Produktnummer. Falls keine gültige Produktkennung gefunden wird, verwende den String: **'produkt titel-der preis'**, wobei **alle Leerzeichen und Kommas** durch Bindestriche (-) ersetzt werden sollen")
+    hauptprodukt_bilder: list[str] = Field(
+    description=(
+        "Eine Liste der relevantesten Produktbild-URLs als Strings. **Das LLM MUSS diese Prioritäten strikt einhalten:** "
+        
+        # 1. Höchste Priorität: Auflösung & Eindeutigkeit
+        "**1. Hohe Auflösung/Größe** (Idealerweise Breite > 800px). "
+        "**2. Eindeutige Produktfotos** – Schließe immer URLs aus, die Screenshots, Logos, Icons, oder generische Marketing-Grafiken darstellen (Negativ-Keywords wie 'screenshot', 'logo', 'icon', 'design ohne titel' deuten auf sekundäre Assets hin). "
+        
+        # 2. Konsistenz (NEU: Format-Konsistenz)
+        "**3. Format-Konsistenz:** Die ausgewählten Bilder **MÜSSEN** das dominierende Dateiformat (z.B. nur JPGs oder nur WebPs) der hochauflösenden Kandidaten verwenden. URLs mit abweichenden Formaten (z.B. ein PNG in einer JPG-Serie) sind **auszuschließen**."
+        "**4. Benennungs-Konsistenz:** Priorisiere Bilder, die Teil einer Serie sind (z.B. nummerierte Fotos oder gleiche Präfixe/Asset-IDs), da sie zusammengehörige Produktansichten sind."
+        
+        # 3. Technische Korrektur
+        "**WICHTIGE REGEL ZUR KORREKTUR:** Falls eine gefundene URL **relativ** ist (beginnt z.B. mit '/'), **MUSS** sie mithilfe der im Prompt bereitgestellten kanonischen Produkt-URL in eine **ABSOLUTE, vollständige Web-URL** umgewandelt werden (z.B. https://shop.de/bild.jpg)."
+    )
+)
+    url_des_produkts: str = Field(description="Die kanonische URL des Produkts. Verwende 'N/A', falls nicht gefunden.")
+    bewertung_wert: float = Field(description="Der numerische Bewertungswert (Stern), z.B. 4.1.")
+    anzahl_reviews: int = Field(description="Die Gesamtzahl der Bewertungen.")
+    anzahl_verkauft: str = Field(description="Die Anzahl verkaufter Produkte (z.B. 'Über 1000 verkauft' oder 'N/A').")
+    haendler_verkaeufer: str = Field(description="Der Händler oder Verkäufername.")
+    verfuegbarkeit: str = Field(description="Informationen zur Verfügbarkeit.")
+    lieferinformation: str = Field(description="Details zur Lieferung.")
+    
+    gutschein_code: str = Field(description="Der Gutscheincode oder 'N/A'.")    
+    # Logik für die Beschreibung beibehalten
+    gutschein_details: str = Field(
+        description="Die vollständige Beschreibung (Gültigkeit, Bedingungen, Einschränkungen) des Gutscheincodes. WIRD NUR BEFÜLLT, WENN 'gutschein_code' VORHANDEN IST, sonst 'N/A'. WICHTIG: Die Endpreis-Information muss hier zusätzlich genannt werden, z.B. '...der Endpreis beträgt dann XX,XX €', um die Berechnung für den 'akt_preis' zu dokumentieren."
+    )   
+    rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für EINEN ANDEREN Rabatt, der KEINEN Code erfordert (z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', '10% bei Newsletter-Anmeldung', 'Sonderpreis') oder 'N/A'.")
+# --- 2. LLM-FUNKTIONEN ---
 
 def baue_pattern_pack():
-    """Erstellt das Pattern Pack für die LLM-Extraktion."""
-    schema_definition = Produktinformation.model_json_schema()
-    return {"output_schema": schema_definition}
-
-def extrahiere_produktsignale(clean_text: str, bild_kandidaten_list: list[str], pack: dict) -> dict:
-    """Führt die LLM-Extraktion durch."""
-    try:
-        client = genai.Client()
-    except Exception:
-        raise EnvironmentError("GOOGLE_API_KEY ist nicht gesetzt oder ungültig.")
-    
-    # Prompt-Anpassung, um die URL-Priorisierung zu betonen
-    prompt = f"""
-    Extrahiere die folgenden Produktinformationen aus dem bereitgestellten Text und den Bild-Kandidaten.
-    
-    1. Fülle 'titel' mit dem vollständigsten und besten Produktnamen.
-    2. Fülle 'sku_asin' mit der eindeutigen Produktnummer (ASIN, SKU, EAN o.ä.) aus dem Text.
-    3. **WICHTIG (url_des_produkts):** Prüfe den Anfang des BEREINIGTEN TEXTES auf einen Block mit der Bezeichnung 'KANONISCHE URL VOM PARSER'. Wenn eine URL dort vorhanden ist, verwende diese für das Feld 'url_des_produkts'. Ansonsten extrahiere die beste URL aus dem Rest des Textes.
-    4. Fülle 'rabatt_text' mit dem allgemeinen Rabatt- oder Angebotstext.
-    5. Fülle 'gutschein.code' NUR mit dem tatsächlichen Gutscheincode.
-    6. **WICHTIG (images):** Im Array 'images' muss das **Hauptproduktbild** zwingend an die **erste Stelle (Index 0)** gesetzt werden. Das LLM muss die Bilder selbstständig nach Relevanz für das Hauptprodukt sortieren.
-
-    Gib 'N/A' an, wenn die Information fehlt.
-
-    --- BILD-KANDIDATEN ---
-    {json.dumps(bild_kandidaten_list, indent=2, ensure_ascii=False)}
-    
-    --- BEREINIGER TEXT ---
-    {clean_text[:4000]}
-    """
-    
+    """Initialisiert den LLM-Client und die Konfiguration."""
+    client = genai.Client()
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=pack["output_schema"],
+        response_schema=Produktinformation,
     )
-
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash-lite', 
-            contents=prompt,
-            config=config,
-        )
-        return json.loads(response.text)
-    
-    except Exception as e:
-        print(f"LLM-Aufruf fehlgeschlagen: {e}", file=sys.stderr)
-        return {"Extraktionsfehler": f"LLM-Fehler: {e}"}
+    system_prompt = (
+        "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
+        "Produktdetails aus dem Text. Halte dich exakt an das JSON-Schema. "
+        "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
+        "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
+        "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
+    )
+    return {"client": client, "config": config, "system_prompt": system_prompt}
 
 
-# --- 3. HAUPTLOGIK (extract_and_save_data) ---
+def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
+    """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
+    LLM_MODEL = "gemini-2.5-flash"
+    client = pack["client"]
+    config = pack["config"]
+    system_prompt = pack["system_prompt"]
 
-def extract_and_save_data(llm_input_path: Path, output_path: Path):
-    """Führt die LLM-Extraktion durch und speichert das Roh-Ergebnis."""
-    try:
-        with open(llm_input_path, 'r', encoding='utf-8') as f:
-            llm_input_data = json.load(f)
-    except Exception as e:
-        raise FileNotFoundError(f"Fehler beim Laden der LLM-Eingabedatei: {e}")
+    user_prompt = f"""
+Extrahiere die Produktinformationen aus dem folgenden Text.
 
-    clean_text = llm_input_data.get("clean_text", "")
-    bild_kandidaten_str = llm_input_data.get("bild_kandidaten", "") 
-    
-    print("\t-> Starte LLM-Extraktion...")
-    
-    result = {}
-    if not clean_text.strip():
+BILD-KANDIDATEN:
+---
+{bild_kandidaten_str}
+---
+
+PRODUKT-TEXT:
+---
+{unstrukturierter_text}
+---
+"""
+
+    print(f"-> Sende Extraktionsanfrage an {LLM_MODEL} ...")
+    response = client.models.generate_content(
+        model=LLM_MODEL,
+        contents=[system_prompt, user_prompt],
+        config=config,
+    )
+    print("<- Antwort erhalten.")
+
+    produkt_daten = Produktinformation.model_validate_json(response.text.strip())
+    return produkt_daten.model_dump()
+
+
+# --- 3. HAUPTFUNKTION ---
+
+def extract_and_save_data(llm_input_data: json, output_path: Path):
+    """Liest die Input-JSON, führt die LLM-Extraktion durch und speichert das Ergebnis."""
+    print(f"\n[SCHRITT 2/2: AI-EXTRAKTOR]")
+   
+    print(f"  -> Output: {output_path.resolve()}")
+
+    if not llm_input_data:
+        raise FileNotFoundError(f"LLM-Input-Datei nicht gefunden: {input_path}")
+  
+    clean_text = llm_input_data.get("clean_text", "N/A")
+    bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
+
+    if clean_text == "N/A" or not clean_text.strip():
+        print("WARNUNG: Bereinigter Text ist leer.", file=sys.stderr)
         result = {"Fehler": "Bereinigter Text ist leer."}
-        print("WARNUNG: Bereinigter Text ist leer. LLM-Extraktion wird übersprungen.", file=sys.stderr)
     else:
         try:
             pack = baue_pattern_pack()
-            bild_kandidaten_list = bild_kandidaten_str.split(' | ') if bild_kandidaten_str else []
-            result = extrahiere_produktsignale(clean_text, bild_kandidaten_list, pack)
-        except EnvironmentError as e:
-            print(f"Fehler beim Laden des LLM-Schlüssels: {e}", file=sys.stderr)
-            sys.exit(1)
+            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack)
         except Exception as e:
-            error_msg = f"Ein schwerwiegender Fehler bei der LLM-Extraktion ist aufgetreten: {e}"
-            print(error_msg, file=sys.stderr)
-            result = {"Extraktionsfehler": str(e), "Hinweis": "Prüfen Sie den GOOGLE_API_KEY und das LLM-Schema."}
+            print(f"Fehler bei der Extraktion: {e}", file=sys.stderr)
+            result = {"Extraktionsfehler": str(e)}
 
-    # Finales Ergebnis speichern (Roh-Output)
     final_output = {
         "source_file": llm_input_data.get("source_file", "N/A"),
         "product_title": llm_input_data.get("product_title", "N/A"), 
@@ -171,8 +167,9 @@ def extract_and_save_data(llm_input_path: Path, output_path: Path):
         "clean_text": clean_text,
         "extracted_data": result,
     }
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(final_output, f, indent=4, ensure_ascii=False)
-    
-    print(f"\t-> LLM-Roh-Output gespeichert unter: {output_path.resolve()}")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(final_output, f, ensure_ascii=False, indent=2)
+
+    print(f"[ERFOLG] Ergebnis gespeichert: {output_path}")

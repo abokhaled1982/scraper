@@ -3,9 +3,9 @@
 """
 run_all.py – Supervisor
 Startet:
-  1. Browser-Loader (Edge + Chrome)
-  2. Alle Amazon-Worker
-  3. Telegram-Router (Watcher-Modus, alles über .env gesteuert)
+  1. Browser-Loader (Edge + Chrome) -> Synchron
+  2. Sequenzieller Telegram-Login-Check -> Asynchron/Sequenziell
+  3. Alle Amazon-Worker und Telegram-Clients -> Parallel
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import sys
 import asyncio
 import signal
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 from dotenv import load_dotenv
 
 # ----------------------------------------------------------
@@ -25,18 +25,57 @@ from dotenv import load_dotenv
 # ----------------------------------------------------------
 HERE = Path(__file__).parent.resolve()
 AMAZON = HERE / "amazon"
+PY = sys.executable  # Aktuelles venv-Python
+
+# Projekt-Root in sys.path aufnehmen, um login_once zu finden
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+# ⚠️ Import der Telegram-Login-Helfer
+# Der Pfad muss korrigiert werden, da login_once.py im Stammverzeichnis ist,
+# aber telRouter/telObserver es über 'from telegram.login_once' importieren.
+# Wir müssen hier direkt vom Stammverzeichnis importieren, da run_all.py dort liegt.
+try:
+    # 💡 KORRIGIERT: Importiere direkt aus dem Stammverzeichnis, da run_all.py dort liegt.
+    # Da die telRouter/Observer-Dateien es als 'telegram.login_once' importieren,
+    # liegt der Fehler eher in deren Importpfad, aber hier fixen wir es für run_all.py:
+    from telegram.login_once import LoginConfig, ensure_both_sessions_sequential
+except ImportError:
+    # Fallback, falls der Nutzer login_once.py ins 'telegram' Verzeichnis verschoben hat.
+    try:
+        from telegram.login_once import LoginConfig, ensure_both_sessions_sequential
+    except ImportError:
+        print("❌ Fehler: login_once.py konnte nicht gefunden werden. Bitte sicherstellen, dass sie im Projekt-Root liegt.")
+        sys.exit(1)
+
 
 # 🔹 .env laden
 load_dotenv()
 
 # URLs / Profile aus .env oder Defaults
-URL            = os.getenv("EDGE_URL", "https://www.amazon.de/deals?ref_=nav_cs_gb")
-URL2           = os.getenv("CHROME_URL", "https://www.geldhub.de/de")
-EDGE_PROFILE   = os.getenv("EDGE_PROFILE", "Default")
-CHROME_PROFILE = os.getenv("CHROME_PROFILE", "Profile 1")
+URL              = os.getenv("EDGE_URL", "https://www.amazon.de/deals?ref_=nav_cs_gb")
+URL2             = os.getenv("CHROME_URL", "https://www.geldhub.de/de")
+EDGE_PROFILE     = os.getenv("EDGE_PROFILE", "Default")
+CHROME_PROFILE   = os.getenv("CHROME_PROFILE", "Profile 1")
+
+# 🔸 Telegram Konfiguration
+API_ID           = int(os.getenv("API_ID", "0"))
+API_HASH         = os.getenv("API_HASH", "")
+SESSION_DIR      = os.getenv("SESSION_DIR", ".sessions")
+PHONE            = os.getenv("TELEGRAM_PHONE")
+PASSWORD         = os.getenv("TELEGRAM_PASSWORD")
+
+ROUTER_NAME      = os.getenv("SESSION_NAME", "main_session")
+OBSERVER_NAME    = os.getenv("OBS_SESSION_NAME", "observer_session")
+SENDER_NAME      = os.getenv("OBS_SEND_OBSERVER_NAME", "observer_sender_session")    # NEU: Sender
+ROUTER_CHANNEL   = os.getenv("CHANNEL_INVITE_URL", "").strip()
+OBSERVER_CHANNEL = os.getenv("OBS_CHANNEL_INVITE_URL", "").strip()
+
+if not all([API_ID, API_HASH, ROUTER_CHANNEL, OBSERVER_CHANNEL]):
+    raise SystemExit("Fehler: Mindestens eine Telegram-Variable (API_ID, HASH, CHANNEL_INVITE_URL, OBS_CHANNEL_INVITE_URL) fehlt in .env.")
 
 # ----------------------------------------------------------
-# Browser Loader
+# Browser Loader (Unverändert)
 # ----------------------------------------------------------
 def candidates_for(app_name, subpath_64, subpath_86):
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
@@ -81,6 +120,9 @@ def run_loader_blocking():
     time.sleep(5)
 
     if not chrome_path:
+        # Dies ist ein kritischer Fehler im Originalcode, den wir beibehalten,
+        # falls der Chrome-Pfad essentiell ist.
+        # Im normalen Supervisor-Ablauf würde man hier eventuell nur warnen.
         raise FileNotFoundError("❌ Chrome wurde nicht gefunden – bitte Pfad prüfen.")
 
     print("🌐 Starte Google Chrome …")
@@ -90,15 +132,15 @@ def run_loader_blocking():
     print(f"⏳ Warte {sleep_time} Sekunden …")
     time.sleep(sleep_time)
     print("✅ Browser-Loader fertig.")
-
+    
 # ----------------------------------------------------------
-# Supervisor Utilities
+# Supervisor Utilities (Unverändert)
 # ----------------------------------------------------------
 def _ensure_dirs():
     (HERE / "data" / "inbox").mkdir(parents=True, exist_ok=True)
     (HERE / "data" / "produckt").mkdir(parents=True, exist_ok=True)
     (HERE / "data" / "out").mkdir(parents=True, exist_ok=True)
-    (HERE / ".sessions").mkdir(parents=True, exist_ok=True)
+    (HERE / SESSION_DIR).mkdir(parents=True, exist_ok=True) # Nutze SESSION_DIR Variable
     (HERE / "assets").mkdir(parents=True, exist_ok=True)
 
 async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
@@ -126,39 +168,85 @@ async def terminate(proc: asyncio.subprocess.Process | None, name: str, timeout:
             await asyncio.wait_for(proc.wait(), timeout=timeout)
     except ProcessLookupError:
         pass
-
+        
+# ----------------------------------------------------------
+# Sequentieller Telegram Login (Unverändert)
+# ----------------------------------------------------------
+def print_login_step(msg: str):
+    print(f"[Telegram Login] {msg}")
+    
+async def do_telegram_login_check():
+    """Stellt sicher, dass Router-, Receiver- und Sender-Session gültig sind."""
+    print("\n--- Starte sequentiellen Telegram-Login-Check (3 Sessions) ---")
+    
+    router_cfg = LoginConfig(
+        api_id=API_ID, api_hash=API_HASH, session_name=ROUTER_NAME, session_dir=SESSION_DIR,
+        phone=PHONE, password=PASSWORD,
+    )
+    observer_cfg = LoginConfig(
+        api_id=API_ID, api_hash=API_HASH, session_name=OBSERVER_NAME, session_dir=SESSION_DIR,
+        phone=PHONE, password=PASSWORD,
+    )
+    sender_cfg = LoginConfig( # NEUE SENDER-CFG
+        api_id=API_ID, api_hash=API_HASH, session_name=SENDER_NAME, session_dir=SESSION_DIR,
+        phone=PHONE, password=PASSWORD,
+    )
+    
+    # Führt den 3-stufigen Login aus (Router -> Receiver -> Sender)
+    ok1, ok2, ok3 = await ensure_both_sessions_sequential(
+        router_cfg, observer_cfg, sender_cfg, on_step=print_login_step
+    )
+    
+    if not (ok1 and ok2 and ok3):
+        raise SystemExit("❌ Einer der Telegram-Logins fehlgeschlagen. Abbruch.")
+    
+    print("✅ Telegram-Login für Router, Receiver & Sender abgeschlossen.")
+    print("---------------------------------------------------\n")
 # ----------------------------------------------------------
 # Main Supervisor
 # ----------------------------------------------------------
 async def main():
     os.chdir(HERE)
     _ensure_dirs()
-
+    
+    # 1. 🌐 Browser-Loader (Blocking)
+    # 💡 NEU: Dies ist der erste Schritt und ist synchron/blocking.
     print("[supervisor] running loader before services …")
-    run_loader_blocking()
-    print("[supervisor] loader finished, starting services …")
+    #run_loader_blocking()
+    print("[supervisor] loader finished, starting Telegram check …")
 
+    # 2. 🔑 Sequentieller Login-Check (Muss nach dem Browser-Start passieren!)
+    await do_telegram_login_check() 
+
+    # 3. 🟢 Services starten (Parallel)
+    
     # Amazon Services
-    ws_server      = await spawn("ws_server",      sys.executable, str(AMAZON / "ws_server.py"))
-    deals_watcher  = await spawn("deals_watcher",  sys.executable, str(AMAZON / "watcher.py"))
-    product_opener = await spawn("product_opener", sys.executable, str(AMAZON / "product_opener.py"))
-    product_parser = await spawn("product_parser", sys.executable, str(AMAZON / "product_parser.py"))
+    ws_server       = await spawn("ws_server",      PY, str(AMAZON / "ws_server.py"))
+    deals_watcher   = await spawn("deals_watcher",  PY, str(AMAZON / "watcher.py"))
+    product_opener  = await spawn("product_opener", PY, str(AMAZON / "product_opener.py"))
+    product_parser  = await spawn("product_parser", PY, str(AMAZON / "product_parser.py"))
 
-    # 🟢 Telegram Router – alles über .env gesteuert
-    # WATCH_INTERVAL_SECS, ROUTER_MODE, CHANNEL_INVITE_URL, AFFILIATE_URL, DEAL_BADGE_THRESHOLD …
-    tel_router = await spawn("telegram_router", sys.executable, "-m", "telegram.telRouter")
+    # Telegram Services (jetzt mit Router UND Observer)
+    # Beide starten parallel als Subprozesse, da der Login bereits abgeschlossen ist.
+    tel_router = await spawn("telegram_router", PY, "-m", "telegram.telRouter")
+    tel_observer = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
+    tel_sender = await spawn("telegram_sender", PY, "-m", "telegram.telSender") # NEU: Sender-Prozess starten
 
-    procs = [
+    # Liste aller Prozesse für die Überwachung und das Beenden
+    procs: List[Tuple[str, asyncio.subprocess.Process]] = [
         ("ws_server", ws_server),
         ("deals_watcher", deals_watcher),
         ("product_opener", product_opener),
         ("product_parser", product_parser),
         ("telegram_router", tel_router),
+        ("telegram_observer", tel_observer),
+        ("telegram_sender", tel_sender), # NEU
+        
     ]
     for n, p in procs:
         print(f"[supervisor] started {n} (pid={p.pid})")
 
-    # Signalhandling
+    # Signalhandling (Unverändert)
     stop_event = asyncio.Event()
     def _sig(*_): stop_event.set()
     for s in (signal.SIGINT, signal.SIGTERM):
@@ -168,7 +256,8 @@ async def main():
     async def wait_any():
         tasks = [asyncio.create_task(p.wait()) for _, p in procs]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        idx = tasks.index(next(iter(done)))
+        finished_task = next(iter(done))
+        idx = tasks.index(finished_task)
         name, proc = procs[idx]
         return name, proc.returncode
 
@@ -182,14 +271,21 @@ async def main():
     else:
         print("[supervisor] stop requested; shutting down …")
 
-    # geordnet beenden
+    # 4. 🛑 Geordnet beenden (Unverändert)
+    await terminate(tel_observer,    "telegram_observer")
     await terminate(tel_router,      "telegram_router")
     await terminate(product_parser,  "product_parser")
     await terminate(product_opener,  "product_opener")
     await terminate(deals_watcher,   "deals_watcher")
     await terminate(ws_server,       "ws_server")
-
+    await terminate(tel_sender,      "telegram_sender") # NEU: Sender beenden
     print("[supervisor] all stopped")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print(f"❌ Critical Error in main runner: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n[supervisor] Abgebrochen durch Benutzer.")

@@ -6,6 +6,7 @@ import pathlib
 from datetime import datetime
 from typing import Dict, Any
 from urllib.parse import urlsplit, urlunsplit
+
 import sys
 
 # add parent directory of amazon/ to sys.path
@@ -19,12 +20,9 @@ from config import (
     PRODUCKT_DIR,         # <- Sibling von inbox
     
 )
-
+from telegram.telSender import send_url_to_observer # WICHTIG!
 # websockets erst nach config importieren (reine Ordnungssache)
 import websockets
-
-
-
 
 
 # --- toggles ---
@@ -84,7 +82,14 @@ async def handle(ws):
                 continue
 
             t = msg.get("type")
-
+            if t == "product_url":
+                url = msg.get("url") or "unknown"
+                # Ausgabe der URL auf die Konsole
+                print(f"[srv] Received Product URL: {url} (ID: {msg.get('id', 'N/A')})")
+                await send_url_to_observer(url)
+                # Optional: Sende eine einfache Bestätigung zurück
+                await ws.send(json.dumps({"ok": True, "type": "product_url_ack", "url": url}))
+                continue
             # --- optional one-shot handler ---
             if t == "parsed":
                 if not HANDLE_PARSED:

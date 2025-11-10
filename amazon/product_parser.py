@@ -1,135 +1,415 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+
 from __future__ import annotations
-import hashlib, json, time, traceback, shutil
-from dataclasses import asdict
+import json, time
+import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import  Tuple, Dict, Any
 import sys
+import uuid
+from bs4 import BeautifulSoup, Comment 
+from dotenv import load_dotenv
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode 
 
 
+# Projekt-Config (Annahme: config.py existiert)
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from config import PRODUCKT_DIR,OUT_DIR,FAILED_DIR,INTERVAL_SECS,REGISTRY_PATH,SUMMARY_PATH
+from config import PRODUCKT_DIR, OUT_DIR, FAILED_DIR, INTERVAL_SECS, REGISTRY_PATH, SUMMARY_PATH
+
+# Importiere die fachlich getrennten Module
+from utils import (
+    _read_text,
+    is_amazon_html,
+    load_registry, 
+    pick_oldest_html, map_ai_output_to_target_format
+)
+
+# Importe für Amazon und AI-Pipeline
+
+from ai_parser.ai_extractor import extract_and_save_data 
+
+from amazon.amazon_parser import AmazonProductParser
 
 
-from parser import AmazonProductParser  # dein Parser-Modul 
+load_dotenv() 
 
-def _read_text(fp: Path) -> str:
+
+
+# ----------------------------- URL Normalisierung & Extraktion --------------------------------------
+
+
+def _get_base_url_path(url: str) -> str:
+    """Extrahiert die Basis-URL und den Pfad ohne Query-Parameter (imwidth) und ohne Deskriptoren (300w)."""
+    # Entferne w/x-Deskriptoren falls vorhanden (z.B. " 300w")
+    url_without_desc = re.sub(r'\s+\d+[wx]$', '', url).strip()
+    
     try:
-        return fp.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return fp.read_bytes().decode("utf-8", errors="ignore")
+        parsed_url = urlparse(url_without_desc)
+        # Bilde die URL neu aus Schema, Netloc und Pfad, ohne Query/Fragment
+        return urlunparse(parsed_url._replace(query='', params='', fragment=''))
+    except ValueError:
+        return url_without_desc # Fehlerfall
 
-def _sha1_bytes(b: bytes) -> str:
-    return hashlib.sha1(b).hexdigest()
+def extrahiere_produktbilder_aus_html(html_content: str) -> str:
+    """
+    Sucht nach Bild-URLs, extrahiert deren Basis-Pfad (ohne Auflösungsparameter)
+    und gibt eine bereinigte, eindeutige Liste zurück.
+    """
+    soup = BeautifulSoup(html_content, 'lxml')
+    # Speichert nur die eindeutigen Basis-URLs (ohne ?imwidth=...)
+    basis_url_kandidaten = set()
+    
+    # 1. Sammle alle rohen URL-Kandidaten, wie im Originalcode
+    rohe_urls = set()
+    
+    # Durchsuche <img>-Tags
+    for img in soup.find_all('img'):
+        if 'src' in img.attrs and img['src'].strip():
+            rohe_urls.add(img['src'].strip())
+        
+        for attr in ['data-src', 'data-srcset', 'data-original', 'data-full-image-url']:
+            if attr in img.attrs and img[attr].strip():
+                if 'srcset' in attr:
+                    # Zerlege srcset/data-srcset
+                    parts = re.split(r',\s*', img[attr])
+                    for part in parts:
+                        url_only = part.split()[0]
+                        rohe_urls.add(url_only.strip())
+                else:
+                    rohe_urls.add(img[attr].strip())
+        
+        if 'srcset' in img.attrs and img['srcset'].strip():
+            # Zerlegesrcset
+            parts = re.split(r',\s*', img['srcset'])
+            for part in parts:
+                url_only = part.split()[0]
+                rohe_urls.add(url_only.strip())
 
-def _sha1_file(fp: Path) -> str:
+    # Durchsuche <source>-Tags
+    for source in soup.find_all('source'):
+        for attr in ['srcset', 'data-srcset']:
+            if attr in source.attrs and source[attr].strip():
+                # Zerlege srcset/data-srcset
+                parts = re.split(r',\s*', source[attr])
+                for part in parts:
+                    url_only = part.split()[0]
+                    rohe_urls.add(url_only.strip())
+
+    # 2. Filtere und normalisiere die rohen URLs zu Basis-URLs
+    for url in rohe_urls:
+        if url and not url.endswith(('.svg', '.gif')) and not url.startswith('data:'):
+            # Nutze die Hilfsfunktion, um die Basis-URL zu bekommen
+            basis_url = _get_base_url_path(url)
+            basis_url_kandidaten.add(basis_url)
+            
+    kandidaten_string = " | ".join(sorted(list(basis_url_kandidaten)))
+    
+    return kandidaten_string if kandidaten_string else "N/A"
+
+def normalize_url(url: str) -> str:
+    """
+    Normalisiert eine URL: entfernt Fragmente, sortiert/entfernt bestimmte Query-Parameter und entfernt nachgestellte Schrägstriche.
+    (Diese Hilfsfunktion muss definiert sein, um den Code lauffähig zu machen.)
+    """
+    if not url or not url.startswith('http'):
+        return url
+    
+    parsed = urlparse(url)
+    # Entferne Fragment-Bezeichner (#...)
+    path = parsed.path
+    query = parsed.query
+    
+    # Optional: Entferne nachgestellten Schrägstrich, außer wenn der Pfad nur '/' ist
+    if path.endswith('/') and len(path) > 1:
+        path = path.rstrip('/')
+        
+    # Optional: Logik zur Bereinigung von Query-Parametern könnte hier eingefügt werden
+    
+    # Erstelle die bereinigte URL neu (ohne Fragment)
+    normalized = urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        path,
+        parsed.params,
+        query, # Behalte die Query-Parameter
+        ''     # Fragment ist leer
+    ))
+    return normalized
+
+def extract_and_normalize_url(html_content: str) -> str:
+    """
+    Extrahiert die reinste Produkt-URL aus dem HTML mithilfe intelligenter
+    Suche und normalisiert sie anschließend.
+    """
+    found_url = None
+    
     try:
-        return _sha1_bytes(fp.read_bytes())
-    except Exception:
-        return _sha1_bytes(_read_text(fp).encode("utf-8", errors="ignore"))
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 1. HÖCHSTE PRIORITÄT: Kanonische Links
+        canonical_link = soup.find('link', {'rel': 'canonical'})
+        if canonical_link and canonical_link.get('href'):
+            found_url = canonical_link['href'].strip()
+        
+        # 2. ZWEITE PRIORITÄT: Alternate Link (de)
+        # Sucht nach <link rel="alternate" href="..." hreflang="de">
+        if not found_url:
+            alternate_de_link = soup.find('link', {'rel': 'alternate', 'hreflang': 'de'})
+            if alternate_de_link and alternate_de_link.get('href'):
+                found_url = alternate_de_link['href'].strip()
+        
+        # 3. DRITTE PRIORITÄT: Open Graph Tags
+        if not found_url:
+            og_url_meta = soup.find('meta', {'property': 'og:url'})
+            if og_url_meta and og_url_meta.get('content'):
+                found_url = og_url_meta['content'].strip()
 
-def _load_registry() -> dict:
-    if REGISTRY_PATH.exists():
-        try:
-            return json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"asins": {}, "hashes": {}}
+        # 4. VIERTE PRIORITÄT: Apple iTunes/App Meta-Tag (z.B. für App-Stores)
+        if not found_url:
+            apple_meta = soup.find('meta', {'name': 'apple-itunes-app'})
+            if apple_meta and apple_meta.get('content'):
+                content = apple_meta['content']
+                match = re.search(r'app-argument=(https?://.+)', content)
+                if match:
+                    found_url = match.group(1).strip()
+        
+        # 5. FÜNFTE PRIORITÄT: Schema.org Product/Offers URL
+        if not found_url:
+            product_links = soup.select('[itemtype*="schema.org/Product"] a[href], [itemtype*="schema.org/Offer"] a[href]')
+            if product_links:
+                found_url = max([link['href'] for link in product_links if link.get('href')], key=len, default=None)
 
-def _save_registry(reg: dict) -> None:
-    tmp = REGISTRY_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(REGISTRY_PATH)
+        # 6. LETZTER FALLBACK: AGGRESSIVE REGEX-SUCHE im gesamten HTML-Text
+        if not found_url:
+            # Sucht nach http/https URLs, die keine statischen Ressourcen (Bilder, JS, CSS) sind
+            # Wir suchen URLs mit mindestens 3 Pfadsegmenten (wahrscheinlich spezifische Produkt-URL)
+            urls = re.findall(r'https?://(?:www\.)?(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s"\']*)?', html_content)
+            
+            # Filtert nach URLs, die spezifischer erscheinen (mind. 3 Pfadsegmente und keine zu kurzen URLs)
+            product_urls = [u for u in urls if u.count('/') >= 3 and len(u) > 30 and not any(ext in u for ext in ['.js', '.css', '.png', '.jpg', '.svg'])] 
+            
+            if product_urls:
+                # Wählt die längste gefundene URL, da sie am spezifischsten ist
+                found_url = max(product_urls, key=len)
 
-def _pick_oldest_html() -> Optional[Path]:
-    files = [p for p in PRODUCKT_DIR.glob("*.html")]
-    if not files:
-        return None
-    files.sort(key=lambda p: p.stat().st_mtime)
-    return files[0]
+        # 7. Normalisierung der URL
+        if found_url and found_url.startswith('http'):
+            return found_url
 
-def _out_name(asin: Optional[str], src: Path, page_hash: str) -> str:
-    return f"{asin}.json" if asin else f"{src.stem}.{page_hash[:8]}.json"
+        return "" # Gibt leeren String zurück, wenn nichts gefunden wurde
+        
+    except Exception as e:
+        # Hier sollte eine geeignete Fehlerbehandlung stattfinden (z.B. Logging)
+        print(f"Fehler beim Parsen: {e}")
+        return ""
+def extract_title_from_html(html_content: str) -> str:
+    """Extrahiert den bereinigten Titel."""
+    soup = BeautifulSoup(html_content, 'lxml')
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+        title = re.sub(r' \| .*| - .*| – .*| :: .*', '', title)
+        return title
+    
+    if h1 := soup.find('h1'):
+        return h1.get_text().strip()
+    
+    if og_title := soup.find('meta', {'property': 'og:title'}):
+        if og_title.get('content'):
+            return og_title['content'].strip()
+            
+    return "N/A"
 
-def _write_summary_append(obj: dict) -> None:
-    with SUMMARY_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
-def _move_to_failed(src: Path, err: str) -> None:
-    FAILED_DIR.mkdir(parents=True, exist_ok=True)
-    dst = FAILED_DIR / src.name
-    try:
-        shutil.move(str(src), str(dst))
-    except Exception:
-        try:
-            shutil.copy2(str(src), str(dst))
-            src.unlink(missing_ok=True)
-        except Exception:
-            pass
-    (dst.with_suffix(dst.suffix + ".error.txt")).write_text(err, encoding="utf-8")
+def extract_core_html_data(html_content: str) -> Dict[str, Any]:
+    """
+    Führt alle deterministischen HTML-Extraktionen durch und konsolidiert sie in einem Dictionary.
+    """
+    title = extract_title_from_html(html_content)
+    url = extract_and_normalize_url(html_content) # <- Ihre Power-Funktion wird hier verwendet
+  
+    
+    return {
+        "title": title,
+        "url": url      
+    }
 
-def process_one(fp: Path, reg: dict) -> Tuple[bool, str]:
-    try:
-        raw = _read_text(fp)
-        page_hash = _sha1_file(fp)
 
-        if page_hash in reg["hashes"]:
-            fp.unlink(missing_ok=True)
-            return True, f"SKIP hash={page_hash[:8]} already processed"
+def clean_html_to_core_text(html_content: str) -> str:
+    """
+    Parst den HTML-Inhalt, entfernt alle nicht-relevanten Boilerplate-Elemente, 
+    und extrahiert den maximalen reinen Produkt-Kern-Text.
+    """
+    soup = BeautifulSoup(html_content, 'lxml')
 
-        parser = AmazonProductParser(raw)
+    ignore_tags = [
+        'script', 'style', 'header', 'footer', 'nav', 
+         'iframe', 'noscript', 'button',
+        'link', 'meta', 'svg', 'img', 'picture', 'source'
+    ]
+    
+    boilerplate_selectors = [
+        '.cookie-banner', '#cookie-consent', '.gdpr-popup',
+        '#site-footer', '#site-header', '.site-nav', '.related-products',
+        '.upsell', '.cross-sell', '.newsletter-signup', '.social-links',
+        'dialog', 'modal', 'popup', 'menu', 'search',
+        'toolbar', 'banner' 
+    ]
+    
+    for tag in soup(ignore_tags):
+        tag.decompose()
+
+    for selector in boilerplate_selectors:
+        for element in soup.select(selector):
+            element.decompose()
+
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+        
+    text = soup.get_text()
+
+    text = re.sub(r'[\t\r\n]+', '\n', text)
+    text = re.sub(r' +', ' ', text)
+    text = '\n'.join(line.strip() for line in text.split('\n'))
+    text = re.sub(r'\n\s*\n', '\n', text).strip()
+    
+    return text
+
+
+def process_html_to_llm_input(html_path: Path, output_path: Path):
+    """
+    Hauptfunktion, die HTML verarbeitet und die LLM-Input-JSON-Datei speichert.
+    """
+    print(f"\n[SCHRITT 1/2: HTML-PROZESSOR]")
+   
+    isAmazon:bool=False
+    product_url=""
+    product_title=""
+    if not html_path.exists():
+        raise FileNotFoundError(f"HTML-Quelldatei nicht gefunden: {html_path}")    
+      
+    raw_html = _read_text(html_path)
+
+    if is_amazon_html(raw_html):      
+        parser = AmazonProductParser(raw_html)
         product = parser.parse()
-        product._source_file = str(fp.resolve())
+        isAmazon=True
 
-        asin = getattr(product, "asin", None)
-        out_path = OUT_DIR / _out_name(asin, fp, page_hash)
+    print("-> Starte Extraktion der Bild-Kandidaten...")
+    if(isAmazon):
+         bild_kandidaten = product.images
+         product_url=product.product_info["shortlink"]
+    else:
+        core_data=extract_core_html_data(raw_html)
+        bild_kandidaten = extrahiere_produktbilder_aus_html(raw_html)
+        product_url=core_data.get("url","N/A")
+        product_title=core_data.get("title","N/A")
+    
+   
+    #print(f" 	-> Gefundene Bild-Kandidaten: {len(bild_kandidaten.split(' | ')) if bild_kandidaten != 'N/A' else 0} URLs/Deskriptoren.")
+  
+    print("-> Starte HTML-Bereinigung...")
+    clean_text = clean_html_to_core_text(raw_html)
+    print("<- HTML-Bereinigung abgeschlossen.")
 
-        if asin and asin in reg["asins"]:
-            fp.unlink(missing_ok=True)
-            return True, f"SKIP asin={asin} already present"
+    if not clean_text.strip():
+        print("WARNUNG: Der bereinigte Text ist leer.", file=sys.stderr)
+        clean_text = "N/A"
 
-        data = asdict(product)
-        tmp = out_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(out_path)
+    llm_input_data = {
+        "source_file": str(html_path),        
+        "clean_text": clean_text,
+        "isAmazon":isAmazon,
+        "bild_kandidaten": bild_kandidaten,
+        "product_url":product_url,
+        "product_title":product_title
+    }
 
-        _write_summary_append(data)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(llm_input_data, f, ensure_ascii=False, indent=2)
 
-        reg["hashes"][page_hash] = out_path.name
-        if asin:
-            reg["asins"][asin] = out_path.name
-        _save_registry(reg)
+    print(f"\n[ERFOLG] LLM-Input-Datei gespeichert in: {output_path}")
+    
+    return llm_input_data
 
-        fp.unlink(missing_ok=True)
-        return True, f"OK -> {out_path.name}"
+    
+
+
+# ----------------------------- ROUTING & AI-PARSING LOGIK --------------------------------------
+def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
+    """
+    Orchestriert die AI-Pipeline: HTML-Extraktion -> LLM-Extraktion -> Mapping.
+    """      
+    temp_llm_input_file = fp.with_name(f"{fp.stem}.llm_input.json")
+    temp_ai_output_file = fp.with_name(f"{fp.stem}.llm_output.json")
+       
+    def cleanup_temp_files():
+        temp_llm_input_file.unlink(missing_ok=True)
+        temp_ai_output_file.unlink(missing_ok=True)
+        fp.unlink(missing_ok=True) 
+    
+    try: 
+        # 1. HTML VORBEREITUNG FÜR LLM (Schreibt llm_input.json)
+        ai_inputput_data=process_html_to_llm_input(fp, temp_llm_input_file)
+        # 2. LLM-EXTRAKTION
+        extract_and_save_data(ai_inputput_data, temp_ai_output_file)        
+        # 3. DATEN-MAPPING (Kombiniert HTML-Core und LLM-Output)
+        with open(temp_ai_output_file, 'r', encoding='utf-8') as f:
+            ai_output_data = json.load(f)
+
+        data_mapped = map_ai_output_to_target_format(
+            ai_output_data,
+            ai_inputput_data            
+        ) 
+        # Speichere das Endergebnis
+        product_identifier = data_mapped.get('product_id', 'N/A')
+        if product_identifier in ('N/A', None):
+            random_id = str(uuid.uuid4()).replace('-', '') 
+            product_identifier = f"random_{random_id[:12]}" 
+            
+        final_output_file = out_dir / f"{product_identifier}.json" 
+
+        tmp = final_output_file.with_suffix(".tmp")
+        with tmp.open('w', encoding='utf-8') as f:
+            json.dump(data_mapped, f, indent=4, ensure_ascii=False)
+        tmp.replace(final_output_file)
+        
+        cleanup_temp_files()
+        
+        return True, f"AI OK -> {final_output_file.name}"
 
     except Exception as e:
-        tb = traceback.format_exc()
-        _move_to_failed(fp, f"{e}\n\n{tb}")
-        return False, f"ERR {fp.name}: {e}"
+        cleanup_temp_files()
+        raise Exception(f"AI-Pipeline/Mapping Fehler: {e}")
+
+
+# ----------------------------- DAEMON LOOP --------------------------------------
 
 def daemon_loop(interval: int = INTERVAL_SECS) -> None:
-    # Vertraut darauf, dass run_all.py Ordner angelegt hat (ensure_dirs)
+    """
+    Watch-Loop: zieht regelmäßig die älteste HTML-Datei und verarbeitet sie.
+    """
     print(f"[product-parser] watching {PRODUCKT_DIR} every {interval}s -> {OUT_DIR}")
-    reg = _load_registry()
+    reg = load_registry(REGISTRY_PATH) 
     while True:
         try:
-            fp = _pick_oldest_html()
+            fp = pick_oldest_html(PRODUCKT_DIR) 
             if not fp:
                 time.sleep(interval)
                 continue
-            ok, msg = process_one(fp, reg)
+            ok, msg = process_one(fp, OUT_DIR)
             print(f"[product-parser] {msg}")
-            time.sleep(0.1 if ok else 1.0)
-        except KeyboardInterrupt:
-            print("[product-parser] stopped by user")
-            break
-        except Exception:
-            print("[product-parser] loop error; sleep 1s")
-            traceback.print_exc()
-            time.sleep(1)
+            time.sleep(1) 
+        except Exception as e:
+            print(f"[product-parser] SCHWERWIEGENDER FEHLER IM DAEMON: {e}", file=sys.stderr)
+            time.sleep(interval)
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
+    PRODUCKT_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    FAILED_DIR.mkdir(parents=True, exist_ok=True)
+    
     daemon_loop()
