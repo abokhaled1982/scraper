@@ -136,7 +136,9 @@ TARGET_SCHEMA_TEMPLATE = {
 
 
 def map_ai_output_to_target_format(
-    ai_output: Dict[str, Any]
+    ai_output: Dict[str, Any],
+    ai_input: Dict[str, Any],
+
    
 ) -> Dict[str, Any]:
     """
@@ -150,29 +152,16 @@ def map_ai_output_to_target_format(
     """
     extracted = ai_output.get("extracted_data", {})
     final_output = TARGET_SCHEMA_TEMPLATE.copy()
-    
-    # ----------------------------- 1. CORE PRODUCT IDENTIFIER (Kombination HTML + AI) --------------------------------------
-    
-    # TITEL: Priorität: HTML-geparster Titel > AI-geparster Titel > Input-Titel
-  
-    extracted_title = extracted.get('produkt_titel')
-    input_title = ai_output.get('product_title', 'N/A') 
-    
-    
-    if extracted_title != 'N/A':
-        final_output['title'] = extracted_title   
-    else:
-        final_output['title'] = input_title
+    #can I in the futre read it also
+    isAmazon=ai_input.get('isAmazon', False)
 
-    # AFFILIATE URL: Priorität: HTML-URL (sauber und normalisiert) > AI-URL > Fallback
-   
-    extracted_url = extracted.get('url_des_produkts') 
-
-   
-    if final_output['affiliate_url'] == 'N/A' and extracted_url and extracted_url != 'N/A':
-         final_output['affiliate_url'] = extracted_url
+    if isAmazon:
+        final_output['affiliate_url'] = ai_input.get("amazon_product_url","N/A")
     else:
-      final_output['affiliate_url'] = 'N/A'       
+         final_output['affiliate_url'] =   extracted.get('url_des_produkts')
+     
+    final_output['title'] = extracted.get('produkt_titel', 'N/A')   
+       
     # PRODUKT-ID: AI-ID > Fallback
     extracted_product_id = extracted.get('produkt_id') 
 

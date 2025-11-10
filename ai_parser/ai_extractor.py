@@ -131,18 +131,15 @@ PRODUKT-TEXT:
 
 # --- 3. HAUPTFUNKTION ---
 
-def extract_and_save_data(input_path: Path, output_path: Path):
+def extract_and_save_data(llm_input_data: json, output_path: Path):
     """Liest die Input-JSON, führt die LLM-Extraktion durch und speichert das Ergebnis."""
     print(f"\n[SCHRITT 2/2: AI-EXTRAKTOR]")
-    print(f"  -> Input: {input_path.resolve()}")
+   
     print(f"  -> Output: {output_path.resolve()}")
 
-    if not input_path.exists():
+    if not llm_input_data:
         raise FileNotFoundError(f"LLM-Input-Datei nicht gefunden: {input_path}")
-
-    with open(input_path, "r", encoding="utf-8") as f:
-        llm_input_data = json.load(f)
-
+  
     clean_text = llm_input_data.get("clean_text", "N/A")
     bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
 
