@@ -1,6 +1,5 @@
 # ai_extractor.py — CLEANED VERSION
 
-import os
 import json
 import sys
 from pathlib import Path
@@ -76,7 +75,37 @@ class Produktinformation(BaseModel):
     gutschein_details: str = Field(
         description="Die vollständige Beschreibung (Gültigkeit, Bedingungen, Einschränkungen) des Gutscheincodes. WIRD NUR BEFÜLLT, WENN 'gutschein_code' VORHANDEN IST, sonst 'N/A'. WICHTIG: Die Endpreis-Information muss hier zusätzlich genannt werden, z.B. '...der Endpreis beträgt dann XX,XX €', um die Berechnung für den 'akt_preis' zu dokumentieren."
     )   
-    rabatt_text: str = Field(description="Der gefundene werbliche Text/Begriff für EINEN ANDEREN Rabatt, der KEINEN Code erfordert (z.B. 'Sie sparen 5 Euro', '3 für 2 Aktion', '10% bei Newsletter-Anmeldung', 'Sonderpreis') oder 'N/A'.")
+    rabatt_text: str = Field(
+        description=(
+            "Die KURZE, WERBLICHE ZUSAMMENFASSUNG des Preisvorteils. "
+            "Dieses Feld MUSS den **absoluten Rabattbetrag in Euro (z.B. 12,50 €)** nennen, anstatt eines Prozentsatzes. "
+            "Es muss beschreiben, wie man den Vorteil erhält (z.B. 'mit Code', 'im Sale'). "
+            
+            # NEU: Regel zur Rabatt-Stufen-Wahl (Emoji & Ton)
+            "**REGEL FÜR ATTENTION:** Jeder generierte Satz MUSS mit einem relevanten Emoji beginnen. Die Wahl des Emojis MUSS von der Höhe des Rabatts abhängen: "
+            
+            "**PRIORITÄT DER EMOJI-WAHL (BASIEREND AUF RABATT-PROZENT):**"
+            "1. **MEGA-DEAL (> 40% Rabatt):** Nutze aggressive Emojis wie **🔥** (Feuer) oder **🚨** (Alarm) und einen dramatischen Text."
+            "2. **SOLIDER DEAL (20% - 40% Rabatt):** Nutze neutrale, positive Emojis wie **🎁** (Geschenk), **🔑** (Deal) oder **💸** (Geld)."
+            "3. **KLEINER RABATT (< 20% Rabatt):** Nutze funktionale Emojis wie **✅** (Haken), **📧** (E-Mail) oder **📦** (Versand)."
+            
+            "**WICHTIGSTE NEUE REGEL:** Der **finale Endpreis (akt_preis)** darf **NICHT** in diesem Feld wiederholt werden! "
+            "**PRIORITÄT:** Bei kombinierten Rabatten muss das Highlight die Kombination in einem einzigen, kurzen und attraktiven Satz zusammenfassen. "
+            "Es dient als Überschrift für Social-Media-Posts und MUSS professionell, prägnant und überzeugend sein. "
+            
+            "**WICHTIGE BEISPIELE ZUR ORIENTIERUNG (JETZT NUR MIT EURO-RABATT, OHNE ENDPREIS UND IMMER MIT ICON):** "
+            "* 🔑 Code-Deal! Mit dem Code **SPAREN20** sparst du **20,00 €**! "
+            "* 🔥 Mega-Sale: Sichere dir **45,00 € Sofort-Rabatt**! "
+            "* 🎁 3-für-2 Aktion: **25,45 € geschenkt** im Paketpreis. "
+            "* 💸 Sichere **50,00 € Sofort-Rabatt**! "
+            "* 📧 Newsletter-Vorteil: Mit 10% Code sparst du **3,99 €**! "
+            "* 📦 Versandkostenfrei + **15,00 € Rabatt**! "
+            "* ✅ **[BASIEREND AUF BERECHNUNG]:** Im Checkout sparst du automatisch **15,00 €**! "
+            "* 💸 **[BASIEREND AUF BERECHNUNG]:** Aktiviere den Klick-Coupon und spare **9,67 €**! "
+            
+            "* Wenn kein Rabatt angewendet wurde ('akt_preis' == 'original_preis'), verwende '🚨 Tiefstpreis-Alarm, Unschlagbar! 💥'."
+        )
+    )
 # --- 2. LLM-FUNKTIONEN ---
 
 def baue_pattern_pack():
@@ -87,12 +116,16 @@ def baue_pattern_pack():
         response_schema=Produktinformation,
     )
     system_prompt = (
-        "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
-        "Produktdetails aus dem Text. Halte dich exakt an das JSON-Schema. "
-        "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
-        "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
-        "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
-    )
+    "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
+    "Produktdetails aus dem Text. Halte dich exakt an das JSON-Schema. "
+    
+    # NEUE, SCHARFE ANWEISUNG ZUR BERECHNUNG
+    "**OBERSTE PRIORITÄT: BERECHNE IMMER DEN FINALEN, NIEDRIGSTEN PREIS ('akt_preis')!** Dazu MUSS du ALLE Preisvorteile (Rabattcodes, Sofort-Rabatte, aber auch AKTIONS-MECHANISMEN wie 'Klick-Coupons' oder 'Rabatt im Warenkorb') im Text erkennen und den Preis exakt neu berechnen. "
+    
+    "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
+    "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
+    "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
+)
     return {"client": client, "config": config, "system_prompt": system_prompt}
 
 
