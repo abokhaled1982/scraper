@@ -122,6 +122,7 @@ TARGET_SCHEMA_TEMPLATE = {
     "original_price": {"raw": None, "value": None, "currency_hint": None},
     "discount_amount": None, "discount_percent": "N/A", 
     "rating": {"value": 0.0, "counts": 0},
+    "rabatt_text":"N/A",
     "coupon": {"code": "N/A", "code_details": "N/A", "more": "N/A"},
     "images": [], "features": [], 
     "feature_text": None, "description": None,
@@ -189,7 +190,10 @@ def map_ai_output_to_target_format(
     final_output['rating'] = {
         "value": extracted.get('bewertung_wert', 0.0),
         "counts": extracted.get('anzahl_reviews', 0)
-    }    
+    } 
+
+    final_output['rabatt_text']=extracted.get('rabatt_text', 'N/A')
+
     final_output['coupon'] = {
         "code": extracted.get('gutschein_code', 'N/A'),
         "code_details": extracted.get('gutschein_details', 'N/A'), 

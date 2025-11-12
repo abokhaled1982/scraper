@@ -144,7 +144,7 @@ def build_caption_html(
     if len(title) > 90:
         title = title[:87] + "…"
 
-    badge  = _badge(d)
+    badge  =d.get("rabatt_text")
     r_val, r_cnt = _get_rating(d)       
     rating = _stars(r_val, r_cnt)
     avail  = d.get("availability")

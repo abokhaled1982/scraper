@@ -355,14 +355,29 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
         ai_inputput_data=process_html_to_llm_input(fp, temp_llm_input_file)
         # 2. LLM-EXTRAKTION
         extract_and_save_data(ai_inputput_data, temp_ai_output_file)        
+        
         # 3. DATEN-MAPPING (Kombiniert HTML-Core und LLM-Output)
         with open(temp_ai_output_file, 'r', encoding='utf-8') as f:
             ai_output_data = json.load(f)
+
+        # NEUE PRÜFUNG 1: Stoppt, wenn der LLM-Output einen Extraktionsfehler enthält (z.B. Overload)
+        if "Extraktionsfehler" in ai_output_data.get("extracted_data", {}):
+            error_message = ai_output_data["extracted_data"]["Extraktionsfehler"]
+            # Wirft eine Exception, um die Speicherung des finalen Output-Files zu verhindern.
+            raise ValueError(f"LLM-Extraktionsfehler (z.B. Overload): {error_message}")
+
 
         data_mapped = map_ai_output_to_target_format(
             ai_output_data,
             ai_inputput_data            
         ) 
+        
+        # NEUE PRÜFUNG 2: Stoppt, wenn der berechnete Preis N/A ist
+        if data_mapped.get('akt_preis') == 'N/A':
+            # Wirft eine Exception, um die Speicherung des finalen Output-Files zu verhindern.
+            raise ValueError("Produktpreis 'akt_preis' ist 'N/A'. Überspringe Speicherung.")
+
+
         # Speichere das Endergebnis
         product_identifier = data_mapped.get('product_id', 'N/A')
         if product_identifier in ('N/A', None):
