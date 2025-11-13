@@ -54,59 +54,39 @@ def _get_base_url_path(url: str) -> str:
 
 def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     """
-    Sucht nach Bild-URLs, extrahiert deren Basis-Pfad (ohne Auflösungsparameter)
-    und gibt eine bereinigte, eindeutige Liste zurück.
+    Sucht nach Bild-URLs innerhalb von Containern mit mehreren Bildern,
+    extrahiert deren Basis-Pfad (ohne Auflösungsparameter) und gibt
+    eine bereinigte, eindeutige Liste zurück.
+    Einzelbilder außerhalb solcher Container werden ignoriert.
     """
-    soup = BeautifulSoup(html_content, 'lxml')
-    # Speichert nur die eindeutigen Basis-URLs (ohne ?imwidth=...)
+    soup = BeautifulSoup(html_content or "", 'lxml')
     basis_url_kandidaten = set()
-    
-    # 1. Sammle alle rohen URL-Kandidaten, wie im Originalcode
-    rohe_urls = set()
-    
-    # Durchsuche <img>-Tags
-    for img in soup.find_all('img'):
-        if 'src' in img.attrs and img['src'].strip():
-            rohe_urls.add(img['src'].strip())
-        
-        for attr in ['data-src', 'data-srcset', 'data-original', 'data-full-image-url']:
-            if attr in img.attrs and img[attr].strip():
-                if 'srcset' in attr:
-                    # Zerlege srcset/data-srcset
+
+    # 1. Suche nach Containern mit mehreren <img>
+    container_tags = ['div', 'figure', 'section', 'ul']  # typische Container
+    for container in soup.find_all(container_tags):
+        imgs = container.find_all('img')
+        if len(imgs) < 2:
+            continue  # Einzelbilder ignorieren
+        for img in imgs:
+            urls = []
+            for attr in ['src', 'data-src', 'data-original', 'data-full-image-url']:
+                if attr in img.attrs and img[attr]:
+                    urls.append(img[attr])
+            for attr in ['srcset', 'data-srcset']:
+                if attr in img.attrs and img[attr]:
                     parts = re.split(r',\s*', img[attr])
                     for part in parts:
                         url_only = part.split()[0]
-                        rohe_urls.add(url_only.strip())
-                else:
-                    rohe_urls.add(img[attr].strip())
-        
-        if 'srcset' in img.attrs and img['srcset'].strip():
-            # Zerlegesrcset
-            parts = re.split(r',\s*', img['srcset'])
-            for part in parts:
-                url_only = part.split()[0]
-                rohe_urls.add(url_only.strip())
+                        urls.append(url_only)
+            for url in urls:
+                base = _get_base_url_path(url)
+                if base and not base.lower().endswith(('.svg', '.gif')) and not base.startswith('data:'):
+                    basis_url_kandidaten.add(base)
 
-    # Durchsuche <source>-Tags
-    for source in soup.find_all('source'):
-        for attr in ['srcset', 'data-srcset']:
-            if attr in source.attrs and source[attr].strip():
-                # Zerlege srcset/data-srcset
-                parts = re.split(r',\s*', source[attr])
-                for part in parts:
-                    url_only = part.split()[0]
-                    rohe_urls.add(url_only.strip())
-
-    # 2. Filtere und normalisiere die rohen URLs zu Basis-URLs
-    for url in rohe_urls:
-        if url and not url.endswith(('.svg', '.gif')) and not url.startswith('data:'):
-            # Nutze die Hilfsfunktion, um die Basis-URL zu bekommen
-            basis_url = _get_base_url_path(url)
-            basis_url_kandidaten.add(basis_url)
-            
     kandidaten_string = " | ".join(sorted(list(basis_url_kandidaten)))
-    
-    return kandidaten_string if kandidaten_string else "N/A"
+    return kandidaten_string if basis_url_kandidaten else "N/A"
+
 
 def normalize_url(url: str) -> str:
     """

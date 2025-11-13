@@ -133,6 +133,15 @@ def baue_pattern_pack():
     
     "**PRÄZEDENZ:** Der `akt_preis` muss die Summe **ALLER** direkten Rabatte widerspiegeln. Das Ignorieren eines **direkten** Rabattes gilt als Fehler. "
     
+    "Extrahiere ausschließlich relevante Produktbilder nach diesen Kriterien:\n"
+    "1. Bilder müssen Teil einer **Serie von mindestens 2 zusammenhängenden Produktbildern** sein.\n"
+    "2. Ignoriere alle Bilder, die Logos, Icons, Screenshots, Banner, Marketinggrafiken oder dekorative Elemente darstellen (Negativ-Keywords: 'logo', 'icon', 'screenshot', 'banner', 'design-ohne-titel').\n"
+    "3. Bevorzuge hochauflösende Bilder (≥ 800px Breite, wenn erkennbar).\n"
+    "4. Halte **Format-Konsistenz** (nur das dominante Format, z.B. JPG oder WebP). Abweichende Formate ausschließen.\n"
+    "5. Priorisiere Bilder, die nummeriert oder mit gleichem Präfix/Asset-ID versehen sind (z.B. prod-123-1.jpg, prod-123-2.jpg).\n"
+    "6. Relative URLs müssen in **absolute URLs** umgewandelt werden, basierend auf der 'kanonischen Produkt-URL'.\n"
+    "7. Gib nur Bilder zurück, die alle Kriterien erfüllen. Wenn keine Bilder passen, setze `hauptprodukt_bilder` auf [] oder 'N/A'.\n"
+    
     "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
     "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
     "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
@@ -141,7 +150,7 @@ def baue_pattern_pack():
 
 def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
-    LLM_MODEL = "gemini-2.5-flash"
+    LLM_MODEL = "gemini-2.5-flash-lite"
     client = pack["client"]
     config = pack["config"]
     system_prompt = pack["system_prompt"]
