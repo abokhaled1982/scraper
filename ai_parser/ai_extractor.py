@@ -131,7 +131,7 @@ def baue_pattern_pack():
 
 def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
-    LLM_MODEL = "gemini-2.5-flash"
+    LLM_MODEL = "gemini-2.5-flash-lite"
     client = pack["client"]
     config = pack["config"]
     system_prompt = pack["system_prompt"]
