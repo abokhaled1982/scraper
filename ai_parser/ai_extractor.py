@@ -117,17 +117,27 @@ def baue_pattern_pack():
     )
     system_prompt = (
     "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
-    "Produktdetails aus dem Text. Halte dich exakt an das JSON-Schema. "
+    "Produktdetails aus dem gesamten Kontext (**TEXT UND ALLE BILDER**). Halte dich exakt an das JSON-Schema. "
     
-    # NEUE, SCHARFE ANWEISUNG ZUR BERECHNUNG
-    "**OBERSTE PRIORITÄT: BERECHNE IMMER DEN FINALEN, NIEDRIGSTEN PREIS ('akt_preis')!** Dazu MUSS du ALLE Preisvorteile (Rabattcodes, Sofort-Rabatte, aber auch AKTIONS-MECHANISMEN wie 'Klick-Coupons' oder 'Rabatt im Warenkorb') im Text erkennen und den Preis exakt neu berechnen. "
+    # EXTREM SCHARFE ANWEISUNG ZUR BERECHNUNG DES ENDPREISES
+    "**OBERSTE PRIORITÄT: BERECHNE IMMER DEN FINALEN, NIEDRIGSTEN PREIS ('akt_preis')!** "
+    "Dazu MUSS du ALLE Arten von **DIREKTEN, SOFORT ANWENDBAREN** Preisvorteilen "
+    "aus dem gesamten Kontext erkennen und den Preis **EXAKT** neu berechnen. "
+    
+    # NEU: KRITERIEN FÜR DIE BERECHNUNG DES ENDPREISES ('akt_preis')
+    "**DEFINITION 'akt_preis':** Der `akt_preis` MUSS den niedrigsten Kaufpreis darstellen, den ein **UNIVERSALER Kunde** bei Abschluss der Transaktion sofort bezahlt. "
+    
+    "**PRINZIP DER DIREKTEN REDUKTION:** Nur Preisvorteile, die zu einer **SOFORTIGEN, UNMITTELBAREN Reduktion** des fälligen Betrags im Checkout führen (z.B. Rabattcodes, Sofort-Abzüge, Klick-Coupons, automatische Mengenrabatte, Versandkosten-Ersparnis), dürfen in die Berechnung des `akt_preis` einfließen. "
+    
+    "**AUSNAHME VON DER BERECHNUNG (NACHGELAGERTE VORTEILE):** Vorteile, die eine **hohe Spezifität** oder eine **nachgelagerte Gutschrift** erfordern, sind strikt vom `akt_preis` auszuschließen. Dazu gehören: Gutschriften/Voucher für zukünftige Einkäufe, Cash-Back-Angebote nach dem Kauf, Boni für die Nutzung einer spezifischen (nicht-universellen) Zahlungsart oder Boni, die einen speziellen Kundenstatus voraussetzen. Diese Vorteile MÜSSEN im `rabatt_text` oder `gutschein_details` dokumentiert werden. "
+    
+    "**PRÄZEDENZ:** Der `akt_preis` muss die Summe **ALLER** direkten Rabatte widerspiegeln. Das Ignorieren eines **direkten** Rabattes gilt als Fehler. "
     
     "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
     "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
     "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
 )
     return {"client": client, "config": config, "system_prompt": system_prompt}
-
 
 def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
