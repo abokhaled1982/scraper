@@ -16,7 +16,42 @@ load_dotenv()
 
 class Produktinformation(BaseModel):
     """Strukturierte Daten, die von der Produktseite extrahiert werden sollen."""
-    produkt_titel: str = Field(description="Der vollständige und präzise Titel des Produkts.")
+
+    produkt_titel: str = Field(
+    description=(
+        "Der verkaufsstarke, professionell formulierte und für Social Media (WhatsApp & Telegram) "
+        "optimierte Produkttitel. "
+        "\n\n"
+        "🎯 **KÜRZUNGSREGELN (EXTREM WICHTIG):**\n"
+        "- Der Titel DARF MAXIMAL **100 Zeichen** haben.\n"
+        "- Wenn der Originaltitel länger ist, MUSST du ihn **intelligent kürzen**.\n"
+        "- Kürze NIEMALS mitten im Wort.\n"
+        "- Wenn gekürzt wurde: **immer mit '...' enden**.\n"
+        "- Erzeuge keine unnatürlichen Abkürzungen.\n"
+        "\n"
+        "🎯 **PRIORITÄTEN BEIM KÜRZEN:**\n"
+        "Behalte IMMER diese Elemente (falls vorhanden):\n"
+        "1. **Marke** (z. B. Samsung, Apple, Sony)\n"
+        "2. **Produkttyp** (z. B. Smartphone, Wasserkocher, Monitor)\n"
+        "3. **kritische Kennzahl oder Modellnummer** (z. B. 256GB, 55 Zoll, 2200W, M1, S23 Ultra)\n"
+        "4. **Farbe** (optional, aber bevorzugt, wenn dadurch klarer wird, um welches Produkt es geht)\n"
+        "\n"
+        "🎯 **STILREGELN:**\n"
+        "- Kurz, professionell, leicht lesbar.\n"
+        "- Keine überflüssigen Wörter wie 'inkl.', 'Gratis Versand', 'hochwertig', 'super', 'neu', 'Angebot', etc.\n"
+        "- Keine Emojis in diesem Feld.\n"
+        "\n"
+        "📌 **BEISPIELE:**\n"
+        "Original: 'Samsung Galaxy S21 Ultra 5G SM-G998B 256GB Phantom Black Dual SIM inkl. Case'\n"
+        "→ Ausgabe: 'Samsung Galaxy S21 Ultra 256GB Phantom Black...'\n\n"
+        "Original: 'Philips Wasserkocher Edelstahl 1.7L 2200W Schnellkochfunktion, silber'\n"
+        "→ Ausgabe: 'Philips Wasserkocher 1.7L 2200W silber'\n\n"
+        "Original: 'Nike Air Zoom Pegasus 39 Herren Laufschuhe Schwarz Blau Größe 43 EU'\n"
+        "→ Ausgabe: 'Nike Air Zoom Pegasus 39 Herren schwarz blau...'\n\n"
+        "Gib **NUR DEN FERTIGEN TITEL** zurück, kein JSON, keine Erklärung."
+             )
+    )
+
     marke: str = Field(description="Die Marke oder der Hersteller des Produkts.")
     
     # NEUE LOGIK: Muss den finalen, niedrigsten Preis berechnen!
