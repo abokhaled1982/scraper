@@ -11,7 +11,7 @@ data/
 
 # VS Code
 .vscode/
-
+.env
 
 # Sonstige temporäre Dateien
 *.log
