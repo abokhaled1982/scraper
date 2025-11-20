@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Remote Facebook Poster",
   "version": "3.2",
-  "permissions": ["activeTab", "scripting", "tabs"],
+  "permissions": ["activeTab", "scripting", "tabs", "alarms"],
   "host_permissions": [
     "https://*.facebook.com/*",
     "http://*.facebook.com/*"
