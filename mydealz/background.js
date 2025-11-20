@@ -28,7 +28,7 @@ const queue = [];
 // Liste der URLs, die neu geladen werden sollen (falls sie der aktive Tab sind)
 const RELOAD_PATTERNS = [
   "mydealz.de", "mydealz.com",
-  "dealdoktor.de"
+  "dealdoktor.de","www.mein-deal.com"
 ];
 
 // -----------------------------------------------------

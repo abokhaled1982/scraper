@@ -1,0 +1,37 @@
+/* Kleine, neutrale Toolbar */
+#wc-helper-toolbar.wc-helper-toolbar,
+.wc-helper-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2147483646; /* unter der Browser-UI bleiben */
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  margin: 6px 0 8px 0;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  backdrop-filter: saturate(1.2) blur(2px);
+}
+
+.wc-helper-toolbar button {
+  font: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #cfcfcf;
+  cursor: pointer;
+  background: #f6f6f6;
+}
+.wc-helper-toolbar button:hover {
+  background: #efefef;
+}
+
+/* Einklappen der Wiki-Description */
+.wc-helper-collapsed {
+  max-height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
