@@ -1,33 +1,124 @@
-// content.js - Zeilenumbruch-Fix durch Paste-Simulation
+// content.js - "Humanized" Version mit zufälligen Wartezeiten
+
+// --- NEUE HELPER FUNKTION ---
+// Erzeugt eine zufällige Wartezeit zwischen min und max Millisekunden
+const randomSleep = (min = 2000, max = 5000) => {
+  const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+  console.log(`🎲 Menschliche Pause: ${(delay / 1000).toFixed(2)} Sekunden...`);
+  return new Promise((resolve) => setTimeout(resolve, delay));
+};
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === "remote_post") {
-    const nachricht = request.text;
-    const bildDaten = request.image;
-
-    console.log("Empfange Befehl. Bild vorhanden?", !!bildDaten);
-
-    // Trigger-Button suchen (Was machst du gerade?)
-    const buttons = document.querySelectorAll('div[role="button"]');
-    let gefunden = false;
-
-    for (let i = 0; i < buttons.length; i++) {
-      if (buttons[i].innerText.includes("Was machst du gerade")) {
-        buttons[i].click();
-        gefunden = true;
-
-        // Warte auf das Popup
-        waitForElement('div[role="dialog"] div[role="textbox"]').then((textBox) => {
-          verarbeiteInhalt(textBox, nachricht, bildDaten);
-        });
-        break;
-      }
-    }
-    if (!gefunden) console.log("Start-Button nicht gefunden.");
+    console.log("🤖 Empfange Befehl...");
+    startPostingProcess(request.text, request.image);
   }
 });
 
-// Helper: Wartet auf ein Element
+async function startPostingProcess(text, base64Image) {
+  // 1. Trigger-Button suchen ("Was machst du gerade?")
+  const buttons = document.querySelectorAll('div[role="button"]');
+  let triggerFound = false;
+
+  for (const btn of buttons) {
+    if (btn.innerText.includes("Was machst du gerade")) {
+      console.log("1. Öffne Post-Dialog...");
+      btn.click();
+      triggerFound = true;
+      break;
+    }
+  }
+
+  if (!triggerFound) {
+    console.error("❌ Start-Button nicht gefunden.");
+    return;
+  }
+
+  // Nach dem Klick kurz warten (Mensch orientiert sich) -> 1.5 bis 3.5 Sek
+  await randomSleep(1500, 3500);
+
+  // 2. Warte auf das Textfeld im Popup
+  const textBox = await waitForElement('div[role="dialog"] div[role="textbox"]');
+  console.log("2. Editor gefunden! Fokus setzen...");
+  textBox.focus();
+
+  // Kurze Pause vor der ersten Aktion -> 1 bis 2 Sek
+  await randomSleep(1000, 2000);
+
+  // --- SCHRITT A: BILD ---
+  if (base64Image) {
+    console.log("📸 Füge Bild ein...");
+    pasteImage(textBox, base64Image);
+
+    console.log("⏳ Warte auf Upload & Verarbeitung...");
+    // Hier geben wir etwas mehr Zeit (2.5 bis 5.5 Sek), weil Bilder laden dauert
+    await randomSleep(2500, 5500);
+  }
+
+  // --- SCHRITT B: TEXT ---
+  if (text) {
+    console.log("📝 Füge Text ein...");
+    pasteText(textBox, text);
+
+    console.log("⏳ Text lesen/prüfen...");
+    // Text einfügen und "kurz drüber schauen" -> 2 bis 4.5 Sek
+    await randomSleep(2000, 4500);
+  }
+
+  // --- SCHRITT C: BUTTONS (Weiter / Posten) ---
+  console.log("🔘 Starte Button-Logik...");
+  await handleButtonsRecursive();
+}
+
+// Rekursive Button-Suche mit zufälligem Polling
+async function handleButtonsRecursive() {
+  const dialogSelector = 'div[role="dialog"]';
+  const weiterBtn = document.querySelector(`${dialogSelector} div[aria-label="Weiter"]`);
+  const postenBtn = document.querySelector(`${dialogSelector} div[aria-label="Posten"]`);
+
+  let targetBtn = postenBtn || weiterBtn;
+
+  if (!targetBtn) {
+    console.log("🔍 Noch keine Buttons gefunden. Suche gleich nochmal...");
+    // Schnelleres Polling, aber immer noch variabel (0.8 bis 1.5 Sek)
+    await randomSleep(800, 1500);
+    return handleButtonsRecursive();
+  }
+
+  // Prüfen ob ausgegraut (disabled)
+  const isDisabled = targetBtn.getAttribute("aria-disabled") === "true";
+  if (isDisabled) {
+    console.log("⏳ Button gefunden, aber noch inaktiv. Warte...");
+    await randomSleep(1000, 2000);
+    return handleButtonsRecursive();
+  }
+
+  const buttonType = targetBtn.getAttribute("aria-label");
+  console.log(`🚀 KLICK auf: "${buttonType}"`);
+
+  // Klick simulieren
+  const mouseUp = new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window });
+  const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window });
+  targetBtn.dispatchEvent(mouseDown);
+  targetBtn.dispatchEvent(mouseUp);
+  targetBtn.click();
+
+  // --- ENTSCHEIDUNG NACH KLICK ---
+  if (buttonType === "Weiter") {
+    console.log("➡️ 'Weiter' geklickt. Warte auf nächsten Screen...");
+    // Nach 'Weiter' lädt oft eine Vorschau -> Längere Pause (2 bis 5 Sek)
+    await randomSleep(2000, 5000);
+
+    return handleButtonsRecursive();
+  }
+
+  if (buttonType === "Posten") {
+    console.log("🎉 'Posten' geklickt! Vorgang abgeschlossen.");
+  }
+}
+
+// --- HELPER FUNKTIONEN ---
+
 function waitForElement(selector) {
   return new Promise((resolve) => {
     if (document.querySelector(selector)) {
@@ -43,13 +134,8 @@ function waitForElement(selector) {
   });
 }
 
-function verarbeiteInhalt(textBox, text, base64Image) {
-  console.log("Popup-Editor gefunden!");
-  textBox.focus();
-
-  // --- SCHRITT A: Bild einfügen (falls vorhanden) ---
-  if (base64Image) {
-    console.log("Füge Bild ein...");
+function pasteImage(target, base64Image) {
+  try {
     const byteCharacters = atob(base64Image);
     const byteNumbers = new Array(byteCharacters.length);
     for (let i = 0; i < byteCharacters.length; i++) {
@@ -67,73 +153,19 @@ function verarbeiteInhalt(textBox, text, base64Image) {
       cancelable: true,
       clipboardData: dataTransfer,
     });
-    textBox.dispatchEvent(pasteEvent);
+    target.dispatchEvent(pasteEvent);
+  } catch (e) {
+    console.error("Fehler beim Bild-Paste:", e);
   }
-
-  // --- SCHRITT B: Text einfügen (Fix für Zeilenumbrüche) ---
-  // Wir warten kurz, damit sich Bild-Paste und Text-Paste nicht überschneiden
-  setTimeout(() => {
-    if (text) {
-      console.log("Füge Text via Paste-Event ein (für korrekte Umbrüche)...");
-
-      // Hier ist der Trick: Wir nutzen DataTransfer mit 'text/plain'
-      // Das zwingt Facebook, die \n als neue Zeilen zu interpretieren
-      const dataTransfer = new DataTransfer();
-      dataTransfer.setData("text/plain", text);
-
-      const pasteEvent = new ClipboardEvent("paste", {
-        bubbles: true,
-        cancelable: true,
-        clipboardData: dataTransfer,
-      });
-
-      textBox.dispatchEvent(pasteEvent);
-    }
-
-    // --- SCHRITT C: Klick-Zyklus starten ---
-    console.log("Starte Suche nach Weiter/Posten Buttons...");
-    setTimeout(checkAndClickPostButton, 2000);
-  }, 1500); // Etwas mehr Zeit geben (1.5s), damit das Bild sicher verarbeitet ist
 }
 
-function checkAndClickPostButton() {
-  // Wir suchen nach beiden Buttons innerhalb des Dialogs
-  const dialogSelector = 'div[role="dialog"]';
-  const weiterBtnSelector = `${dialogSelector} div[aria-label="Weiter"]`;
-  const postenBtnSelector = `${dialogSelector} div[aria-label="Posten"]`;
-
-  const weiterBtn = document.querySelector(weiterBtnSelector);
-  const postenBtn = document.querySelector(postenBtnSelector);
-
-  let targetBtn = postenBtn || weiterBtn;
-
-  if (targetBtn) {
-    // Prüfen ob Button disabled ist
-    const isDisabled = targetBtn.getAttribute("aria-disabled") === "true";
-
-    if (isDisabled) {
-      console.log("Button gefunden, ist aber noch inaktiv. Warte...");
-      setTimeout(checkAndClickPostButton, 1000);
-      return;
-    }
-
-    const buttonType = targetBtn.getAttribute("aria-label");
-    console.log(`Klicke Button: "${buttonType}"`);
-
-    const mouseUp = new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window });
-    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window });
-    targetBtn.dispatchEvent(mouseDown);
-    targetBtn.dispatchEvent(mouseUp);
-    targetBtn.click();
-
-    if (buttonType === "Weiter") {
-      console.log("Weiter geklickt. Warte auf UI-Wechsel zu 'Posten'...");
-      setTimeout(checkAndClickPostButton, 2500); // Leicht erhöht für Animationen
-    } else if (buttonType === "Posten") {
-      console.log("Posten erfolgreich geklickt! Skript beendet.");
-    }
-  } else {
-    console.log("Kein Weiter- oder Posten-Button gefunden. Suche erneut...");
-    setTimeout(checkAndClickPostButton, 1000);
-  }
+function pasteText(target, text) {
+  const dataTransfer = new DataTransfer();
+  dataTransfer.setData("text/plain", text);
+  const pasteEvent = new ClipboardEvent("paste", {
+    bubbles: true,
+    cancelable: true,
+    clipboardData: dataTransfer,
+  });
+  target.dispatchEvent(pasteEvent);
 }
