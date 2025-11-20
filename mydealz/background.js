@@ -26,10 +26,7 @@ const processed = new Set();
 const queue = [];
 
 // Liste der URLs, die neu geladen werden sollen (falls sie der aktive Tab sind)
-const RELOAD_PATTERNS = [
-  "mydealz.de", "mydealz.com",
-  "dealdoktor.de","www.mein-deal.com"
-];
+const RELOAD_PATTERNS = ["mydealz.de", "mydealz.com", "dealdoktor.de", "www.mein-deal.com","dealbunny.de"];
 
 // -----------------------------------------------------
 // ### 1. WEBSOCKET LOGIK
@@ -151,7 +148,7 @@ async function openNextInQueue() {
     // Sende eine Nachricht an das Content-Skript, um den Klick auszuführen
     const response = await chrome.tabs.sendMessage(tab.id, {
       type: "CLICK_DEAL",
-      dealId: item.id
+      dealId: item.id,
     });
 
     if (response?.clicked) {
@@ -175,7 +172,7 @@ async function scanActiveTabOnce() {
 
     // Sende eine Nachricht an das Content-Skript, um Deals zu extrahieren
     const response = await chrome.tabs.sendMessage(tab.id, {
-      type: "SCAN_DEALS"
+      type: "SCAN_DEALS",
     });
 
     if (!Array.isArray(response?.deals)) return;
@@ -253,27 +250,49 @@ function stopOpenTimer() {
   openInterval = null;
 }
 
+/**
+ * Überprüft, ob einer der gelisteten Deal-Tabs neu geladen werden muss.
+ * Fokussiert den Tab und das Fenster, bevor der Reload ausgeführt wird.
+ */
 async function checkForReload() {
+  // Überprüfe die Zeit wie bisher
   if (Date.now() - lastReloadTime < RELOAD_EVERY_MS) {
     return;
   }
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // 1. Hole alle Tabs
+    const allTabs = await chrome.tabs.query({});
 
-    if (!tab?.id || !tab.url) return;
+    // Finde den ersten Tab, der neu geladen werden soll
+    const tabToReload = allTabs.find((tab) => tab?.url && RELOAD_PATTERNS.some((pattern) => tab.url.includes(pattern)));
 
-    // Prüfe, ob die URL neu geladen werden soll
-    const shouldReload = RELOAD_PATTERNS.some(pattern => tab.url.includes(pattern));
+    if (!tabToReload || !tabToReload.id) return;
 
-    if (shouldReload) {
-      console.log(`[Deal-AutoClick] Seite neu laden: ${tab.url}...`);
-      chrome.tabs.reload(tab.id);
-      lastReloadTime = Date.now();
-      queue.length = 0; // Leere Queue nach Reload
+    // --- NEUE LOGIK: TAB AKTIVIEREN/FOKUSSIEREN VOR DEM RELOAD ---
+
+    // Prüfe, ob der Tab bereits aktiv ist
+    if (!tabToReload.active) {
+      console.log(`[Deal-AutoClick] Fokussiere Tab ${tabToReload.id} für Reload: ${tabToReload.url}`);
+
+      // 2. Tab aktivieren (setzt den Fokus auf diesen Tab)
+      await chrome.tabs.update(tabToReload.id, { active: true });
+
+      // OPTIONAL: Fenster in den Vordergrund bringen (wenn es minimiert war)
+      if (tabToReload.windowId) {
+        await chrome.windows.update(tabToReload.windowId, { focused: true });
+      }
     }
+
+    // 3. Tab neu laden
+    console.log(`[Deal-AutoClick] Tab ${tabToReload.id} neu laden: ${tabToReload.url}...`);
+    // Nutze `chrome.tabs.reload` mit der ID des gefundenen Tabs
+    await chrome.tabs.reload(tabToReload.id);
+
+    lastReloadTime = Date.now();
+    queue.length = 0; // Leere Queue nach Reload, da die Seite neu gescannt wird
   } catch (e) {
-    // console.error("[Deal-AutoClick] Reload-Fehler:", e);
+    console.error("[Deal-AutoClick] Reload/Fokus-Fehler:", e);
   }
 }
 
