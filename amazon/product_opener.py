@@ -33,7 +33,7 @@ PROFILE_NAME   = os.environ.get("CHROME_PROFILE", "Profile 1")
 PAUSE_SECONDS  = int(os.environ.get("PAUSE_SECONDS", "30"))
 SKIP_TTL_SECONDS = int(os.environ.get("SKIP_TTL_SECONDS", str(24*3600)))
 DRY_RUN = os.environ.get("DRY_RUN", "0") not in ("0", "", "false", "False", "no", "No")
-POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "5"))  # Wartezeit beim Leerlauf
+POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "30"))  # Wartezeit beim Leerlauf
 # ------------------------------------------------
 
 
