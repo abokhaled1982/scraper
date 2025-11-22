@@ -51,8 +51,17 @@ except Exception:
 # ------------------------
 # ENV / Konfiguration (PIRATEN SPEZIFISCH)
 # ------------------------
-PRODUCT_LIST_PATH = Path(os.getenv("PRODUCT_LIST_PATH", "product_list.json"))
-LOCK_FILE = Path(os.getenv("LOCK_FILE", ".locks/product_list.lock"))
+PRODUCT_LIST_PATH = None
+LOCK_FILE = None
+try:
+    import config
+    PRODUCT_LIST_PATH = Path(getattr(config, "PRODUCT_LIST_PATH", "product_list.json"))
+    LOCK_FILE = Path(getattr(config, "LOCK_FILE", ".locks/product_list.lock"))
+except Exception:
+    # Fallback auf Umgebungsvariablen / defaults
+    PRODUCT_LIST_PATH = Path(os.getenv("PRODUCT_LIST_PATH", "product_list.json"))
+    LOCK_FILE = Path(os.getenv("LOCK_FILE", ".locks/product_list.lock"))
+
 
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
