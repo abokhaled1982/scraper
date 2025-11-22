@@ -61,65 +61,60 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
 async def ensure_both_sessions_sequential(
     router_cfg: LoginConfig,
     observer_cfg: LoginConfig,
-    # Hinzufügen der neuen Sender-Konfiguration zum Login-Check
     sender_cfg: LoginConfig,
+    piraten_cfg: Optional[LoginConfig] = None,  # <-- NEUER PARAMETER
     on_step: Optional[Callable[[str], None]] = None,
-) -> Tuple[bool, bool, bool]: # Gibt jetzt drei Status zurück
+) -> Tuple[bool, bool, bool, bool]: # <-- GIBT JETZT 4 WERTE ZURÜCK
 
     def say(msg: str):
-        if on_step:
-            on_step(msg)
-        else:
-            print(msg)
+        if on_step: on_step(msg)
+        else: print(msg)
 
-    # --- Router ---
+    # 1. Router Check
     router_ok = False
     try:
-        # Login-Logik... (unverändert)
-        router_client = await ensure_logged_in(router_cfg)
-        try:
-            me = await router_client.get_me()
-            say(f"✔ Router angemeldet als: {me.username or me.phone}")
-            router_ok = True
-        finally:
-            await router_client.disconnect()
-    except Exception as e:
-        say(f"❌ Router-Login fehlgeschlagen: {e}")
-        return False, False, False
+        c1 = await ensure_logged_in(router_cfg)
+        me = await c1.get_me()
+        say(f"✔ Router OK: {me.username or me.phone}")
+        router_ok = True
+        await c1.disconnect()
+    except Exception as e: say(f"❌ Router Fehler: {e}")
 
-    # --- Receiver (Observer) ---
+    # 2. Observer Check (Main Receiver)
     observer_ok = False
     try:
-        # Login-Logik... (unverändert)
-        observer_client = await ensure_logged_in(observer_cfg)
-        try:
-            me2 = await observer_client.get_me()
-            say(f"✔ Receiver (Observer) angemeldet als: {me2.username or me2.phone}")
-            observer_ok = True
-        finally:
-            await observer_client.disconnect()
-    except Exception as e:
-        say(f"❌ Receiver-Login fehlgeschlagen: {e}")
-        return True, False, False
+        c2 = await ensure_logged_in(observer_cfg)
+        me = await c2.get_me()
+        say(f"✔ Observer OK: {me.username or me.phone}")
+        observer_ok = True
+        await c2.disconnect()
+    except Exception as e: say(f"❌ Observer Fehler: {e}")
 
-    # --- Sender (Observer) ---
+    # 3. Sender Check
     sender_ok = False
     try:
-        # Login-Logik... (unverändert)
-        sender_client = await ensure_logged_in(sender_cfg)
+        c3 = await ensure_logged_in(sender_cfg)
+        me = await c3.get_me()
+        say(f"✔ Sender OK: {me.username or me.phone}")
+        sender_ok = True
+        await c3.disconnect()
+    except Exception as e: say(f"❌ Sender Fehler: {e}")
+
+    # 4. Piraten Check (NEU)
+    piraten_ok = False
+    if piraten_cfg:
         try:
-            me3 = await sender_client.get_me()
-            say(f"✔ Sender (Observer) angemeldet als: {me3.username or me3.phone}")
-            sender_ok = True
-        finally:
-            await sender_client.disconnect()
-    except Exception as e:
-        say(f"❌ Sender-Login fehlgeschlagen: {e}")
-        return True, True, False
+            c4 = await ensure_logged_in(piraten_cfg)
+            me = await c4.get_me()
+            say(f"✔ Piraten OK: {me.username or me.phone}")
+            piraten_ok = True
+            await c4.disconnect()
+        except Exception as e: say(f"❌ Piraten Fehler: {e}")
+    else:
+        # Wenn keine Config übergeben wurde, ignorieren wir es (für Rückwärtskompatibilität)
+        piraten_ok = True 
 
-
-    return router_ok, observer_ok, sender_ok
-
+    return router_ok, observer_ok, sender_ok, piraten_ok
 def _ensure_dir(path: str) -> None:
     if not os.path.isdir(path):
         os.makedirs(path, exist_ok=True)

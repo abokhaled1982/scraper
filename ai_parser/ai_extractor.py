@@ -55,8 +55,14 @@ class Produktinformation(BaseModel):
     marke: str = Field(description="Die Marke oder der Hersteller des Produkts.")
     
     # NEUE LOGIK: Muss den finalen, niedrigsten Preis berechnen!
+    # ✅ HIER IST DEIN ANGEPASSTER TEXT MIT VISA-FILTER
     akt_preis: str = Field(
-        description="Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €). Dieses Feld MUSS den FINALEN, niedrigsten Preis nach Anwendung des HÖCHSTEN RABATTS (Code oder Aktion) enthalten. Der Wert muss berechnet und mit Währung angegeben werden."
+        description=(
+            "Der aktuelle Verkaufspreis mit Währung (z.B. 25,45 €). "
+            "Dieses Feld MUSS den FINALEN, niedrigsten Preis nach Anwendung des HÖCHSTEN RABATTS (Code oder Aktion) enthalten. "
+            "Der Wert muss berechnet und mit Währung angegeben werden. "
+            "Ignoriere ALLE Rabatte, die mit 'Amazon Visa', 'Kreditkarte', 'Startgutschrift' oder 'Punkte sammeln' zu tun haben."
+        )
     )
 
     # NEUES FELD: Originalpreis
@@ -110,11 +116,13 @@ class Produktinformation(BaseModel):
     gutschein_details: str = Field(
         description="Die vollständige Beschreibung (Gültigkeit, Bedingungen, Einschränkungen) des Gutscheincodes. WIRD NUR BEFÜLLT, WENN 'gutschein_code' VORHANDEN IST, sonst 'N/A'. WICHTIG: Die Endpreis-Information muss hier zusätzlich genannt werden, z.B. '...der Endpreis beträgt dann XX,XX €', um die Berechnung für den 'akt_preis' zu dokumentieren."
     )   
+    # ✅ DEIN RABATT_TEXT MIT VISA FILTER UND EMOJIS
     rabatt_text: str = Field(
         description=(
             "Die KURZE, WERBLICHE ZUSAMMENFASSUNG des Preisvorteils. "
             "Dieses Feld MUSS den **absoluten Rabattbetrag in Euro (z.B. 12,50 €)** nennen, anstatt eines Prozentsatzes. "
             "Es muss beschreiben, wie man den Vorteil erhält (z.B. 'mit Code', 'im Sale'). "
+            "Ignoriere ALLE Rabatte, die mit 'Amazon Visa' zu tun haben.\n"
             
             # NEU: Regel zur Rabatt-Stufen-Wahl (Emoji & Ton)
             "**REGEL FÜR ATTENTION:** Jeder generierte Satz MUSS mit einem relevanten Emoji beginnen. Die Wahl des Emojis MUSS von der Höhe des Rabatts abhängen: "
@@ -162,7 +170,7 @@ def baue_pattern_pack():
     # NEU: KRITERIEN FÜR DIE BERECHNUNG DES ENDPREISES ('akt_preis')
     "**DEFINITION 'akt_preis':** Der `akt_preis` MUSS den niedrigsten Kaufpreis darstellen, den ein **UNIVERSALER Kunde** bei Abschluss der Transaktion sofort bezahlt. "
     
-    "**PRINZIP DER DIREKTEN REDUKTION:** Nur Preisvorteile, die zu einer **SOFORTIGEN, UNMITTELBAREN Reduktion** des fälligen Betrags im Checkout führen (z.B. Rabattcodes, Sofort-Abzüge, Klick-Coupons, automatische Mengenrabatte, Versandkosten-Ersparnis), dürfen in die Berechnung des `akt_preis` einfließen. "
+    "**PRINZIP DER DIREKTEN REDUKTION:** Nur Preisvorteile, die zu einer **SOFORTIGEN, UNMITTELBAREN Reduktion** des fälligen Betrags im Checkout führen (z.B. Rabattcodes, Sofort-Abzüge, Klick-Coupons, automatische Mengenrabatte, Versandkosten-Ersparnis), dürfen in die Berechnung des `akt_preis` einfließen.Aber NIEMALS Visa-Gutschriften. "
     
     "**AUSNAHME VON DER BERECHNUNG (NACHGELAGERTE VORTEILE):** Vorteile, die eine **hohe Spezifität** oder eine **nachgelagerte Gutschrift** erfordern, sind strikt vom `akt_preis` auszuschließen. Dazu gehören: Gutschriften/Voucher für zukünftige Einkäufe, Cash-Back-Angebote nach dem Kauf, Boni für die Nutzung einer spezifischen (nicht-universellen) Zahlungsart oder Boni, die einen speziellen Kundenstatus voraussetzen. Diese Vorteile MÜSSEN im `rabatt_text` oder `gutschein_details` dokumentiert werden. "
     
@@ -225,7 +233,7 @@ def extract_and_save_data(llm_input_data: json, output_path: Path):
     print(f"  -> Output: {output_path.resolve()}")
 
     if not llm_input_data:
-        raise FileNotFoundError(f"LLM-Input-Datei nicht gefunden: {input_path}")
+        raise FileNotFoundError(f"LLM-Input-Datei nicht gefunden")
   
     clean_text = llm_input_data.get("clean_text", "N/A")
     bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")

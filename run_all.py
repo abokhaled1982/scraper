@@ -71,6 +71,10 @@ SENDER_NAME      = os.getenv("OBS_SEND_OBSERVER_NAME", "observer_sender_session"
 ROUTER_CHANNEL   = os.getenv("CHANNEL_INVITE_URL", "").strip()
 OBSERVER_CHANNEL = os.getenv("OBS_CHANNEL_INVITE_URL", "").strip()
 
+# 🏴‍☠️ NEU: Piraten Vars laden
+PIRATEN_NAME     = os.getenv("PIRATEN_SESSION_NAME", "piraten_session")
+PIRATEN_CHANNEL  = os.getenv("PIRATEN_CHANNEL_INVITE_URL", "").strip()
+
 if not all([API_ID, API_HASH, ROUTER_CHANNEL, OBSERVER_CHANNEL]):
     raise SystemExit("Fehler: Mindestens eine Telegram-Variable (API_ID, HASH, CHANNEL_INVITE_URL, OBS_CHANNEL_INVITE_URL) fehlt in .env.")
 
@@ -174,34 +178,30 @@ async def terminate(proc: asyncio.subprocess.Process | None, name: str, timeout:
 # ----------------------------------------------------------
 def print_login_step(msg: str):
     print(f"[Telegram Login] {msg}")
-    
+ # ----------------------------------------------------------
+# Sequentieller Telegram Login (UPDATED)
+# ----------------------------------------------------------
 async def do_telegram_login_check():
-    """Stellt sicher, dass Router-, Receiver- und Sender-Session gültig sind."""
-    print("\n--- Starte sequentiellen Telegram-Login-Check (3 Sessions) ---")
+    print("\n--- Starte sequentiellen Telegram-Login-Check (4 Sessions) ---")
     
-    router_cfg = LoginConfig(
-        api_id=API_ID, api_hash=API_HASH, session_name=ROUTER_NAME, session_dir=SESSION_DIR,
-        phone=PHONE, password=PASSWORD,
-    )
-    observer_cfg = LoginConfig(
-        api_id=API_ID, api_hash=API_HASH, session_name=OBSERVER_NAME, session_dir=SESSION_DIR,
-        phone=PHONE, password=PASSWORD,
-    )
-    sender_cfg = LoginConfig( # NEUE SENDER-CFG
-        api_id=API_ID, api_hash=API_HASH, session_name=SENDER_NAME, session_dir=SESSION_DIR,
-        phone=PHONE, password=PASSWORD,
+    router_cfg = LoginConfig(API_ID, API_HASH, ROUTER_NAME, SESSION_DIR, PHONE, PASSWORD)
+    observer_cfg = LoginConfig(API_ID, API_HASH, OBSERVER_NAME, SESSION_DIR, PHONE, PASSWORD)
+    sender_cfg = LoginConfig(API_ID, API_HASH, SENDER_NAME, SESSION_DIR, PHONE, PASSWORD)
+    
+    # NEU: Piraten Config
+    piraten_cfg = LoginConfig(API_ID, API_HASH, PIRATEN_NAME, SESSION_DIR, PHONE, PASSWORD)
+    
+    # 4 Rückgabewerte abfangen
+    ok1, ok2, ok3, ok4 = await ensure_both_sessions_sequential(
+        router_cfg, observer_cfg, sender_cfg, piraten_cfg, on_step=print_login_step
     )
     
-    # Führt den 3-stufigen Login aus (Router -> Receiver -> Sender)
-    ok1, ok2, ok3 = await ensure_both_sessions_sequential(
-        router_cfg, observer_cfg, sender_cfg, on_step=print_login_step
-    )
+    if not (ok1 and ok2 and ok3 and ok4):
+        raise SystemExit("❌ Einer der 4 Telegram-Logins fehlgeschlagen. Abbruch.")
     
-    if not (ok1 and ok2 and ok3):
-        raise SystemExit("❌ Einer der Telegram-Logins fehlgeschlagen. Abbruch.")
-    
-    print("✅ Telegram-Login für Router, Receiver & Sender abgeschlossen.")
+    print("✅ Alle Telegram-Sessions (Router, Obs, Sender, Piraten) bereit.")
     print("---------------------------------------------------\n")
+
 # ----------------------------------------------------------
 # Main Supervisor
 # ----------------------------------------------------------
@@ -231,6 +231,8 @@ async def main():
     tel_router = await spawn("telegram_router", PY, "-m", "telegram.telRouter")
     tel_observer = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
     tel_sender = await spawn("telegram_sender", PY, "-m", "telegram.telSender") # NEU: Sender-Prozess starten
+    # NEU: Piraten starten
+    tel_piraten  = await spawn("telegram_piraten", PY, "-m", "telegram.telObserver_piraten")
 
     # Liste aller Prozesse für die Überwachung und das Beenden
     procs: List[Tuple[str, asyncio.subprocess.Process]] = [
@@ -240,7 +242,8 @@ async def main():
         ("product_parser", product_parser),
         ("telegram_router", tel_router),
         ("telegram_observer", tel_observer),
-        ("telegram_sender", tel_sender), # NEU
+        ("telegram_sender", tel_sender),
+          ("telegram_piraten", tel_piraten), # <-- In Liste aufnehmen
         
     ]
     for n, p in procs:
@@ -272,6 +275,7 @@ async def main():
         print("[supervisor] stop requested; shutting down …")
 
     # 4. 🛑 Geordnet beenden (Unverändert)
+    await terminate(tel_piraten,     "telegram_piraten") # <-- Auch beenden
     await terminate(tel_observer,    "telegram_observer")
     await terminate(tel_router,      "telegram_router")
     await terminate(product_parser,  "product_parser")
