@@ -77,12 +77,13 @@
   // --- Auto-Scroll (nur für Deals) ---
 
   function startAutoScroll() {
+     const interval = 30_000 + (200 + Math.random() * 400);
     if (autoScrollInterval) return;
     autoScrollInterval = setInterval(() => {
       // Humanizer: 800px scrollen mit leicht variablem Intervall
-      const interval = 8_000 + (200 + Math.random() * 400);
+     
       window.scrollBy({ top: 800, behavior: "smooth" });
-    }, 8_000); // Intervall ist 8s + jitter
+    }, interval); // Intervall ist 8s + jitter
     console.log("[AutoScroll] started (deals)");
   }
 

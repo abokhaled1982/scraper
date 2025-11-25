@@ -1,8 +1,7 @@
-// content.js - "Humanized" Version mit zufälligen Wartezeiten
+// content.js - "Humanized" Version mit WhatsApp/Skip Handling
 
-// --- NEUE HELPER FUNKTION ---
-// Erzeugt eine zufällige Wartezeit zwischen min und max Millisekunden
-const randomSleep = (min = 2000, max = 5000) => {
+// --- HELPER FUNKTION ---
+const randomSleep = (min = 5000, max = 10000) => {
   const delay = Math.floor(Math.random() * (max - min + 1)) + min;
   console.log(`🎲 Menschliche Pause: ${(delay / 1000).toFixed(2)} Sekunden...`);
   return new Promise((resolve) => setTimeout(resolve, delay));
@@ -34,7 +33,6 @@ async function startPostingProcess(text, base64Image) {
     return;
   }
 
-  // Nach dem Klick kurz warten (Mensch orientiert sich) -> 1.5 bis 3.5 Sek
   await randomSleep(1500, 3500);
 
   // 2. Warte auf das Textfeld im Popup
@@ -42,16 +40,13 @@ async function startPostingProcess(text, base64Image) {
   console.log("2. Editor gefunden! Fokus setzen...");
   textBox.focus();
 
-  // Kurze Pause vor der ersten Aktion -> 1 bis 2 Sek
   await randomSleep(1000, 2000);
 
   // --- SCHRITT A: BILD ---
   if (base64Image) {
     console.log("📸 Füge Bild ein...");
     pasteImage(textBox, base64Image);
-
     console.log("⏳ Warte auf Upload & Verarbeitung...");
-    // Hier geben wir etwas mehr Zeit (2.5 bis 5.5 Sek), weil Bilder laden dauert
     await randomSleep(2500, 5500);
   }
 
@@ -59,28 +54,35 @@ async function startPostingProcess(text, base64Image) {
   if (text) {
     console.log("📝 Füge Text ein...");
     pasteText(textBox, text);
-
     console.log("⏳ Text lesen/prüfen...");
-    // Text einfügen und "kurz drüber schauen" -> 2 bis 4.5 Sek
     await randomSleep(2000, 4500);
   }
 
-  // --- SCHRITT C: BUTTONS (Weiter / Posten) ---
+  // --- SCHRITT C: BUTTONS (Weiter / Posten / Skip) ---
   console.log("🔘 Starte Button-Logik...");
   await handleButtonsRecursive();
 }
 
-// Rekursive Button-Suche mit zufälligem Polling
+// Rekursive Button-Suche mit erweiterter Logik
 async function handleButtonsRecursive() {
   const dialogSelector = 'div[role="dialog"]';
+  
+  // Standard Buttons
   const weiterBtn = document.querySelector(`${dialogSelector} div[aria-label="Weiter"]`);
   const postenBtn = document.querySelector(`${dialogSelector} div[aria-label="Posten"]`);
+  
+  // Neue Buttons (WhatsApp Dialog / Upsell)
+  // Prüft auf "Button hinzufügen", "Überspringen" und "Jetzt nicht"
+  const addBtn = document.querySelector(`${dialogSelector} div[aria-label="Button hinzufügen"]`);
+  const skipBtn = document.querySelector(`${dialogSelector} div[aria-label="Überspringen"]`) || 
+                  document.querySelector(`${dialogSelector} div[aria-label="Jetzt nicht"]`);
 
-  let targetBtn = postenBtn || weiterBtn;
+  // Priorisierung: Posten > Weiter > Hinzufügen > Überspringen
+  let targetBtn = postenBtn || weiterBtn || addBtn || skipBtn;
 
   if (!targetBtn) {
     console.log("🔍 Noch keine Buttons gefunden. Suche gleich nochmal...");
-    // Schnelleres Polling, aber immer noch variabel (0.8 bis 1.5 Sek)
+    // Wir versuchen es weiter, falls das Internet langsam ist oder der Dialog wechselt
     await randomSleep(800, 1500);
     return handleButtonsRecursive();
   }
@@ -104,20 +106,32 @@ async function handleButtonsRecursive() {
   targetBtn.click();
 
   // --- ENTSCHEIDUNG NACH KLICK ---
+
   if (buttonType === "Weiter") {
     console.log("➡️ 'Weiter' geklickt. Warte auf nächsten Screen...");
-    // Nach 'Weiter' lädt oft eine Vorschau -> Längere Pause (2 bis 5 Sek)
     await randomSleep(2000, 5000);
-
     return handleButtonsRecursive();
   }
 
   if (buttonType === "Posten") {
-    console.log("🎉 'Posten' geklickt! Vorgang abgeschlossen.");
+    console.log("🎉 'Posten' geklickt! Aber warte... kommt noch ein Popup?");
+    // WICHTIG: Nicht aufhören! Oft kommt jetzt der WhatsApp-Dialog.
+    // Wir warten etwas länger, bis der Post durch ist und das neue Fenster kommt.
+    await randomSleep(3000, 6000); 
+    return handleButtonsRecursive();
   }
+
+  if (buttonType === "Button hinzufügen" || buttonType === "Überspringen" || buttonType === "Jetzt nicht") {
+    console.log("✅ Abschluss-Dialog (WhatsApp/Skip) behandelt. Vorgang endgültig beendet.");
+    return; // HIER ist jetzt wirklich Schluss
+  }
+  
+  // Fallback: Falls wir hier landen, einfach weiter suchen
+  await randomSleep(1000, 2000);
+  return handleButtonsRecursive();
 }
 
-// --- HELPER FUNKTIONEN ---
+// --- HELPER FUNKTIONEN (Unverändert) ---
 
 function waitForElement(selector) {
   return new Promise((resolve) => {
