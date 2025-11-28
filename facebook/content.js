@@ -77,7 +77,7 @@ async function startPostingProcess(text, base64Image) {
     pasteImage(textBox, base64Image);
     
     console.log("⏳ Warte auf Upload & Verarbeitung...");
-    await randomSleep(2500, 5500);
+    await randomSleep(5000, 8000);
   }
 
   // --- SCHRITT B: TEXT ---
@@ -87,7 +87,7 @@ async function startPostingProcess(text, base64Image) {
     pasteText(textBox, text);
     
     console.log("⏳ Text lesen/prüfen...");
-    await randomSleep(2000, 4500);
+    await randomSleep(4000, 7000);
   }
 
   // --- SCHRITT C: BUTTONS ---
@@ -179,7 +179,7 @@ async function handleButtonsRecursive() {
     
     // WICHTIG: Wir hören hier NICHT sofort auf.
     // Wir warten kurz, ob Facebook uns noch ein "Jetzt nicht" oder "Gruppe beitreten" Popup zeigt.
-    await randomSleep(3000, 5000);
+    await randomSleep(6000, 9000);
 
     // Ein letzter Check: Ist JETZT vielleicht ein "Jetzt nicht" Button da?
     const afterPostCleanup = document.evaluate(
