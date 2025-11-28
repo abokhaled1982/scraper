@@ -127,86 +127,90 @@ TARGET_SCHEMA_TEMPLATE = {
     "images": [], "features": [], 
     "feature_text": None, "description": None,
     "units_sold": "N/A", "seller_name": "N/A", "availability": "N/A", "shipping_info": "N/A",
+    "hashtags": []  # <--- HIER HINZUFÜGEN
 }
-
 
 def map_ai_output_to_target_format(
     ai_output: Dict[str, Any],
     ai_input: Dict[str, Any],
-
-   
 ) -> Dict[str, Any]:
     """
     Mappt die extrahierten Daten aus dem AI-Output und den HTML-Kerndaten 
     in das Ziel-JSON-Format (Englische Felder, bereinigt).
-    
-    Args:
-        ai_output: Das rohe Output-Dictionary vom LLM/AI-Extractor.
-        html_core_data: Das Resultat von html_parser.extract_core_html_data.
-        parse_price_fn: Die utils.parse_price_string Funktion.
     """
     extracted = ai_output.get("extracted_data", {})
     final_output = TARGET_SCHEMA_TEMPLATE.copy()
-    #can I in the futre read it also
-    isAmazon=ai_input.get('isAmazon', False)
     
+    isAmazon = ai_input.get('isAmazon', False)
+    
+    # URL Mapping
     if isAmazon:
-        final_output['affiliate_url'] = ai_input.get("product_url","N/A")
-    elif extracted.get('url_des_produkts')!="N/A":
-         final_output['affiliate_url'] =  extracted.get('url_des_produkts')
+        final_output['affiliate_url'] = ai_input.get("product_url", "N/A")
+    elif extracted.get('url_des_produkts') != "N/A":
+         final_output['affiliate_url'] = extracted.get('url_des_produkts')
     else:
-        final_output['affiliate_url'] = ai_input.get("product_url","N/A")
+        final_output['affiliate_url'] = ai_input.get("product_url", "N/A")
 
-    if extracted.get('produkt_titel')!="N/A":    
+    # Titel Mapping
+    if extracted.get('produkt_titel') != "N/A":    
         final_output['title'] = extracted.get('produkt_titel')   
     else:
         final_output['title'] = ai_input.get('product_title', 'N/A')
+        
     # PRODUKT-ID: AI-ID > Fallback
     extracted_product_id = extracted.get('produkt_id') 
-
     if extracted_product_id and extracted_product_id != 'N/A':
         final_output['product_id'] = extracted_product_id
     else:
         final_output['product_id'] = 'N/A'   
-   
     
     # ----------------------------- 2. PRICE & DISCOUNT MAPPING --------------------------------------
-    #price_info = parse_price_fn(extracted.get('akt_preis'))    
-    
     final_output['price'] = extracted.get('akt_preis', 'N/A')
     final_output['brand'] = extracted.get('marke', 'N/A')
     final_output['original_price'] = extracted.get('original_preis', 'N/A')  
     final_output['discount_amount'] = extracted.get('discount_amount', 'N/A')
     final_output['discount_percent'] = extracted.get('rabatt_prozent', 'N/A')    
+    
     # ----------------------------- 3. IMAGES (Kombination HTML + AI) --------------------------------------
-    # Priorität: HTML-Bilder (deterministisch) > AI-Bilder > Fallback
     final_output['market'] = extracted.get('marktplatz', 'N/A')
     html_images = extracted.get('hauptprodukt_bilder', [])    
     if html_images:
         final_output['images'] = html_images   
     else:
         final_output['images'] = []    
+        
     # ----------------------------- 4. RATING & COUPON & WEITERE FELDER (AI) --------------------------------------
     final_output['rating'] = {
         "value": extracted.get('bewertung_wert', 0.0),
         "counts": extracted.get('anzahl_reviews', 0)
     } 
 
-    final_output['rabatt_text']=extracted.get('rabatt_text', 'N/A')
+    final_output['rabatt_text'] = extracted.get('rabatt_text', 'N/A')
 
     final_output['coupon'] = {
         "code": extracted.get('gutschein_code', 'N/A'),
         "code_details": extracted.get('gutschein_details', 'N/A'), 
         "more": extracted.get('rabatt_text', 'N/A')
     }    
+    
     final_output['units_sold'] = extracted.get('anzahl_verkauft', 'N/A')
     final_output['seller_name'] = extracted.get('haendler_verkaeufer', 'N/A')
     final_output['availability'] = extracted.get('verfuegbarkeit', 'N/A')
     final_output['shipping_info'] = extracted.get('lieferinformation', 'N/A')
+    
     # TEXT FELDER
     ai_features = extracted.get('features')
     final_output['features'] = ai_features if isinstance(ai_features, list) else []        
     final_output['feature_text'] = extracted.get('feature_text')
     final_output['description'] = extracted.get('beschreibung') 
+
+    # --- HIER IST DER KORRIGIERTE HASHTAG BLOCK ---
+    # Wir prüfen 'extracted', nicht 'raw_extracted'
+    # Wir schreiben in 'final_output', nicht 'data_mapped'
+    if "hashtags" in extracted and isinstance(extracted["hashtags"], list):
+        final_output["hashtags"] = extracted["hashtags"]
+    else:
+        # Fallback, falls LLM failt oder Feld leer ist
+        final_output["hashtags"] = ["#blackfriday", "#angebot", "#rabatt", "#schnäppchen"]
     
     return final_output

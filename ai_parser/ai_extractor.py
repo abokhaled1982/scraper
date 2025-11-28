@@ -149,6 +149,28 @@ class Produktinformation(BaseModel):
             "* Wenn kein Rabatt angewendet wurde ('akt_preis' == 'original_preis'), verwende '🚨 Tiefstpreis-Alarm, Unschlagbar! 💥'."
         )
     )
+    hashtags: list[str] = Field(
+        description=(
+            "Eine strategisch optimierte Liste von Hashtags für maximale Sichtbarkeit und Konversion. "
+            "Handele wie ein Social Media Manager, der die aktuelle Saison und Kaufintention versteht.\n\n"
+            
+            "REGEL 1 (BASIS-TAGS - Wähle 3): "
+            "Wähle die 3 passendsten Begriffe für Schnäppchenjäger. "
+            "Auswahlpool: ['#angebot', '#rabatt', '#schnäppchen', '#deal', '#bestpreis', '#sale'].\n\n"
+            
+            "REGEL 2 (SAISON- & EVENT-KONTEXT - Wähle 2): "
+            "Analysiere den Kontext des Produkts/Angebots. Ist es für Black Friday, Weihnachten oder Neujahr? "
+            "Wähle entsprechende Tags wie: '#blackfriday' (nur im Nov), '#weihnachtsgeschenk', '#geschenkidee', "
+            "'#silvesteroutfit', '#wintersale', '#jahresstart'.\n\n"
+            
+            "REGEL 3 (PRODUKT-NICHE - Wähle 3-5): "
+            "Spezifische Tags, die genau beschreiben, WAS es ist und FÜR WEN es ist. "
+            "Kombiniere Kategorie und Marke (z.B. '#gamingsetup', '#ps5controller', '#skincare', '#techgadgets').\n\n"
+            
+            "REGEL 4 (VIRALITÄT): "
+            "Vermeide generische Tags wie '#love' oder '#happy'. Nutze Tags, die eine Kaufabsicht signalisieren."
+        )
+    )
 # --- 2. LLM-FUNKTIONEN ---
 
 def baue_pattern_pack():
@@ -193,7 +215,7 @@ def baue_pattern_pack():
 
 def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
-    LLM_MODEL = "gemini-2.5-flash"
+    LLM_MODEL = "gemini-2.5-flash-lite"
     client = pack["client"]
     config = pack["config"]
     system_prompt = pack["system_prompt"]
