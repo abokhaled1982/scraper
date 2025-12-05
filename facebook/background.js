@@ -1,10 +1,11 @@
+// background.js
 const WEBSOCKET_URL = "ws://localhost:8080";
 let socket = null;
 let reconnectTimer = null;
 
 function connectWebSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-    return; 
+    return;
   }
 
   if (reconnectTimer) {
@@ -21,49 +22,47 @@ function connectWebSocket() {
 
   socket.onmessage = (event) => {
     try {
-        const data = JSON.parse(event.data);
+      const data = JSON.parse(event.data);
 
-        // --- HEARTBEAT CHECK ---
-        // Wenn es nur ein Ping ist, nichts tun (aber die Verbindung bleibt dadurch wach)
-        if (data.type === 'ping') {
-            // Optional: console.log("❤️ Ping empfangen"); 
-            return;
-        }
+      // --- HEARTBEAT CHECK ---
+      if (data.type === "ping") {
+        return;
+      }
 
-        // Ab hier nur noch echte Posts verarbeiten
-        chrome.tabs.query({ url: "*://*.facebook.com/*" }, (tabs) => {
-          if (tabs.length > 0) {
-            const targetTab = tabs[0];
-            console.log("Sende Post an Tab ID:", targetTab.id);
+      chrome.tabs.query({ url: "*://*.facebook.com/*" }, (tabs) => {
+        if (tabs.length > 0) {
+          const targetTab = tabs[0];
+          console.log("Sende Post an Tab ID:", targetTab.id);
 
-            chrome.tabs.sendMessage(
-              targetTab.id,
-              {
-                command: "remote_post",
-                text: data.text,
-                image: data.image,
-              },
-              (response) => {
-                if (chrome.runtime.lastError) {
-                  console.log("Fehler beim Senden an Tab: ", chrome.runtime.lastError.message);
-                } else {
-                  console.log("Erfolgreich an Content-Script gesendet.");
-                }
+          // HIER WURDE 'comment' HINZUGEFÜGT
+          chrome.tabs.sendMessage(
+            targetTab.id,
+            {
+              command: "remote_post",
+              text: data.text,
+              image: data.image,
+              comment: data.comment, // <--- Neu: Kommentar mitgeben
+            },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                console.log("Fehler beim Senden an Tab: ", chrome.runtime.lastError.message);
+              } else {
+                console.log("Erfolgreich an Content-Script gesendet.");
               }
-            );
-          } else {
-            console.log("Kein Facebook-Tab gefunden!");
-          }
-        });
-
+            }
+          );
+        } else {
+          console.log("Kein Facebook-Tab gefunden!");
+        }
+      });
     } catch (e) {
-        console.error("Fehler beim Parsen der Nachricht:", e);
+      console.error("Fehler beim Parsen der Nachricht:", e);
     }
   };
 
   socket.onclose = () => {
     console.log("❌ Verbindung getrennt. Versuche in 5 Sekunden erneut...");
-    socket = null; // Wichtig: Socket nullen
+    socket = null;
     reconnectTimer = setTimeout(connectWebSocket, 5000);
   };
 
@@ -73,11 +72,8 @@ function connectWebSocket() {
   };
 }
 
-// Start
 connectWebSocket();
 
-// Keep-Alive Check (Client-seitig)
-// Falls der Service Worker aufwacht und merkt, dass er keine Verbindung hat
 setInterval(() => {
   if (!socket || socket.readyState === WebSocket.CLOSED) {
     connectWebSocket();
