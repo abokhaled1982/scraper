@@ -1,4 +1,4 @@
-// content.js - Robust mit automatischem Kommentar
+// content.js - Robust für Profil & Feed mit Fokus-Pausen
 
 // --- HELPER: WARTEZEIT ---
 const randomSleep = (min = 2000, max = 5000) => {
@@ -11,7 +11,6 @@ const randomSleep = (min = 2000, max = 5000) => {
 function fixFocusBlockers() {
   const blocker = document.getElementById("scrollview");
   if (blocker && blocker.getAttribute("aria-hidden") === "true") {
-    // console.log("🔧 Entferne 'aria-hidden' Blockade von #scrollview...");
     blocker.removeAttribute("aria-hidden");
   }
 
@@ -24,7 +23,6 @@ function fixFocusBlockers() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === "remote_post") {
     console.log("🤖 Empfange Befehl...");
-    // Wir übergeben jetzt auch den Kommentar an die Startfunktion
     startPostingProcess(request.text, request.image, request.comment);
   }
 });
@@ -48,6 +46,8 @@ async function startPostingProcess(text, base64Image, commentToPost) {
 
   if (!triggerFound) {
     console.error("❌ Start-Button nicht gefunden.");
+    // Falls wir auf dem Profil sind und direkt posten wollen, könnte hier Logik fehlen,
+    // aber wir konzentrieren uns erstmal auf den Kommentar-Part unten.
     return;
   }
 
@@ -89,11 +89,9 @@ async function startPostingProcess(text, base64Image, commentToPost) {
 
   // --- SCHRITT C: BUTTONS ---
   console.log("🔘 Starte Button-Logik...");
-  // Wir reichen den commentToPost weiter an die Button-Logik
   await handleButtonsRecursive(commentToPost);
 }
 
-// Argument 'commentToPost' hinzugefügt
 async function handleButtonsRecursive(commentToPost) {
   fixFocusBlockers();
 
@@ -101,7 +99,6 @@ async function handleButtonsRecursive(commentToPost) {
 
   const weiterBtn = document.querySelector(`${dialogSelector} div[aria-label="Weiter"]`);
   const postenBtn = document.querySelector(`${dialogSelector} div[aria-label="Posten"]`);
-
   const jetztNichtSpan = document.evaluate("//span[text()='Jetzt nicht']", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
 
   let targetBtn = null;
@@ -118,7 +115,6 @@ async function handleButtonsRecursive(commentToPost) {
     actionType = "Jetzt nicht";
   }
 
-  // Wenn nichts gefunden -> Warten und nochmal suchen
   if (!targetBtn) {
     console.log("🔍 Noch keine relevanten Buttons gefunden. Suche gleich nochmal...");
     await randomSleep(1000, 2000);
@@ -133,13 +129,7 @@ async function handleButtonsRecursive(commentToPost) {
   }
 
   console.log(`🚀 KLICK auf: "${actionType}"`);
-
-  // Klick simulieren
-  try {
-    targetBtn.click();
-  } catch (err) {
-    console.error("Klick Fehler:", err);
-  }
+  targetBtn.click();
 
   // --- LOGIK NACH DEM KLICK ---
 
@@ -157,30 +147,22 @@ async function handleButtonsRecursive(commentToPost) {
 
   if (actionType === "Posten") {
     console.log("🎉 'Posten' geklickt! Warte auf Abschluss...");
-
-    // Wartezeit, um sicherzugehen, dass FB den Post verarbeitet
     await randomSleep(6000, 9000);
 
-    // Letzter Check auf Störer-Popups nach dem Posten
     const afterPostCleanup = document.evaluate("//span[text()='Jetzt nicht']", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-
     if (afterPostCleanup) {
-      console.log("🧹 Aufräumen: 'Jetzt nicht' Popup nach dem Posten gefunden.");
       afterPostCleanup.click();
       await randomSleep(1000, 2000);
     }
 
     console.log("🏁 Post-Vorgang abgeschlossen.");
 
-    // --- NEU: AUTOMATISCHER KOMMENTAR ---
+    // --- AUTOMATISCHER KOMMENTAR ---
     if (commentToPost) {
       console.log(`💬 Kommentar gefunden: "${commentToPost}"`);
       console.log("⏳ Warte 3-6 Sekunden vor dem Kommentieren...");
-
-      // Die gewünschte zufällige Wartezeit (3000ms bis 6000ms)
       await randomSleep(3000, 6000);
 
-      // Starte die Kommentar-Funktion
       await processAutoComment(commentToPost);
     } else {
       console.log("🏁 Kein Kommentar zu posten. Fertig.");
@@ -188,48 +170,54 @@ async function handleButtonsRecursive(commentToPost) {
   }
 }
 
-// --- NEU: KOMMENTAR FUNKTIONEN (Basiert auf deinem manuellen Code) ---
+// --- NEU: INTELLIGENTE KOMMENTAR FUNKTION ---
 
 async function processAutoComment(text) {
-  console.log("🔍 Suche nach dem neuesten Beitrag (Position 1)...");
+  console.log("🔍 Suche nach dem Beitrag...");
 
-  // Wir versuchen es ein paar Mal, falls der Feed noch lädt
-  let firstPost = null;
-  for (let i = 0; i < 5; i++) {
-    firstPost = document.querySelector('div[aria-posinset="1"]');
-    if (firstPost) break;
-    await randomSleep(1000, 1500);
+  // 1. VERSUCH: Feed-Logik (Position 1)
+  let postContainer = document.querySelector('div[aria-posinset="1"]');
+
+  // 2. VERSUCH: Profil-Logik (Erster Artikel im Feed-Container)
+  if (!postContainer) {
+    console.log("ℹ️ 'posinset=1' nicht gefunden (vielleicht Profil-Ansicht?). Nehme ersten Artikel...");
+    // Suche nach Rollen, die Beiträge darstellen
+    const articles = document.querySelectorAll('div[role="article"]');
+    if (articles.length > 0) {
+      postContainer = articles[0];
+    }
   }
 
-  if (!firstPost) {
-    console.error("❌ Kein Beitrag an Position 1 gefunden.");
+  // 3. FALLBACK: Wenn gar nichts gefunden wird, brechen wir ab
+  if (!postContainer) {
+    console.error("❌ Konnte keinen Beitrag finden (weder Feed noch Profil).");
     return;
   }
 
-  console.log("✅ Beitrag gefunden. Suche Eingabefeld...");
+  console.log("✅ Beitrag-Container gefunden. Prüfe auf offenes Textfeld...");
 
-  // 1. Prüfen, ob das Textfeld schon offen ist
-  let inputBox = firstPost.querySelector('div[role="textbox"][contenteditable="true"]');
+  // A. Prüfen, ob das Textfeld schon offen ist (Typisch für Profil-Ansicht!)
+  let inputBox = postContainer.querySelector('div[role="textbox"][contenteditable="true"]');
 
+  // B. Wenn NICHT offen, Button suchen und klicken
   if (!inputBox) {
-    // Button zum Öffnen suchen
-    const commentButton = findCommentButton(firstPost);
-    if (commentButton) {
-      console.log("🖱 Klicke 'Kommentieren' Button...");
-      commentButton.click();
-      await randomSleep(1000, 2000); // Warten bis Feld da ist
+    console.log("🔒 Textfeld nicht sichtbar. Suche 'Kommentieren' Button...");
+    const commentButton = findCommentButton(postContainer);
 
-      // Neu suchen nach Klick
-      inputBox = firstPost.querySelector('div[role="textbox"][contenteditable="true"]');
+    if (commentButton) {
+      commentButton.click();
+      await randomSleep(1500, 2500); // Warten bis Animation fertig
+      // Neu suchen
+      inputBox = postContainer.querySelector('div[role="textbox"][contenteditable="true"]');
     } else {
-      console.error("❌ Weder Textfeld noch Kommentieren-Button gefunden.");
+      console.error("❌ Weder offenes Feld noch Kommentieren-Button gefunden.");
       return;
     }
   }
 
   if (inputBox) {
-    console.log("✍️ Schreibe Kommentar...");
-    insertTextAndSendComment(inputBox, text, firstPost);
+    console.log("✍️ Feld gefunden! Starte Schreibprozess...");
+    await insertTextAndSendComment(inputBox, text, postContainer);
   }
 }
 
@@ -248,59 +236,82 @@ function findCommentButton(container) {
   return null;
 }
 
-function insertTextAndSendComment(element, text, postContainer) {
+async function insertTextAndSendComment(element, text, postContainer) {
   if (!element) return;
 
   try {
+    console.log("🖱 1. Setze Fokus und klicke...");
     element.focus();
     element.click();
 
-    // Text einfügen
+    // WICHTIG: Wir sagen dem Browser explizit "Hier ist jetzt der Fokus"
+    element.dispatchEvent(new Event("focus", { bubbles: true }));
+
+    // Optional: Simuliere, dass eine Taste gedrückt wird (ohne Text), um den Editor zu wecken
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Shift" }));
+
+    console.log("⏳ 2. Warte 2-3 Sekunden (Fokus etablieren)...");
+    // Hier ist die Pause, BEVOR irgendein Text eingefügt wird
+    await randomSleep(2000, 3000);
+
+    console.log(`📝 3. Schreibe Text: "${text}"`);
+
+    // Versuch 1: via execCommand (simuliert Tippen am besten)
     const success = document.execCommand("insertText", false, text);
 
+    // Versuch 2: Falls execCommand nicht geht, direkt setzen
     if (!success) {
-      // Fallback
       element.innerText = text;
     }
 
-    console.log("✅ Text eingefügt. Warte kurz vor dem Senden...");
+     await randomSleep(2000, 3000);
 
-    // Kurze Pause, damit Facebook den Button aktiviert (wichtig!)
-    setTimeout(() => {
-      clickCommentSendButton(postContainer);
-    }, 1500);
+    // WICHTIG: Das 'input' Event feuern, damit der Button blau wird
+    console.log("⚡ 4. Feuere Input-Event (Button aktivieren)...");
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Noch eine kurze Pause, damit der Button Zeit hat, blau zu werden
+    await randomSleep(1000, 2500);
+
+    // Senden
+    console.log("🚀 5. Klicke Senden...");
+    clickCommentSendButton(postContainer);
   } catch (e) {
     console.error("Fehler beim Kommentieren:", e);
   }
 }
 
 function clickCommentSendButton(postContainer) {
-  console.log("🚀 Versuche Kommentar zu senden...");
-
-  // Strategie 1: Submit Container ID (wenn Fokus aktiv ist)
+  // Strategie 1: Spezifische ID aus deinem HTML (Die sicherste Methode!)
+  // Das Element: <div id="focused-state-composer-submit">
   let submitContainer = document.getElementById("focused-state-composer-submit");
+
   if (submitContainer) {
+    // Darin den Button suchen (Pfeil)
     let sendBtn = submitContainer.querySelector('div[role="button"]');
     if (sendBtn) {
+      console.log("🎯 'focused-state-composer-submit' Button gefunden. Klicke...");
       sendBtn.click();
-      console.log("✅ Kommentar gepostet (Strategie 1)!");
       return;
     }
   }
 
-  // Strategie 2: Button innerhalb des Posts suchen
+  // Strategie 2: Fallback (Suche im Post-Container)
+  console.log("⚠️ ID nicht gefunden, nutze Fallback-Suche im Post...");
   const buttons = postContainer.querySelectorAll('div[role="button"][aria-label="Kommentieren"]');
   if (buttons.length > 0) {
-    // Meist der letzte Button (Pfeil-Icon)
-    buttons[buttons.length - 1].click();
-    console.log("✅ Kommentar gepostet (Strategie 2)!");
+    // Meist der letzte Button ist der Absende-Pfeil
+    const lastBtn = buttons[buttons.length - 1];
+    lastBtn.click();
+    console.log("✅ Fallback-Klick ausgeführt.");
     return;
   }
 
-  console.error("❌ Konnte Senden-Button für Kommentar nicht finden.");
+  console.error("❌ Senden-Button konnte nicht gefunden werden.");
 }
 
-// --- BASIS HELPER FUNKTIONEN (unverändert) ---
+// --- BASIS HELPER FUNKTIONEN ---
 
 function waitForElement(selector) {
   return new Promise((resolve) => {
