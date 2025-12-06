@@ -214,7 +214,7 @@ def main():
             # Angenommen, should_open existiert
             ok_to_open, reason = should_open(asin, url, meta, opened)
             if not ok_to_open:
-                print(f"[{idx}/{total}] [SKIP] {asin} -> {reason}")
+                #print(f"[{idx}/{total}] [SKIP] {asin} -> {reason}")
                 skipped += 1
                 continue
 

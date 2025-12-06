@@ -211,6 +211,6 @@ def map_ai_output_to_target_format(
         final_output["hashtags"] = extracted["hashtags"]
     else:
         # Fallback, falls LLM failt oder Feld leer ist
-        final_output["hashtags"] = ["#blackfriday", "#angebot", "#rabatt", "#schnäppchen"]
+        final_output["hashtags"] = [ "#angebot", "#rabatt", "#schnäppchen"]
     
     return final_output
