@@ -1,4 +1,4 @@
-// content.js - Robust für Profil & Feed mit Fokus-Pausen
+// content.js - Robust mit Scroll-Fix für unsichtbare Felder
 
 // --- HELPER: WARTEZEIT ---
 const randomSleep = (min = 2000, max = 5000) => {
@@ -46,8 +46,6 @@ async function startPostingProcess(text, base64Image, commentToPost) {
 
   if (!triggerFound) {
     console.error("❌ Start-Button nicht gefunden.");
-    // Falls wir auf dem Profil sind und direkt posten wollen, könnte hier Logik fehlen,
-    // aber wir konzentrieren uns erstmal auf den Kommentar-Part unten.
     return;
   }
 
@@ -160,8 +158,9 @@ async function handleButtonsRecursive(commentToPost) {
     // --- AUTOMATISCHER KOMMENTAR ---
     if (commentToPost) {
       console.log(`💬 Kommentar gefunden: "${commentToPost}"`);
-      console.log("⏳ Warte 3-6 Sekunden vor dem Kommentieren...");
-      await randomSleep(3000, 6000);
+      // Längere Pause, damit Seite sich beruhigen kann
+      console.log("⏳ Warte 5-8 Sekunden vor dem Kommentieren...");
+      await randomSleep(5000, 8000);
 
       await processAutoComment(commentToPost);
     } else {
@@ -181,22 +180,25 @@ async function processAutoComment(text) {
   // 2. VERSUCH: Profil-Logik (Erster Artikel im Feed-Container)
   if (!postContainer) {
     console.log("ℹ️ 'posinset=1' nicht gefunden (vielleicht Profil-Ansicht?). Nehme ersten Artikel...");
-    // Suche nach Rollen, die Beiträge darstellen
     const articles = document.querySelectorAll('div[role="article"]');
     if (articles.length > 0) {
       postContainer = articles[0];
     }
   }
 
-  // 3. FALLBACK: Wenn gar nichts gefunden wird, brechen wir ab
   if (!postContainer) {
     console.error("❌ Konnte keinen Beitrag finden (weder Feed noch Profil).");
     return;
   }
 
+  // --- FIX: SCROLLEN ZUM BEITRAG ---
+  console.log("📜 Scrolle Beitrag in Sichtbereich...");
+  postContainer.scrollIntoView({ behavior: "smooth", block: "center" });
+  await randomSleep(1500, 2000);
+
   console.log("✅ Beitrag-Container gefunden. Prüfe auf offenes Textfeld...");
 
-  // A. Prüfen, ob das Textfeld schon offen ist (Typisch für Profil-Ansicht!)
+  // A. Prüfen, ob das Textfeld schon offen ist
   let inputBox = postContainer.querySelector('div[role="textbox"][contenteditable="true"]');
 
   // B. Wenn NICHT offen, Button suchen und klicken
@@ -205,8 +207,13 @@ async function processAutoComment(text) {
     const commentButton = findCommentButton(postContainer);
 
     if (commentButton) {
+      // Auch den Button sicherheitshalber ins Bild holen
+      commentButton.scrollIntoView({ behavior: "smooth", block: "center" });
+      await randomSleep(500, 1000);
+
       commentButton.click();
-      await randomSleep(1500, 2500); // Warten bis Animation fertig
+      await randomSleep(1500, 2500);
+      
       // Neu suchen
       inputBox = postContainer.querySelector('div[role="textbox"][contenteditable="true"]');
     } else {
@@ -240,41 +247,41 @@ async function insertTextAndSendComment(element, text, postContainer) {
   if (!element) return;
 
   try {
+    // --- FIX: SCROLLEN ZUM TEXTFELD ---
+    // Bevor wir irgendwas machen, sicherstellen, dass das Feld in der Mitte ist
+    console.log("📜 Scrolle Textfeld exakt in die Mitte...");
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    
+    // Warte kurz auf das Scrollen
+    await randomSleep(1000, 1500);
+
     console.log("🖱 1. Setze Fokus und klicke...");
-    element.focus();
+    element.focus({ preventScroll: true }); // preventScroll, weil wir es schon manuell gemacht haben
     element.click();
 
-    // WICHTIG: Wir sagen dem Browser explizit "Hier ist jetzt der Fokus"
+    // WICHTIG: Browser "wecken"
     element.dispatchEvent(new Event("focus", { bubbles: true }));
-
-    // Optional: Simuliere, dass eine Taste gedrückt wird (ohne Text), um den Editor zu wecken
     element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Shift" }));
 
     console.log("⏳ 2. Warte 2-3 Sekunden (Fokus etablieren)...");
-    // Hier ist die Pause, BEVOR irgendein Text eingefügt wird
     await randomSleep(2000, 3000);
 
     console.log(`📝 3. Schreibe Text: "${text}"`);
 
-    // Versuch 1: via execCommand (simuliert Tippen am besten)
     const success = document.execCommand("insertText", false, text);
-
-    // Versuch 2: Falls execCommand nicht geht, direkt setzen
     if (!success) {
       element.innerText = text;
     }
+    
+    // Längere Pause nach dem Schreiben
+    await randomSleep(1500, 2500);
 
-     await randomSleep(2000, 3000);
-
-    // WICHTIG: Das 'input' Event feuern, damit der Button blau wird
     console.log("⚡ 4. Feuere Input-Event (Button aktivieren)...");
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // Noch eine kurze Pause, damit der Button Zeit hat, blau zu werden
-    await randomSleep(1000, 2500);
+    await randomSleep(1500, 2500);
 
-    // Senden
     console.log("🚀 5. Klicke Senden...");
     clickCommentSendButton(postContainer);
   } catch (e) {
@@ -283,12 +290,10 @@ async function insertTextAndSendComment(element, text, postContainer) {
 }
 
 function clickCommentSendButton(postContainer) {
-  // Strategie 1: Spezifische ID aus deinem HTML (Die sicherste Methode!)
-  // Das Element: <div id="focused-state-composer-submit">
+  // Strategie 1: Spezifische ID
   let submitContainer = document.getElementById("focused-state-composer-submit");
 
   if (submitContainer) {
-    // Darin den Button suchen (Pfeil)
     let sendBtn = submitContainer.querySelector('div[role="button"]');
     if (sendBtn) {
       console.log("🎯 'focused-state-composer-submit' Button gefunden. Klicke...");
@@ -297,14 +302,19 @@ function clickCommentSendButton(postContainer) {
     }
   }
 
-  // Strategie 2: Fallback (Suche im Post-Container)
+  // Strategie 2: Fallback
   console.log("⚠️ ID nicht gefunden, nutze Fallback-Suche im Post...");
   const buttons = postContainer.querySelectorAll('div[role="button"][aria-label="Kommentieren"]');
   if (buttons.length > 0) {
-    // Meist der letzte Button ist der Absende-Pfeil
     const lastBtn = buttons[buttons.length - 1];
-    lastBtn.click();
-    console.log("✅ Fallback-Klick ausgeführt.");
+    
+    // Sicherstellen, dass auch der Button sichtbar ist, bevor wir klicken
+    lastBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    
+    setTimeout(() => {
+        lastBtn.click();
+        console.log("✅ Fallback-Klick ausgeführt.");
+    }, 500);
     return;
   }
 
