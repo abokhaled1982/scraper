@@ -62,7 +62,7 @@
 
   const isAmazonHost = (h = location.hostname) => /^([a-z0-9-]+\.)*amazon\.[a-z.]+$/i.test(h);
   const isAmazonProductPath = (p = location.pathname) => /(\/dp\/[A-Z0-9]{10})(\/|$)/i.test(p) || /(\/gp\/product\/[A-Z0-9]{10})(\/|$)/i.test(p);
-  const isAmazonDealsPath = (p = location.pathname) => /^\/blackfriday\b/i.test(p);
+  const isAmazonDealsPath = (p = location.pathname) => /^\/(deals|gp\/angebote)/i.test(p);
   const isAmazonTargetPage = () => isAmazonHost() && (isAmazonProductPath() || isAmazonDealsPath());
 
   function hasOpenerTrigger(href = location.href) {
