@@ -213,15 +213,17 @@ def baue_pattern_pack():
 )
     return {"client": client, "config": config, "system_prompt": system_prompt}
 
-def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
+def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict,known_url:str) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
-    LLM_MODEL = "gemini-2.5-flash"
+    LLM_MODEL = "gemini-2.5-flash-lite"
     client = pack["client"]
     config = pack["config"]
     system_prompt = pack["system_prompt"]
 
     user_prompt = f"""
 Extrahiere die Produktinformationen aus dem folgenden Text.
+
+HIER IST DIE RICHTIGE URL: {known_url}
 
 BILD-KANDIDATEN:
 ---
@@ -259,14 +261,14 @@ def extract_and_save_data(llm_input_data: json, output_path: Path):
   
     clean_text = llm_input_data.get("clean_text", "N/A")
     bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
-
+    product_url = llm_input_data.get("product_url", "N/A")
     if clean_text == "N/A" or not clean_text.strip():
         print("WARNUNG: Bereinigter Text ist leer.", file=sys.stderr)
         result = {"Fehler": "Bereinigter Text ist leer."}
     else:
         try:
             pack = baue_pattern_pack()
-            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack)
+            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack,product_url)
         except Exception as e:
             print(f"Fehler bei der Extraktion: {e}", file=sys.stderr)
             result = {"Extraktionsfehler": str(e)}

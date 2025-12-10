@@ -119,6 +119,7 @@ def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     # ÄNDERUNG 3: 'sorted()' entfernt, Liste direkt joinen
     kandidaten_string = " | ".join(basis_url_kandidaten)
     return kandidaten_string if basis_url_kandidaten else "N/A"
+
 def normalize_url(url: str) -> str:
     """
     Normalisiert eine URL: entfernt Fragmente, sortiert/entfernt bestimmte Query-Parameter und entfernt nachgestellte Schrägstriche.
@@ -402,7 +403,7 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
         
-        cleanup_temp_files()
+        #cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}"
 
