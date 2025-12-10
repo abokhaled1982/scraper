@@ -208,31 +208,36 @@ def baue_pattern_pack():
         # BILDER-LOGIK ENTFERNT (Wird jetzt vollständig über das JSON-Schema 'Produktinformation' gesteuert)
         
         "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
-        "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
+       "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
+        "Die 'url_des_produkts' ist die URL, die dir im User-Prompt explizit übergeben wird. "
         "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
     )
     return {"client": client, "config": config, "system_prompt": system_prompt}
 
-def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
+def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict,known_url:str) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
-    LLM_MODEL = "gemini-2.5-flash"
+    LLM_MODEL = "gemini-2.5-flash-lite"
     client = pack["client"]
     config = pack["config"]
     system_prompt = pack["system_prompt"]
 
     user_prompt = f"""
-Extrahiere die Produktinformationen aus dem folgenden Text.
+    Extrahiere die Produktinformationen aus dem folgenden Text.
 
-BILD-KANDIDATEN:
----
-{bild_kandidaten_str}
----
+    🚨 **WICHTIGSTE METADATEN:**
+    👉 **KANONISCHE PRODUKT-URL:** {known_url}
+    (Nutze diese URL für das Feld 'url_des_produkts' und um relative Bild-Links zu korrigieren!)
 
-PRODUKT-TEXT:
----
-{unstrukturierter_text}
----
-"""
+    BILD-KANDIDATEN:
+    ---
+    {bild_kandidaten_str}
+    ---
+
+    PRODUKT-TEXT:
+    ---
+    {unstrukturierter_text}
+    ---
+    """
 
     print(f"-> Sende Extraktionsanfrage an {LLM_MODEL} ...")
     response = client.models.generate_content(
@@ -259,14 +264,15 @@ def extract_and_save_data(llm_input_data: json, output_path: Path):
   
     clean_text = llm_input_data.get("clean_text", "N/A")
     bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
-
+    # HIER: URL aus dem Input-Daten holen
+    product_url = llm_input_data.get("product_url", "N/A")
     if clean_text == "N/A" or not clean_text.strip():
         print("WARNUNG: Bereinigter Text ist leer.", file=sys.stderr)
         result = {"Fehler": "Bereinigter Text ist leer."}
     else:
         try:
             pack = baue_pattern_pack()
-            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack)
+            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack,product_url)
         except Exception as e:
             print(f"Fehler bei der Extraktion: {e}", file=sys.stderr)
             result = {"Extraktionsfehler": str(e)}
