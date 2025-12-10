@@ -58,7 +58,10 @@ def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     Behebt den 'Index out of range' Fehler und priorisiert High-Res-Bilder.
     """
     soup = BeautifulSoup(html_content or "", 'lxml')
-    basis_url_kandidaten = set()
+    
+    # ÄNDERUNG 1: Liste für die Reihenfolge + Set für Duplikat-Check
+    basis_url_kandidaten = []
+    seen_urls = set()
 
     # 1. Container-Suche (erweitert für modernere Layouts)
     container_tags = ['div', 'figure', 'section', 'ul', 'li']  
@@ -78,11 +81,8 @@ def extrahiere_produktbilder_aus_html(html_content: str) -> str:
         imgs = container.find_all('img')
         
         # Filter lockern: Manchmal sind Hauptbilder isoliert, aber wir behalten
-        # deine Logik bei, Gruppen zu bevorzugen, senken das Limit aber evtl.
-        # oder prüfen spezifische eBay-Klassen.
+        # deine Logik bei, Gruppen zu bevorzugen.
         if len(imgs) < 2:
-            # OPTIONAL: Wenn du eBay Hauptbilder verpasst, entferne diese Bedingung
-            # oder prüfe, ob das Bild eine 'zoom'-Klasse hat.
             continue 
 
         for img in imgs:
@@ -99,7 +99,6 @@ def extrahiere_produktbilder_aus_html(html_content: str) -> str:
                     # Split am Komma, aber leere Einträge filtern!
                     parts = [p.strip() for p in re.split(r',\s*', img[attr]) if p.strip()]
                     for part in parts:
-                        # Jetzt ist sichergestellt, dass part nicht leer ist
                         url_part = part.split()[0]
                         urls.append(url_part)
 
@@ -109,15 +108,17 @@ def extrahiere_produktbilder_aus_html(html_content: str) -> str:
                 
                 # eBay-Spezial: Versuche URL auf maximale Auflösung (s-l1600) zu zwingen
                 if "ebayimg.com" in base:
-                    # Ersetzt z.B. s-l300, s-l500, s-l64 durch s-l1600
                     base = re.sub(r's-l\d+\.', 's-l1600.', base)
 
                 if base and not base.lower().endswith(('.svg', '.gif')) and not base.startswith('data:'):
-                    basis_url_kandidaten.add(base)
+                    # ÄNDERUNG 2: Nur hinzufügen, wenn noch nicht gesehen (behält Reihenfolge)
+                    if base not in seen_urls:
+                        seen_urls.add(base)
+                        basis_url_kandidaten.append(base)
 
-    kandidaten_string = " | ".join(sorted(list(basis_url_kandidaten)))
+    # ÄNDERUNG 3: 'sorted()' entfernt, Liste direkt joinen
+    kandidaten_string = " | ".join(basis_url_kandidaten)
     return kandidaten_string if basis_url_kandidaten else "N/A"
-
 def normalize_url(url: str) -> str:
     """
     Normalisiert eine URL: entfernt Fragmente, sortiert/entfernt bestimmte Query-Parameter und entfernt nachgestellte Schrägstriche.
@@ -401,12 +402,12 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
         
-        #cleanup_temp_files()
+        cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}"
 
     except Exception as e:
-        #cleanup_temp_files()
+        cleanup_temp_files()
         raise Exception(f"AI-Pipeline/Mapping Fehler: {e}")
 
 
