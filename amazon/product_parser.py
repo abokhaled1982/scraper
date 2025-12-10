@@ -256,7 +256,7 @@ def clean_html_to_core_text(html_content: str) -> str:
     ignore_tags = [
         'script', 'style', 'header', 'footer', 'nav', 
          'iframe', 'noscript', 'button',
-        'link', 'meta', 'svg', 'img', 'picture', 'source'
+        'link', 'svg', 'img', 'picture', 'source'
     ]
     
     boilerplate_selectors = [
@@ -401,12 +401,12 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
         
-        cleanup_temp_files()
+        #cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}"
 
     except Exception as e:
-        cleanup_temp_files()
+        #cleanup_temp_files()
         raise Exception(f"AI-Pipeline/Mapping Fehler: {e}")
 
 
