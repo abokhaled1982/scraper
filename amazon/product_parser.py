@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-
 from __future__ import annotations
 import json, time
 import re
 from pathlib import Path
-from typing import  Tuple, Dict, Any
+from typing import Tuple, Dict, Any
 import sys
 import uuid
 from bs4 import BeautifulSoup, Comment 
 from dotenv import load_dotenv
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode 
-
+# Oben bei den Imports hinzufügen:
+import metadata_parser
+# --- NEU: Extruct Integration ---
+import extruct
+from w3lib.html import get_base_url
 
 # Projekt-Config (Annahme: config.py existiert)
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -27,21 +30,16 @@ from utils import (
 )
 
 # Importe für Amazon und AI-Pipeline
-
 from ai_parser.ai_extractor import extract_and_save_data 
-
 from amazon.amazon_parser import AmazonProductParser
-
 
 load_dotenv() 
 
-
-
 # ----------------------------- URL Normalisierung & Extraktion --------------------------------------
-
 
 def _get_base_url_path(url: str) -> str:
     """Extrahiert die Basis-URL und den Pfad ohne Query-Parameter (imwidth) und ohne Deskriptoren (300w)."""
+    if not url: return ""
     # Entferne w/x-Deskriptoren falls vorhanden (z.B. " 300w")
     url_without_desc = re.sub(r'\s+\d+[wx]$', '', url).strip()
     
@@ -52,101 +50,176 @@ def _get_base_url_path(url: str) -> str:
     except ValueError:
         return url_without_desc # Fehlerfall
 
+def is_valid_image_url(url: str) -> bool:
+    """Hilfsfunktion: Filtert Müll-URLs (Logos, Icons, etc.)"""
+    if not url: return False
+    url_lower = url.lower()
+    
+    # Blockliste (Müll vermeiden)
+    junk_terms = [
+        'logo', 'icon', 'button', 'payment', 'trusted', 'rating', 'star', 
+        'placeholder', 'pixel', 'blank', 'avatar', 'user', 'confetti', 
+        'map', 'weather', 'sprite', 'loader', 'spinner'
+    ]
+    if any(term in url_lower for term in junk_terms):
+        return False
+        
+    # Base64 ignorieren wir meistens bei großen Galerien (zu lang für LLM Input)
+    if 'data:image' in url_lower: return False 
+
+    return True
+# Oben bei den Imports hinzufügen:
+import metadata_parser
+
 def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     """
-    Sucht nach Bild-URLs, extrahiert deren Basis-Pfad und optimiert für eBay/Amazon.
-    Behebt den 'Index out of range' Fehler und priorisiert High-Res-Bilder.
+    Professioneller Bild-Parser (Best-of-Breed Ansatz).
+    1. Metadata-Parser: Holt robust das OpenGraph/Twitter 'Hero'-Bild.
+    2. Extruct: Holt strukturierte Daten (Schema.org/JSON-LD).
+    3. Custom JSON Parser: Holt versteckte Galerien (L'TUR, TUI).
+    4. Fallback: Scannt img-Tags.
     """
-    soup = BeautifulSoup(html_content or "", 'lxml')
-    
-    # ÄNDERUNG 1: Liste für die Reihenfolge + Set für Duplikat-Check
-    basis_url_kandidaten = []
-    seen_urls = set()
+    if not html_content:
+        return "N/A"
 
-    # 1. Container-Suche (erweitert für modernere Layouts)
-    container_tags = ['div', 'figure', 'section', 'ul', 'li']  
-    
-    # Relevante Attribute für Bild-Quellen (High-Res zuerst)
-    target_attrs = [
-        'data-zoom-src',       # eBay Zoom Bild (sehr wichtig!)
-        'data-hi-res',         # Generisch High-Res
-        'data-large',          # Generisch
-        'data-full-image-url', # Manche Shops
-        'data-original',       # Lazy Loading Original
-        'data-src',            # Lazy Loading Standard
-        'src'                  # Fallback
-    ]
+    soup = BeautifulSoup(html_content, 'lxml')
+    candidates = []
+    seen = set()
+    base_url = get_base_url(html_content, 'http://localhost')
 
+    # -------------------------------------------------------------------------
+    # STRATEGIE 1: OpenGraph via 'metadata-parser' (Die Profi-Lösung)
+    # -------------------------------------------------------------------------
+    try:
+        # search_head_only=False sucht im ganzen Body, falls Meta-Tags verrutscht sind
+        page = metadata_parser.MetadataParser(html=html_content, search_head_only=False)
+        
+        # 'image' sucht automatisch nach og:image, twitter:image, link_image_src etc.
+        og_img = page.get_metadata_link('image')
+        
+        if og_img:
+            # metadata-parser fixiert oft schon relative URLs, aber sicher ist sicher:
+            if og_img.startswith('//'): og_img = 'https:' + og_img
+            
+            base = _get_base_url_path(og_img)
+            if base and is_valid_image_url(base):
+                seen.add(base)
+                candidates.append(base)
+    except Exception as e:
+        print(f"[Parser] Warnung: Metadata-Parser Fehler: {e}")
+
+    # -------------------------------------------------------------------------
+    # STRATEGIE 2: Extruct (Schema.org / JSON-LD)
+    # -------------------------------------------------------------------------
+    try:
+        data = extruct.extract(html_content, base_url=base_url)
+        for item in data.get('json-ld', []):
+            item_type = item.get('@type')
+            if isinstance(item_type, list): item_type = item_type[0] if item_type else ""
+            
+            if item_type in ['Product', 'Hotel', 'LodgingBusiness', 'ImageObject']:
+                imgs = item.get('image')
+                if imgs:
+                    if isinstance(imgs, str): imgs = [imgs]
+                    elif isinstance(imgs, dict): imgs = [imgs.get('url')]
+                    elif isinstance(imgs, list):
+                        imgs = [i.get('url') if isinstance(i, dict) else i for i in imgs]
+                    
+                    for url in imgs:
+                        if url:
+                            base = _get_base_url_path(url)
+                            if base and base not in seen and is_valid_image_url(base):
+                                seen.add(base)
+                                candidates.append(base)
+    except Exception:
+        pass # Extruct Fehler ignorieren
+
+    # -------------------------------------------------------------------------
+    # STRATEGIE 3: JSON-Attribute (L'TUR, TUI, Modern SPAs)
+    # -------------------------------------------------------------------------
+    if len(candidates) < 5:
+        potential_gallery_tags = soup.find_all(lambda tag: tag.name.endswith('gallery') or tag.name.endswith('ui') or 'gallery' in str(tag.get('class', [])))
+        for tag in potential_gallery_tags:
+            for attr_name, attr_value in tag.attrs.items():
+                if 'data' in attr_name or 'json' in attr_name:
+                    if isinstance(attr_value, str) and (attr_value.strip().startswith('{') or attr_value.strip().startswith('[')):
+                        try:
+                            json_data = json.loads(attr_value)
+                            # ... (deine existierende extract_urls Funktion hier einfügen oder nutzen) ...
+                            def extract_urls_recursive(obj):
+                                found = []
+                                if isinstance(obj, dict):
+                                    for k, v in obj.items():
+                                        if k in ['url', 'full', 'src', 'large'] and isinstance(v, str) and v:
+                                            found.append(v)
+                                        else: found.extend(extract_urls_recursive(v))
+                                elif isinstance(obj, list):
+                                    for item in obj: found.extend(extract_urls_recursive(item))
+                                return found
+
+                            for url in extract_urls_recursive(json_data):
+                                if url.startswith('//'): url = 'https:' + url
+                                base = _get_base_url_path(url)
+                                if base and base not in seen and is_valid_image_url(base):
+                                    seen.add(base)
+                                    candidates.append(base)
+                        except: continue
+
+    # -------------------------------------------------------------------------
+    # STRATEGIE 4: Klassischer Fallback (img Tags)
+    # -------------------------------------------------------------------------
+    container_tags = ['div', 'figure', 'section', 'ul', 'li', 'slider-view']
+    target_attrs = ['data-zoom-src', 'data-hi-res', 'data-large', 'data-full-image-url', 'data-src', 'src']
+    
     for container in soup.find_all(container_tags):
         imgs = container.find_all('img')
-        
-        # Filter lockern: Manchmal sind Hauptbilder isoliert, aber wir behalten
-        # deine Logik bei, Gruppen zu bevorzugen.
-        if len(imgs) < 2:
-            continue 
+        if not imgs: continue
+        if len(imgs) < 2 and candidates: continue 
 
         for img in imgs:
             urls = []
-            
-            # A) Normale Attribute prüfen
             for attr in target_attrs:
-                if attr in img.attrs and img[attr]:
-                    urls.append(img[attr])
+                if img.has_attr(attr): urls.append(img[attr])
+            
+            if img.has_attr('srcset'):
+                parts = [p.strip().split()[0] for p in img['srcset'].split(',') if p.strip()]
+                urls.extend(parts)
+            if img.has_attr('data-srcset'):
+                parts = [p.strip().split()[0] for p in img['data-srcset'].split(',') if p.strip()]
+                urls.extend(parts)
 
-            # B) Srcset parsen (mit Crash-Fix)
-            for attr in ['srcset', 'data-srcset']:
-                if attr in img.attrs and img[attr]:
-                    # Split am Komma, aber leere Einträge filtern!
-                    parts = [p.strip() for p in re.split(r',\s*', img[attr]) if p.strip()]
-                    for part in parts:
-                        url_part = part.split()[0]
-                        urls.append(url_part)
-
-            # C) URLs verarbeiten und bereinigen
             for url in urls:
+                if url.startswith('//'): url = 'https:' + url
                 base = _get_base_url_path(url)
-                
-                # eBay-Spezial: Versuche URL auf maximale Auflösung (s-l1600) zu zwingen
-                if "ebayimg.com" in base:
-                    base = re.sub(r's-l\d+\.', 's-l1600.', base)
+                if "ebayimg.com" in base: base = re.sub(r's-l\d+\.', 's-l1600.', base)
 
-                if base and not base.lower().endswith(('.svg', '.gif')) and not base.startswith('data:'):
-                    # ÄNDERUNG 2: Nur hinzufügen, wenn noch nicht gesehen (behält Reihenfolge)
-                    if base not in seen_urls:
-                        seen_urls.add(base)
-                        basis_url_kandidaten.append(base)
+                if base and base not in seen and is_valid_image_url(base):
+                    seen.add(base)
+                    candidates.append(base)
 
-    # ÄNDERUNG 3: 'sorted()' entfernt, Liste direkt joinen
-    kandidaten_string = " | ".join(basis_url_kandidaten)
-    return kandidaten_string if basis_url_kandidaten else "N/A"
+    return " | ".join(candidates) if candidates else "N/A"
 
 def normalize_url(url: str) -> str:
     """
     Normalisiert eine URL: entfernt Fragmente, sortiert/entfernt bestimmte Query-Parameter und entfernt nachgestellte Schrägstriche.
-    (Diese Hilfsfunktion muss definiert sein, um den Code lauffähig zu machen.)
     """
     if not url or not url.startswith('http'):
         return url
     
     parsed = urlparse(url)
-    # Entferne Fragment-Bezeichner (#...)
     path = parsed.path
     query = parsed.query
     
-    # Optional: Entferne nachgestellten Schrägstrich, außer wenn der Pfad nur '/' ist
     if path.endswith('/') and len(path) > 1:
         path = path.rstrip('/')
         
-    # Optional: Logik zur Bereinigung von Query-Parametern könnte hier eingefügt werden
-    
-    # Erstelle die bereinigte URL neu (ohne Fragment)
     normalized = urlunparse((
         parsed.scheme,
         parsed.netloc,
         path,
         parsed.params,
-        query, # Behalte die Query-Parameter
-        ''     # Fragment ist leer
+        query, 
+        ''     
     ))
     return normalized
 
@@ -166,7 +239,6 @@ def extract_and_normalize_url(html_content: str) -> str:
             found_url = canonical_link['href'].strip()
         
         # 2. ZWEITE PRIORITÄT: Alternate Link (de)
-        # Sucht nach <link rel="alternate" href="..." hreflang="de">
         if not found_url:
             alternate_de_link = soup.find('link', {'rel': 'alternate', 'hreflang': 'de'})
             if alternate_de_link and alternate_de_link.get('href'):
@@ -178,7 +250,7 @@ def extract_and_normalize_url(html_content: str) -> str:
             if og_url_meta and og_url_meta.get('content'):
                 found_url = og_url_meta['content'].strip()
 
-        # 4. VIERTE PRIORITÄT: Apple iTunes/App Meta-Tag (z.B. für App-Stores)
+        # 4. VIERTE PRIORITÄT: Apple iTunes/App Meta-Tag
         if not found_url:
             apple_meta = soup.find('meta', {'name': 'apple-itunes-app'})
             if apple_meta and apple_meta.get('content'):
@@ -193,29 +265,22 @@ def extract_and_normalize_url(html_content: str) -> str:
             if product_links:
                 found_url = max([link['href'] for link in product_links if link.get('href')], key=len, default=None)
 
-        # 6. LETZTER FALLBACK: AGGRESSIVE REGEX-SUCHE im gesamten HTML-Text
+        # 6. LETZTER FALLBACK: AGGRESSIVE REGEX-SUCHE
         if not found_url:
-            # Sucht nach http/https URLs, die keine statischen Ressourcen (Bilder, JS, CSS) sind
-            # Wir suchen URLs mit mindestens 3 Pfadsegmenten (wahrscheinlich spezifische Produkt-URL)
             urls = re.findall(r'https?://(?:www\.)?(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s"\']*)?', html_content)
-            
-            # Filtert nach URLs, die spezifischer erscheinen (mind. 3 Pfadsegmente und keine zu kurzen URLs)
             product_urls = [u for u in urls if u.count('/') >= 3 and len(u) > 30 and not any(ext in u for ext in ['.js', '.css', '.png', '.jpg', '.svg'])] 
-            
             if product_urls:
-                # Wählt die längste gefundene URL, da sie am spezifischsten ist
                 found_url = max(product_urls, key=len)
 
-        # 7. Normalisierung der URL
         if found_url and found_url.startswith('http'):
             return found_url
 
-        return "" # Gibt leeren String zurück, wenn nichts gefunden wurde
+        return "" 
         
     except Exception as e:
-        # Hier sollte eine geeignete Fehlerbehandlung stattfinden (z.B. Logging)
         print(f"Fehler beim Parsen: {e}")
         return ""
+
 def extract_title_from_html(html_content: str) -> str:
     """Extrahiert den bereinigten Titel."""
     soup = BeautifulSoup(html_content, 'lxml')
@@ -233,20 +298,17 @@ def extract_title_from_html(html_content: str) -> str:
             
     return "N/A"
 
-
 def extract_core_html_data(html_content: str) -> Dict[str, Any]:
     """
     Führt alle deterministischen HTML-Extraktionen durch und konsolidiert sie in einem Dictionary.
     """
     title = extract_title_from_html(html_content)
-    url = extract_and_normalize_url(html_content) # <- Ihre Power-Funktion wird hier verwendet
-  
+    url = extract_and_normalize_url(html_content) 
     
     return {
         "title": title,
         "url": url      
     }
-
 
 def clean_html_to_core_text(html_content: str) -> str:
     """
@@ -288,7 +350,6 @@ def clean_html_to_core_text(html_content: str) -> str:
     
     return text
 
-
 def process_html_to_llm_input(html_path: Path, output_path: Path):
     """
     Hauptfunktion, die HTML verarbeitet und die LLM-Input-JSON-Datei speichert.
@@ -318,9 +379,6 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
         product_url=core_data.get("url","N/A")
         product_title=core_data.get("title","N/A")
     
-   
-    #print(f" 	-> Gefundene Bild-Kandidaten: {len(bild_kandidaten.split(' | ')) if bild_kandidaten != 'N/A' else 0} URLs/Deskriptoren.")
-  
     print("-> Starte HTML-Bereinigung...")
     clean_text = clean_html_to_core_text(raw_html)
     print("<- HTML-Bereinigung abgeschlossen.")
@@ -346,9 +404,6 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
     
     return llm_input_data
 
-    
-
-
 # ----------------------------- ROUTING & AI-PARSING LOGIK --------------------------------------
 def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
     """
@@ -372,12 +427,10 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
         with open(temp_ai_output_file, 'r', encoding='utf-8') as f:
             ai_output_data = json.load(f)
 
-        # NEUE PRÜFUNG 1: Stoppt, wenn der LLM-Output einen Extraktionsfehler enthält (z.B. Overload)
+        # NEUE PRÜFUNG 1: Stoppt, wenn der LLM-Output einen Extraktionsfehler enthält
         if "Extraktionsfehler" in ai_output_data.get("extracted_data", {}):
             error_message = ai_output_data["extracted_data"]["Extraktionsfehler"]
-            # Wirft eine Exception, um die Speicherung des finalen Output-Files zu verhindern.
             raise ValueError(f"LLM-Extraktionsfehler (z.B. Overload): {error_message}")
-
 
         data_mapped = map_ai_output_to_target_format(
             ai_output_data,
@@ -386,9 +439,7 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
         
         # NEUE PRÜFUNG 2: Stoppt, wenn der berechnete Preis N/A ist
         if data_mapped.get('akt_preis') == 'N/A':
-            # Wirft eine Exception, um die Speicherung des finalen Output-Files zu verhindern.
             raise ValueError("Produktpreis 'akt_preis' ist 'N/A'. Überspringe Speicherung.")
-
 
         # Speichere das Endergebnis
         product_identifier = data_mapped.get('product_id', 'N/A')
@@ -402,15 +453,12 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
         with tmp.open('w', encoding='utf-8') as f:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
-        
         #cleanup_temp_files()
-        
         return True, f"AI OK -> {final_output_file.name}"
 
     except Exception as e:
-        cleanup_temp_files()
+        #cleanup_temp_files()
         raise Exception(f"AI-Pipeline/Mapping Fehler: {e}")
-
 
 # ----------------------------- DAEMON LOOP --------------------------------------
 
@@ -432,7 +480,6 @@ def daemon_loop(interval: int = INTERVAL_SECS) -> None:
         except Exception as e:
             print(f"[product-parser] SCHWERWIEGENDER FEHLER IM DAEMON: {e}", file=sys.stderr)
             time.sleep(interval)
-
 
 if __name__ == '__main__':
     PRODUCKT_DIR.mkdir(parents=True, exist_ok=True)
