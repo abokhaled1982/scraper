@@ -305,7 +305,7 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
     if isAmazon:
          bild_kandidaten = product.images
          product_url = product.product_info["shortlink"]
-         product_title = product["title"]
+         product_title = product.title
     else:
         core_data = extract_core_html_data(raw_html)
         bild_kandidaten = extrahiere_produktbilder_aus_html(raw_html)
@@ -364,12 +364,12 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
         with tmp.open('w', encoding='utf-8') as f:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
-        #cleanup_temp_files()
+        cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}"
 
     except Exception as e:
-        #cleanup_temp_files()
+        cleanup_temp_files()
         raise Exception(f"AI-Pipeline/Mapping Fehler: {e}")
 
 def daemon_loop(interval: int = INTERVAL_SECS) -> None:
