@@ -54,39 +54,69 @@ def _get_base_url_path(url: str) -> str:
 
 def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     """
-    Sucht nach Bild-URLs innerhalb von Containern mit mehreren Bildern,
-    extrahiert deren Basis-Pfad (ohne Auflösungsparameter) und gibt
-    eine bereinigte, eindeutige Liste zurück.
-    Einzelbilder außerhalb solcher Container werden ignoriert.
+    Sucht nach Bild-URLs, extrahiert deren Basis-Pfad und optimiert für eBay/Amazon.
+    Behebt den 'Index out of range' Fehler und priorisiert High-Res-Bilder.
     """
     soup = BeautifulSoup(html_content or "", 'lxml')
     basis_url_kandidaten = set()
 
-    # 1. Suche nach Containern mit mehreren <img>
-    container_tags = ['div', 'figure', 'section', 'ul']  # typische Container
+    # 1. Container-Suche (erweitert für modernere Layouts)
+    container_tags = ['div', 'figure', 'section', 'ul', 'li']  
+    
+    # Relevante Attribute für Bild-Quellen (High-Res zuerst)
+    target_attrs = [
+        'data-zoom-src',       # eBay Zoom Bild (sehr wichtig!)
+        'data-hi-res',         # Generisch High-Res
+        'data-large',          # Generisch
+        'data-full-image-url', # Manche Shops
+        'data-original',       # Lazy Loading Original
+        'data-src',            # Lazy Loading Standard
+        'src'                  # Fallback
+    ]
+
     for container in soup.find_all(container_tags):
         imgs = container.find_all('img')
+        
+        # Filter lockern: Manchmal sind Hauptbilder isoliert, aber wir behalten
+        # deine Logik bei, Gruppen zu bevorzugen, senken das Limit aber evtl.
+        # oder prüfen spezifische eBay-Klassen.
         if len(imgs) < 2:
-            continue  # Einzelbilder ignorieren
+            # OPTIONAL: Wenn du eBay Hauptbilder verpasst, entferne diese Bedingung
+            # oder prüfe, ob das Bild eine 'zoom'-Klasse hat.
+            continue 
+
         for img in imgs:
             urls = []
-            for attr in ['src', 'data-src', 'data-original', 'data-full-image-url']:
+            
+            # A) Normale Attribute prüfen
+            for attr in target_attrs:
                 if attr in img.attrs and img[attr]:
                     urls.append(img[attr])
+
+            # B) Srcset parsen (mit Crash-Fix)
             for attr in ['srcset', 'data-srcset']:
                 if attr in img.attrs and img[attr]:
-                    parts = re.split(r',\s*', img[attr])
+                    # Split am Komma, aber leere Einträge filtern!
+                    parts = [p.strip() for p in re.split(r',\s*', img[attr]) if p.strip()]
                     for part in parts:
-                        url_only = part.split()[0]
-                        urls.append(url_only)
+                        # Jetzt ist sichergestellt, dass part nicht leer ist
+                        url_part = part.split()[0]
+                        urls.append(url_part)
+
+            # C) URLs verarbeiten und bereinigen
             for url in urls:
                 base = _get_base_url_path(url)
+                
+                # eBay-Spezial: Versuche URL auf maximale Auflösung (s-l1600) zu zwingen
+                if "ebayimg.com" in base:
+                    # Ersetzt z.B. s-l300, s-l500, s-l64 durch s-l1600
+                    base = re.sub(r's-l\d+\.', 's-l1600.', base)
+
                 if base and not base.lower().endswith(('.svg', '.gif')) and not base.startswith('data:'):
                     basis_url_kandidaten.add(base)
 
     kandidaten_string = " | ".join(sorted(list(basis_url_kandidaten)))
     return kandidaten_string if basis_url_kandidaten else "N/A"
-
 
 def normalize_url(url: str) -> str:
     """
