@@ -89,18 +89,26 @@ class Produktinformation(BaseModel):
     produkt_id: str = Field(description="Die eindeutige Produktkennung wie ASIN, SKU oder Produktnummer. Falls keine gültige Produktkennung gefunden wird, verwende den String: **'produkt titel-der preis'**, wobei **alle Leerzeichen und Kommas** durch Bindestriche (-) ersetzt werden sollen")
     hauptprodukt_bilder: list[str] = Field(
     description=(
-        "Eine Liste der relevantesten Produktbild-URLs als Strings. **Das LLM MUSS diese Prioritäten strikt einhalten:** "
+        "Eine Liste der relevantesten Produktbild-URLs als Strings. "
+        "**Das LLM MUSS diese Prioritäten strikt in dieser Reihenfolge einhalten:**\n\n"
         
-        # 1. Höchste Priorität: Auflösung & Eindeutigkeit
-        "**1. Hohe Auflösung/Größe** (Idealerweise Breite > 800px). "
-        "**2. Eindeutige Produktfotos** – Schließe immer URLs aus, die Screenshots, Logos, Icons, oder generische Marketing-Grafiken darstellen (Negativ-Keywords wie 'screenshot', 'logo', 'icon', 'design ohne titel' deuten auf sekundäre Assets hin). "
+        # 1. ABSOLUTE PRIORITÄT (Der Injection-Trick)
+        "1. **[HERO-IMAGE] OVERRIDE:** Prüfe zuerst, ob eine URL im Input mit '[HERO-IMAGE]' beginnt. "
+        "Dieses Bild MUSS zwingend an die erste Stelle der Liste. "
+        "IGNORIERE für dieses eine Bild alle Qualitätsfilter, Format-Regeln oder Logo-Checks – es wird immer akzeptiert!\n"
         
-        # 2. Konsistenz (NEU: Format-Konsistenz)
-        "**3. Format-Konsistenz:** Die ausgewählten Bilder **MÜSSEN** das dominierende Dateiformat (z.B. nur JPGs oder nur WebPs) der hochauflösenden Kandidaten verwenden. URLs mit abweichenden Formaten (z.B. ein PNG in einer JPG-Serie) sind **auszuschließen**."
-        "**4. Benennungs-Konsistenz:** Priorisiere Bilder, die Teil einer Serie sind (z.B. nummerierte Fotos oder gleiche Präfixe/Asset-IDs), da sie zusammengehörige Produktansichten sind."
+        # 2. Qualität & Filter (Für den Rest der Galerie)
+        "2. **Qualität & Eindeutigkeit:** Wähle für die restlichen Bilder nur hochauflösende Fotos (ideal >800px). "
+        "Schließe strikt URLs aus, die nach Screenshots, Logos, Icons oder Platzhaltern aussehen "
+        "(Wörter wie 'logo', 'icon', 'button' im Namen sind Ausschlusskriterien).\n"
         
-        # 3. Technische Korrektur
-        "**WICHTIGE REGEL ZUR KORREKTUR:** Falls eine gefundene URL **relativ** ist (beginnt z.B. mit '/'), **MUSS** sie mithilfe der im Prompt bereitgestellten kanonischen Produkt-URL in eine **ABSOLUTE, vollständige Web-URL** umgewandelt werden (z.B. https://shop.de/bild.jpg)."
+        # 3. Konsistenz (Nur für Galerie-Auffüllung)
+        "3. **Format- & Serien-Konsistenz:** Die weiteren Bilder sollten idealerweise das gleiche Dateiformat (z.B. jpg/webp) "
+        "wie die besten Kandidaten haben. Mische keine Formate, wenn eine klare Serie erkennbar ist (außer das Hero-Image weicht ab).\n"
+        
+        # 4. Technik
+        "4. **Technische Korrektur:** Falls eine URL relativ ist (beginnt mit '/'), wandle sie basierend auf der Produkt-URL "
+        "in eine absolute HTTPS-URL um."
     )
 )
     url_des_produkts: str = Field(description="Die kanonische URL des Produkts. Verwende 'N/A', falls nicht gefunden.")
@@ -172,7 +180,6 @@ class Produktinformation(BaseModel):
         )
     )
 # --- 2. LLM-FUNKTIONEN ---
-
 def baue_pattern_pack():
     """Initialisiert den LLM-Client und die Konfiguration."""
     client = genai.Client()
@@ -181,49 +188,40 @@ def baue_pattern_pack():
         response_schema=Produktinformation,
     )
     system_prompt = (
-    "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
-    "Produktdetails aus dem gesamten Kontext (**TEXT UND ALLE BILDER**). Halte dich exakt an das JSON-Schema. "
-    
-    # EXTREM SCHARFE ANWEISUNG ZUR BERECHNUNG DES ENDPREISES
-    "**OBERSTE PRIORITÄT: BERECHNE IMMER DEN FINALEN, NIEDRIGSTEN PREIS ('akt_preis')!** "
-    "Dazu MUSS du ALLE Arten von **DIREKTEN, SOFORT ANWENDBAREN** Preisvorteilen "
-    "aus dem gesamten Kontext erkennen und den Preis **EXAKT** neu berechnen. "
-    
-    # NEU: KRITERIEN FÜR DIE BERECHNUNG DES ENDPREISES ('akt_preis')
-    "**DEFINITION 'akt_preis':** Der `akt_preis` MUSS den niedrigsten Kaufpreis darstellen, den ein **UNIVERSALER Kunde** bei Abschluss der Transaktion sofort bezahlt. "
-    
-    "**PRINZIP DER DIREKTEN REDUKTION:** Nur Preisvorteile, die zu einer **SOFORTIGEN, UNMITTELBAREN Reduktion** des fälligen Betrags im Checkout führen (z.B. Rabattcodes, Sofort-Abzüge, Klick-Coupons, automatische Mengenrabatte, Versandkosten-Ersparnis), dürfen in die Berechnung des `akt_preis` einfließen.Aber NIEMALS Visa-Gutschriften. "
-    
-    "**AUSNAHME VON DER BERECHNUNG (NACHGELAGERTE VORTEILE):** Vorteile, die eine **hohe Spezifität** oder eine **nachgelagerte Gutschrift** erfordern, sind strikt vom `akt_preis` auszuschließen. Dazu gehören: Gutschriften/Voucher für zukünftige Einkäufe, Cash-Back-Angebote nach dem Kauf, Boni für die Nutzung einer spezifischen (nicht-universellen) Zahlungsart oder Boni, die einen speziellen Kundenstatus voraussetzen. Diese Vorteile MÜSSEN im `rabatt_text` oder `gutschein_details` dokumentiert werden. "
-    
-    "**PRÄZEDENZ:** Der `akt_preis` muss die Summe **ALLER** direkten Rabatte widerspiegeln. Das Ignorieren eines **direkten** Rabattes gilt als Fehler. "
-    
-    "Extrahiere ausschließlich relevante Produktbilder nach diesen Kriterien:\n"
-    "1. Bilder müssen Teil einer **Serie von mindestens 2 zusammenhängenden Produktbildern** sein.\n"
-    "2. Ignoriere alle Bilder, die Logos, Icons, Screenshots, Banner, Marketinggrafiken oder dekorative Elemente darstellen (Negativ-Keywords: 'logo', 'icon', 'screenshot', 'banner', 'design-ohne-titel').\n"
-    "3. Bevorzuge hochauflösende Bilder (≥ 800px Breite, wenn erkennbar).\n"
-    "4. Halte **Format-Konsistenz** (nur das dominante Format, z.B. JPG oder WebP). Abweichende Formate ausschließen.\n"
-    "5. Priorisiere Bilder, die nummeriert oder mit gleichem Präfix/Asset-ID versehen sind (z.B. prod-123-1.jpg, prod-123-2.jpg).\n"
-    "6. Relative URLs müssen in **absolute URLs** umgewandelt werden, basierend auf der 'kanonischen Produkt-URL'.\n"
-    "7. Gib nur Bilder zurück, die alle Kriterien erfüllen. Wenn keine Bilder passen, setze `hauptprodukt_bilder` auf [] oder 'N/A'.\n"
-    
-    "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
-    "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
-    "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
-)
+        "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
+        "Produktdetails aus dem gesamten Kontext (**TEXT UND ALLE BILDER**). Halte dich exakt an das JSON-Schema. "
+        
+        # EXTREM SCHARFE ANWEISUNG ZUR BERECHNUNG DES ENDPREISES
+        "**OBERSTE PRIORITÄT: BERECHNE IMMER DEN FINALEN, NIEDRIGSTEN PREIS ('akt_preis')!** "
+        "Dazu MUSS du ALLE Arten von **DIREKTEN, SOFORT ANWENDBAREN** Preisvorteilen "
+        "aus dem gesamten Kontext erkennen und den Preis **EXAKT** neu berechnen. "
+        
+        # KRITERIEN FÜR DIE BERECHNUNG DES ENDPREISES ('akt_preis')
+        "**DEFINITION 'akt_preis':** Der `akt_preis` MUSS den niedrigsten Kaufpreis darstellen, den ein **UNIVERSALER Kunde** bei Abschluss der Transaktion sofort bezahlt. "
+        
+        "**PRINZIP DER DIREKTEN REDUKTION:** Nur Preisvorteile, die zu einer **SOFORTIGEN, UNMITTELBAREN Reduktion** des fälligen Betrags im Checkout führen (z.B. Rabattcodes, Sofort-Abzüge, Klick-Coupons, automatische Mengenrabatte, Versandkosten-Ersparnis), dürfen in die Berechnung des `akt_preis` einfließen. Aber NIEMALS Visa-Gutschriften. "
+        
+        "**AUSNAHME VON DER BERECHNUNG (NACHGELAGERTE VORTEILE):** Vorteile, die eine **hohe Spezifität** oder eine **nachgelagerte Gutschrift** erfordern, sind strikt vom `akt_preis` auszuschließen. Dazu gehören: Gutschriften/Voucher für zukünftige Einkäufe, Cash-Back-Angebote nach dem Kauf, Boni für die Nutzung einer spezifischen (nicht-universellen) Zahlungsart oder Boni, die einen speziellen Kundenstatus voraussetzen. Diese Vorteile MÜSSEN im `rabatt_text` oder `gutschein_details` dokumentiert werden. "
+        
+        "**PRÄZEDENZ:** Der `akt_preis` muss die Summe **ALLER** direkten Rabatte widerspiegeln. Das Ignorieren eines **direkten** Rabattes gilt als Fehler. "
+        
+        # BILDER-LOGIK ENTFERNT (Wird jetzt vollständig über das JSON-Schema 'Produktinformation' gesteuert)
+        
+        "**WICHTIGE REGEL:** Alle URLs, die du für 'hauptprodukt_bilder' findest, **MÜSSEN** "
+        "unter Verwendung der 'KANONISCHEN PRODUKT-URL' in absolute Web-Links umgewandelt werden, falls sie relativ sind. "
+        "Gib immer gültiges JSON zurück. Wenn keine Daten gefunden werden, nutze 'N/A' oder 0."
+    )
     return {"client": client, "config": config, "system_prompt": system_prompt}
 
-def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict,known_url:str) -> dict:
+def extrahiere_produktsignale(unstrukturierter_text: str, bild_kandidaten_str: str, pack: dict) -> dict:
     """Führt die LLM-basierte Extraktion der Produktsignale aus dem Text und den Bild-Kandidaten durch."""
-    LLM_MODEL = "gemini-2.5-flash-lite"
+    LLM_MODEL = "gemini-2.5-flash"
     client = pack["client"]
     config = pack["config"]
     system_prompt = pack["system_prompt"]
 
     user_prompt = f"""
 Extrahiere die Produktinformationen aus dem folgenden Text.
-
-HIER IST DIE RICHTIGE URL: {known_url}
 
 BILD-KANDIDATEN:
 ---
@@ -261,14 +259,14 @@ def extract_and_save_data(llm_input_data: json, output_path: Path):
   
     clean_text = llm_input_data.get("clean_text", "N/A")
     bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
-    product_url = llm_input_data.get("product_url", "N/A")
+
     if clean_text == "N/A" or not clean_text.strip():
         print("WARNUNG: Bereinigter Text ist leer.", file=sys.stderr)
         result = {"Fehler": "Bereinigter Text ist leer."}
     else:
         try:
             pack = baue_pattern_pack()
-            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack,product_url)
+            result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack)
         except Exception as e:
             print(f"Fehler bei der Extraktion: {e}", file=sys.stderr)
             result = {"Extraktionsfehler": str(e)}
