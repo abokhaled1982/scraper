@@ -2,7 +2,9 @@
 const WEBSOCKET_URL = "ws://localhost:8080";
 let socket = null;
 let reconnectTimer = null;
+let keepAliveInterval = null;
 
+// --- 1. VERBINDUNGSAUFBAU ---
 function connectWebSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return;
@@ -13,35 +15,37 @@ function connectWebSocket() {
     reconnectTimer = null;
   }
 
-  console.log("Starte Verbindung zum Node.js Server...");
+  console.log("🔄 Starte Verbindung zum Node.js Server...");
   socket = new WebSocket(WEBSOCKET_URL);
 
   socket.onopen = () => {
     console.log("✅ Verbunden mit Node.js Server");
+    // Wenn verbunden, Keep-Alive starten
+    startKeepAlive();
   };
 
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
 
-      // --- HEARTBEAT CHECK ---
+      // Heartbeat ignorieren (aber loggen, dass wir leben)
       if (data.type === "ping") {
         return;
       }
 
+      // Facebook Tab suchen und Nachricht senden
       chrome.tabs.query({ url: "*://*.facebook.com/*" }, (tabs) => {
         if (tabs.length > 0) {
           const targetTab = tabs[0];
           console.log("Sende Post an Tab ID:", targetTab.id);
 
-          // HIER WURDE 'comment' HINZUGEFÜGT
           chrome.tabs.sendMessage(
             targetTab.id,
             {
               command: "remote_post",
               text: data.text,
               image: data.image,
-              comment: data.comment, // <--- Neu: Kommentar mitgeben
+              comment: data.comment,
             },
             (response) => {
               if (chrome.runtime.lastError) {
@@ -52,7 +56,7 @@ function connectWebSocket() {
             }
           );
         } else {
-          console.log("Kein Facebook-Tab gefunden!");
+          console.log("⚠️ Kein Facebook-Tab gefunden! Bitte Facebook öffnen.");
         }
       });
     } catch (e) {
@@ -63,6 +67,7 @@ function connectWebSocket() {
   socket.onclose = () => {
     console.log("❌ Verbindung getrennt. Versuche in 5 Sekunden erneut...");
     socket = null;
+    stopKeepAlive(); // Keep-Alive stoppen, da Socket tot
     reconnectTimer = setTimeout(connectWebSocket, 5000);
   };
 
@@ -72,10 +77,48 @@ function connectWebSocket() {
   };
 }
 
-connectWebSocket();
+// --- 2. START-EVENTS (Wichtig für Autostart) ---
 
-setInterval(() => {
-  if (!socket || socket.readyState === WebSocket.CLOSED) {
-    connectWebSocket();
+// Wird gefeuert, wenn Chrome startet
+chrome.runtime.onStartup.addListener(() => {
+  console.log("🚀 Chrome gestartet - Initialisiere WebSocket...");
+  connectWebSocket();
+});
+
+// Wird gefeuert, wenn das Addon installiert/aktualisiert wird
+chrome.runtime.onInstalled.addListener(() => {
+  console.log("📦 Addon installiert/geladen - Initialisiere WebSocket...");
+  connectWebSocket();
+});
+
+// --- 3. KEEP-ALIVE MECHANISMUS (Gegen Service Worker Schlafmodus) ---
+
+function startKeepAlive() {
+  if (keepAliveInterval) clearInterval(keepAliveInterval);
+  
+  // Alle 20 Sekunden einen "Dummy"-Aufruf machen, damit Chrome den Worker nicht tötet
+  keepAliveInterval = setInterval(() => {
+    
+    // 1. WebSocket prüfen und ggf. neu verbinden
+    if (!socket || socket.readyState === WebSocket.CLOSED) {
+      console.log("💓 Keep-Alive: Socket war tot, verbinde neu...");
+      connectWebSocket();
+    } else {
+      // 2. Chrome API aufrufen (Reset des Idle-Timers)
+      chrome.runtime.getPlatformInfo((info) => {
+         // Dieser Aufruf ist sinnlos, aber er zwingt Chrome, den Service Worker wach zu halten
+      });
+    }
+    
+  }, 20000); // 20 Sekunden (Chrome tötet nach ca. 30s Inaktivität)
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
   }
-}, 10000);
+}
+
+// Initialer Aufruf (falls das Skript direkt geladen wird)
+connectWebSocket();
