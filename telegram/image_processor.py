@@ -1,7 +1,6 @@
 # telegram/image_processor.py
 import tempfile
 import aiohttp
-from PIL import Image
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from io import BytesIO
