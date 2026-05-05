@@ -27,7 +27,7 @@ from config import OPENED_PATH, PRODUCT_LIST_PATH  # , ensure_directories (optio
 # ---------------- Konfiguration ----------------
 CHROME_BIN = os.environ.get(
     "CHROME_BIN",
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    "/usr/bin/google-chrome"  # or "/usr/bin/chromium-browser" depending on what is installed
 )
 PROFILE_NAME   = os.environ.get("CHROME_PROFILE", "Profile 1")
 PAUSE_SECONDS  = int(os.environ.get("PAUSE_SECONDS", "30"))
