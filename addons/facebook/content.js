@@ -31,21 +31,48 @@ async function startPostingProcess(text, base64Image, commentToPost) {
   // 0. Vorbereitung
   fixFocusBlockers();
 
-  // 1. Trigger-Button suchen
-  const buttons = document.querySelectorAll('div[role="button"]');
+  // 1. Trigger-Button suchen (alle Facebook-Sprachvarianten)
+  const TRIGGER_KEYWORDS = [
+    "Was machst du gerade",
+    "Was denkst du gerade",
+    "Was liegt dir auf dem Herzen",
+    "What's on your mind",
+    "What's happening",
+    "Whats on your mind",
+  ];
+
+  const buttons = document.querySelectorAll('div[role="button"], [aria-placeholder]');
   let triggerFound = false;
 
   for (const btn of buttons) {
-    if (btn.innerText.includes("Was machst du gerade")) {
-      console.log("1. Öffne Post-Dialog...");
+    const txt = (btn.innerText || btn.getAttribute("aria-placeholder") || "");
+    if (TRIGGER_KEYWORDS.some(kw => txt.includes(kw))) {
+      console.log("1. Öffne Post-Dialog...", txt.trim().slice(0, 40));
       btn.click();
       triggerFound = true;
       break;
     }
   }
 
+  // Fallback: placeholder-Suche im gesamten DOM
   if (!triggerFound) {
-    console.error("❌ Start-Button nicht gefunden.");
+    const placeholders = document.querySelectorAll('[placeholder]');
+    for (const el of placeholders) {
+      const ph = el.getAttribute("placeholder") || "";
+      if (TRIGGER_KEYWORDS.some(kw => ph.includes(kw))) {
+        console.log("1. (Fallback) Öffne Post-Dialog via placeholder...");
+        el.click();
+        triggerFound = true;
+        break;
+      }
+    }
+  }
+
+  if (!triggerFound) {
+    console.error("❌ Start-Button nicht gefunden. Verfügbare Buttons:");
+    document.querySelectorAll('div[role="button"]').forEach(b => {
+      if (b.innerText.trim()) console.log("  →", b.innerText.trim().slice(0, 60));
+    });
     return;
   }
 

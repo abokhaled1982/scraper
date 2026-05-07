@@ -132,6 +132,9 @@ async def main():
     product_opener = await spawn("product_opener", PY, str(AMAZON / "product_opener.py"))
     product_parser = await spawn("product_parser", PY, str(AMAZON / "product_parser.py"))
 
+    # Facebook Services (Python-Port des WhatsApp-Systems)
+    fb_watcher     = await spawn("fb_watcher",     PY, "-m", "facebook.fb_watcher")
+
     # Telegram Services
     tel_router   = await spawn("telegram_router",   PY, "-m", "telegram.telRouter")
     tel_observer = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
@@ -143,6 +146,7 @@ async def main():
         ("deals_watcher",      deals_watcher),
         ("product_opener",     product_opener),
         ("product_parser",     product_parser),
+        ("fb_watcher",         fb_watcher),
         ("telegram_router",    tel_router),
         ("telegram_observer",  tel_observer),
         ("telegram_sender",    tel_sender),

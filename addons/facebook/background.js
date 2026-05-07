@@ -34,14 +34,13 @@ function connectWebSocket() {
           const targetTab = tabs[0];
           console.log("Sende Post an Tab ID:", targetTab.id);
 
-          // HIER WURDE 'comment' HINZUGEFÜGT
           chrome.tabs.sendMessage(
             targetTab.id,
             {
               command: "remote_post",
-              text: data.text,
-              image: data.image,
-              comment: data.comment, // <--- Neu: Kommentar mitgeben
+              text:    data.text,
+              image:   data.image,
+              comment: data.comment,
             },
             (response) => {
               if (chrome.runtime.lastError) {
