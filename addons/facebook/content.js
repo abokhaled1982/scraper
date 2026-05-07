@@ -426,7 +426,26 @@ async function postAsReel(text, base64Video, commentToPost) {
   reelBtn.click();
   await randomSleep(2500, 4500);
 
-  // 2. Warte auf Upload-Dialog / Datei-Input
+  // 2. Warte bis der Reel-Upload-Container sichtbar ist, DANN erst nach dem File-Input suchen
+  console.log("⏳ Warte auf Reel-Upload-Dialog...");
+  const reelContainerAppeared = await new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      const container = findReelUploadContainer();
+      if (container) return resolve(container);
+      if (Date.now() - start > 12000) return resolve(null);
+      setTimeout(check, 300);
+    };
+    check();
+  });
+
+  if (!reelContainerAppeared) {
+    console.warn("⚠️ Reel-Upload-Container nicht gefunden – versuche es trotzdem...");
+  } else {
+    console.log("✅ Reel-Upload-Container erschienen.");
+    await randomSleep(500, 1000); // kurze Pause, damit DOM sich stabilisiert
+  }
+
   const fileInput = await waitForVideoUploadInput();
   if (!fileInput) {
     console.error("❌ Upload-Input nicht gefunden.");
@@ -617,17 +636,92 @@ function simulateDropOnElement(element, dataTransfer) {
   });
 }
 
+/**
+ * Finds the Reel-specific upload drop-zone container.
+ * We identify it by the presence of the video-camera SVG icon (path starting with "M8.805")
+ * OR by the "Video hinzufügen" / "oder hierher ziehen" label text.
+ * Returns the outermost wrapper div that contains the file input.
+ */
+function findReelUploadContainer() {
+  // Strategy 1: Find by the unique SVG path used in the Reel drop zone
+  const svgs = Array.from(document.querySelectorAll('svg'));
+  for (const svg of svgs) {
+    const path = svg.querySelector('path');
+    if (path && (path.getAttribute('d') || '').startsWith('M8.805')) {
+      // Walk up to a reasonable container that would hold an <input>
+      let el = svg.parentElement;
+      for (let i = 0; i < 8; i++) {
+        if (!el) break;
+        if (el.querySelector('input[type="file"]')) return el;
+        el = el.parentElement;
+      }
+    }
+  }
+
+  // Strategy 2: Find by "Video hinzufügen" label text
+  const REEL_UPLOAD_TEXTS = [
+    'video hinzufügen',
+    'oder hierher ziehen und ablegen',
+    'video für reel hochladen',
+    'add video',
+    'drag and drop',
+  ];
+  const allDivs = Array.from(document.querySelectorAll('div, section'));
+  for (const div of allDivs) {
+    const text = (div.innerText || '').toLowerCase();
+    if (REEL_UPLOAD_TEXTS.some(t => text.includes(t))) {
+      // Make sure this container or a nearby ancestor has a file input
+      let el = div;
+      for (let i = 0; i < 8; i++) {
+        if (!el) break;
+        if (el.querySelector('input[type="file"]')) return el;
+        el = el.parentElement;
+      }
+    }
+  }
+
+  return null;
+}
+
 function findVideoUploadInput() {
+  // First: try to scope the search to the Reel upload container
+  const reelContainer = findReelUploadContainer();
+  if (reelContainer) {
+    const scopedInputs = Array.from(reelContainer.querySelectorAll('input[type="file"]'));
+    const videoInput = scopedInputs.find(input => !input.accept || input.accept.includes('video') || input.accept.includes('*'));
+    if (videoInput) {
+      console.log('✅ Reel-File-Input im Reel-Container gefunden (scoped).');
+      return videoInput;
+    }
+  }
+
+  // Fallback: page-wide search, but prefer inputs that are NOT inside a normal post dialog textbox area
   const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-  const visibleInputs = fileInputs.filter((input) => {
-    if (!input.accept || !input.accept.includes('video')) return false;
-    const style = window.getComputedStyle(input);
-    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return false;
-    const rect = input.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+
+  // Filter to video-accepting inputs that are NOT children of the normal post composer textbox
+  const reelInputs = fileInputs.filter((input) => {
+    if (input.accept && !input.accept.includes('video') && !input.accept.includes('*') && !input.accept.includes('mp4')) return false;
+    // Exclude inputs that sit inside a div[role="textbox"] (normal post composer)
+    if (input.closest('div[role="textbox"]')) return false;
+    // Prefer inputs whose ancestor contains Reel-related text
+    let el = input.parentElement;
+    for (let i = 0; i < 10; i++) {
+      if (!el) break;
+      const t = (el.innerText || '').toLowerCase();
+      if (t.includes('reel') || t.includes('video hinzufügen') || t.includes('add video')) return true;
+      el = el.parentElement;
+    }
+    return false;
   });
-  if (visibleInputs.length) return visibleInputs[0];
-  return fileInputs.find((input) => input.accept && input.accept.includes('video')) || null;
+
+  if (reelInputs.length) {
+    console.log('✅ Reel-File-Input via Fallback-Filterung gefunden.');
+    return reelInputs[0];
+  }
+
+  // Last resort: any video file input
+  console.warn('⚠️ Kein Reel-spezifischer Input gefunden. Nehme ersten Video-Input (kann falsch sein!)');
+  return fileInputs.find((input) => !input.accept || input.accept.includes('video') || input.accept.includes('*')) || null;
 }
 
 function waitForVideoUploadInput(timeout = 15000) {
