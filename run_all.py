@@ -135,6 +135,9 @@ async def main():
     # Facebook Services (Python-Port des WhatsApp-Systems)
     fb_watcher     = await spawn("fb_watcher",     PY, "-m", "facebook.fb_watcher")
 
+    # Reels Services
+    reels_watcher  = await spawn("reels_watcher",  PY, "-m", "reels.reels_watcher")
+
     # Telegram Services
     tel_router   = await spawn("telegram_router",   PY, "-m", "telegram.telRouter")
     tel_observer = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
@@ -147,6 +150,7 @@ async def main():
         ("product_opener",     product_opener),
         ("product_parser",     product_parser),
         ("fb_watcher",         fb_watcher),
+        ("reels_watcher",      reels_watcher),
         ("telegram_router",    tel_router),
         ("telegram_observer",  tel_observer),
         ("telegram_sender",    tel_sender),
@@ -184,6 +188,8 @@ async def main():
     await terminate(tel_observer,   "telegram_observer")
     await terminate(tel_router,     "telegram_router")
     await terminate(tel_sender,     "telegram_sender")
+    await terminate(reels_watcher,  "reels_watcher")
+    await terminate(fb_watcher,     "fb_watcher")
     await terminate(product_parser, "product_parser")
     await terminate(product_opener, "product_opener")
     await terminate(deals_watcher,  "deals_watcher")

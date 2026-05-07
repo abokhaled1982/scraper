@@ -5,7 +5,9 @@
   "permissions": ["activeTab", "scripting", "tabs", "alarms"],
   "host_permissions": [
     "https://*.facebook.com/*",
-    "http://*.facebook.com/*"
+    "http://*.facebook.com/*",
+    "https://facebook.com/*",
+    "http://facebook.com/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -186,8 +186,8 @@ async def _do_send(payload: dict) -> bool:
     return False
 
 
-async def send_post(data: dict, local_image_path: str | pathlib.Path | None = None) -> bool:
-    """Sendet einen Facebook-Post — thread-safe."""
+async def send_post(data: dict, local_image_path: str | pathlib.Path | None = None, local_video_path: str | pathlib.Path | None = None) -> bool:
+    """Sendet einen Facebook-Post oder Reel — thread-safe."""
     from facebook.fb_message import create_facebook_message
 
     fb_text   = create_facebook_message(data)
@@ -196,9 +196,10 @@ async def send_post(data: dict, local_image_path: str | pathlib.Path | None = No
         offer_url = ""
 
     payload: dict = {
-        "type":    "post",
+        "type":    "reel" if local_video_path else "post",
         "text":    fb_text,
         "image":   None,
+        "video":   None,
         "comment": offer_url,
     }
 
@@ -206,6 +207,11 @@ async def send_post(data: dict, local_image_path: str | pathlib.Path | None = No
         b64 = _file_to_base64(local_image_path)
         if b64:
             payload["image"] = b64
+
+    if local_video_path:
+        b64 = _file_to_base64(local_video_path)
+        if b64:
+            payload["video"] = b64
 
     if _server_loop and _server_loop.is_running():
         future = asyncio.run_coroutine_threadsafe(_do_send(payload), _server_loop)

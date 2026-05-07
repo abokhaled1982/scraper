@@ -7,6 +7,8 @@ const randomSleep = (min = 2000, max = 5000) => {
   return new Promise((resolve) => setTimeout(resolve, delay));
 };
 
+console.log("✅ Facebook Content Script geladen.");
+
 // --- HELPER: BLOCKADEN ENTFERNEN ---
 function fixFocusBlockers() {
   const blocker = document.getElementById("scrollview");
@@ -22,14 +24,34 @@ function fixFocusBlockers() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === "remote_post") {
-    console.log("🤖 Empfange Befehl...");
-    startPostingProcess(request.text, request.image, request.comment);
+    console.log("🤖 Empfange Befehl...", {
+      text: request.text ? request.text.slice(0, 80) : null,
+      hasImage: !!request.image,
+      hasVideo: !!request.video,
+      comment: request.comment ? request.comment.slice(0, 40) : null,
+    });
+    startPostingProcess(request.text, request.image, request.video, request.comment)
+      .then(() => sendResponse({ received: true }))
+      .catch((error) => {
+        console.error('Fehler in startPostingProcess:', error);
+        sendResponse({ received: false, error: String(error) });
+      });
+    return true;
   }
 });
 
-async function startPostingProcess(text, base64Image, commentToPost) {
+async function startPostingProcess(text, base64Image, base64Video, commentToPost) {
   // 0. Vorbereitung
   fixFocusBlockers();
+
+  if (base64Video) {
+    // --- REEL MODE ---
+    console.log("🎥 Poste als Reel...");
+    await postAsReel(text, base64Video, commentToPost);
+    return;
+  }
+
+  // --- NORMAL POST MODE ---
 
   // 1. Trigger-Button suchen (alle Facebook-Sprachvarianten)
   const TRIGGER_KEYWORDS = [
@@ -387,6 +409,308 @@ function pasteImage(target, base64Image) {
     target.dispatchEvent(pasteEvent);
   } catch (e) {
     console.error("Fehler beim Bild-Paste:", e);
+  }
+}
+
+async function postAsReel(text, base64Video, commentToPost) {
+  // 1. Suche den Reel-Button im aktuellen Facebook-Dialog
+  const reelBtn = findReelButton();
+  if (!reelBtn) {
+    console.error("❌ Reel-Button nicht gefunden.");
+    return;
+  }
+
+  console.log("🎥 Klicke Reel-Button...");
+  reelBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+  await randomSleep(300, 700);
+  reelBtn.click();
+  await randomSleep(2500, 4500);
+
+  // 2. Warte auf Upload-Dialog / Datei-Input
+  const fileInput = await waitForVideoUploadInput();
+  if (!fileInput) {
+    console.error("❌ Upload-Input nicht gefunden.");
+    return;
+  }
+  console.log("📁 Upload-Input gefunden. Lade Video...");
+
+  // Base64 zu Blob konvertieren
+  console.log(`📊 Base64-Größe: ${base64Video.length} bytes`);
+  const byteCharacters = atob(base64Video);
+  console.log(`📊 Dekodierte Größe: ${byteCharacters.length / 1024 / 1024} MB`);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: "video/mp4" });
+  console.log(`✅ Blob erstellt: ${blob.size / 1024 / 1024} MB, type: ${blob.type}`);
+  const file = new File([blob], "reel.mp4", { type: "video/mp4" });
+  console.log(`✅ File-Objekt: ${file.name}, size: ${file.size / 1024 / 1024} MB`);
+
+  const dataTransfer = new DataTransfer();
+  dataTransfer.items.add(file);
+
+  let uploadSuccess = false;
+  try {
+    fileInput.files = dataTransfer.files;
+    console.log("✅ Datei zum File-Input hinzugefügt.");
+    uploadSuccess = true;
+  } catch (e) {
+    console.warn("⚠️ File-Input Zuweisung fehlgeschlagen, versuche Drag/Drop-Simulation...", e);
+  }
+
+  if (!uploadSuccess) {
+    const dropZone = findReelDropZone();
+    if (dropZone) {
+      console.log("🧲 Drop-Zone gefunden. Simuliere Drag & Drop...");
+      simulateDropOnElement(dropZone, dataTransfer);
+      uploadSuccess = true;
+    } else {
+      console.warn("⚠️ Keine Drop-Zone gefunden. Versuche trotzdem Change-Event...");
+    }
+  }
+
+  const inputToTrigger = fileInput || findVideoUploadInput();
+  if (inputToTrigger) {
+    console.log("🔄 Triggere Change-Event...");
+    inputToTrigger.dispatchEvent(new Event("change", { bubbles: true }));
+    inputToTrigger.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  await randomSleep(3500, 6000);
+
+  // 3. Falls nötig: Weiter klicken, um zur Beschreibung zu gelangen
+  const continueBtn = findButtonByText(["Weiter", "Continue"]);
+  if (continueBtn && !isButtonDisabled(continueBtn)) {
+    console.log("➡️ Weiter-Button nach Upload gefunden. Klicke weiter...");
+    continueBtn.click();
+    await randomSleep(2500, 4500);
+  }
+
+  // 4. Reel-Beschreibung einfügen
+  if (text) {
+    const filled = await fillReelDescription(text);
+    if (!filled) {
+      console.warn("⚠️ Reel-Beschreibung konnte nicht automatisch eingefügt werden.");
+    }
+  }
+
+  // 5. Klick den Reel-Flow weiter bis zum finalen Posten
+  const posted = await clickReelActionButtons();
+  if (posted) {
+    console.log("✅ Reel gepostet!");
+  } else {
+    console.error("❌ Reel-Post-Flow konnte nicht abgeschlossen werden.");
+  }
+}
+
+async function clickReelActionButtons() {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const postBtn = findButtonByText(["Teilen", "Post", "Share", "Veröffentlichen"]);
+    if (postBtn && !isButtonDisabled(postBtn)) {
+      postBtn.click();
+      await randomSleep(4000, 7000);
+      return true;
+    }
+
+    const continueBtn = findButtonByText(["Weiter", "Continue"]);
+    if (continueBtn && !isButtonDisabled(continueBtn)) {
+      continueBtn.click();
+      console.log("➡️ Klicke Weiter im Reel-Flow...");
+      await randomSleep(2500, 4500);
+      continue;
+    }
+
+    await randomSleep(1000, 2000);
+  }
+  return false;
+}
+
+function isButtonDisabled(btn) {
+  if (!btn) return true;
+  if (btn.getAttribute('aria-disabled') === 'true') return true;
+  if (btn.disabled) return true;
+  return false;
+}
+
+function findReelButton() {
+  const selectorCandidates = [
+    'button[aria-label*="Reel"]',
+    'div[role="button"][aria-label*="Reel"]',
+    'span[role="button"][aria-label*="Reel"]',
+    'div[aria-label*="Reel"]',
+    'button',
+    'div[role="button"]',
+    'span[role="button"]',
+  ];
+
+  for (const selector of selectorCandidates) {
+    const els = document.querySelectorAll(selector);
+    for (const el of els) {
+      const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+      const text = (el.innerText || "").toLowerCase();
+      if (aria.includes("reel") || text.includes("reel") || text.includes("reel erstellen") || text.includes("create reel")) {
+        return el;
+      }
+    }
+  }
+
+  const xpath = `//div[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //span[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')]`;
+  const node = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+  if (node) {
+    return node;
+  }
+
+  // Debug: Liste möglicher Kandidaten
+  const debugButtons = Array.from(document.querySelectorAll('div[role="button"], button, span[role="button"], div[aria-label], span[aria-label]'))
+    .filter(el => (el.innerText || el.getAttribute("aria-label") || "").toLowerCase().includes("reel"));
+  if (debugButtons.length > 0) {
+    console.log("ℹ️ Mögliche Reel-Kandidaten:", debugButtons.map(el => ({ text: el.innerText?.trim(), aria: el.getAttribute("aria-label") })));
+    return debugButtons[0];
+  }
+
+  return null;
+}
+
+function findReelDropZone() {
+  const textSelectors = [
+    'Video hinzufügen',
+    'oder hierher ziehen und ablegen',
+    'Video für Reel hochladen',
+    'Reel erstellen',
+  ];
+
+  const allCandidates = Array.from(document.querySelectorAll('div[role="button"], div, span, section'));
+  for (const el of allCandidates) {
+    const text = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+    if (textSelectors.some((keyword) => text.includes(keyword.toLowerCase()))) {
+      return el;
+    }
+  }
+
+  const inputCandidates = Array.from(document.querySelectorAll('input[type="file"]'));
+  for (const input of inputCandidates) {
+    if (input.accept && input.accept.includes('video')) {
+      return input.closest('div') || input;
+    }
+  }
+
+  const labelCandidates = Array.from(document.querySelectorAll('[aria-label]'));
+  for (const el of labelCandidates) {
+    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+    if (aria.includes('video für reel hochladen') || aria.includes('reels') || aria.includes('upload')) {
+      return el;
+    }
+  }
+
+  return null;
+}
+
+function simulateDropOnElement(element, dataTransfer) {
+  ['dragenter', 'dragover', 'drop'].forEach((type) => {
+    const event = new DragEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+    });
+    element.dispatchEvent(event);
+  });
+}
+
+function findVideoUploadInput() {
+  const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+  const visibleInputs = fileInputs.filter((input) => {
+    if (!input.accept || !input.accept.includes('video')) return false;
+    const style = window.getComputedStyle(input);
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return false;
+    const rect = input.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  if (visibleInputs.length) return visibleInputs[0];
+  return fileInputs.find((input) => input.accept && input.accept.includes('video')) || null;
+}
+
+function waitForVideoUploadInput(timeout = 15000) {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      const input = findVideoUploadInput();
+      if (input) return resolve(input);
+      if (Date.now() - start > timeout) return resolve(null);
+      setTimeout(check, 250);
+    };
+    check();
+  });
+}
+
+function findButtonByText(words) {
+  const buttons = Array.from(document.querySelectorAll('button, div[role="button"], a[role="button"], span[role="button"], [role="button"]'));
+  for (const btn of buttons) {
+    const rawText = btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '';
+    const text = rawText.trim().toLowerCase();
+    if (!text) continue;
+
+    for (const word of words) {
+      if (text.includes(word.toLowerCase())) {
+        return btn;
+      }
+    }
+  }
+  return null;
+}
+
+function findReelDescriptionEditor() {
+  const editors = Array.from(document.querySelectorAll('div[role="dialog"] div[role="textbox"][contenteditable="true"], div[role="dialog"] div[contenteditable="true"][role="textbox"]'));
+  for (const editor of editors) {
+    const placeholder = (editor.getAttribute('aria-placeholder') || editor.getAttribute('placeholder') || '').toLowerCase();
+    if (placeholder.includes('beschreibe dein reel')) {
+      return editor;
+    }
+  }
+
+  // Fallback: leeres contenteditable im aktuellen Dialog
+  const emptyEditors = editors.filter((editor) => editor.innerText.trim().length === 0);
+  return emptyEditors.length === 1 ? emptyEditors[0] : null;
+}
+
+function waitForReelDescriptionEditor(timeout = 10000) {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      const editor = findReelDescriptionEditor();
+      if (editor) return resolve(editor);
+      if (Date.now() - start > timeout) return resolve(null);
+      setTimeout(check, 200);
+    };
+    check();
+  });
+}
+
+async function fillReelDescription(text) {
+  const editor = await waitForReelDescriptionEditor();
+  if (!editor) return false;
+
+  try {
+    console.log('✍️ Reel-Beschreibung erkannt. Setze Text...');
+    editor.focus();
+    editor.click();
+
+    // Leere vorhandene Inhalte
+    editor.innerText = '';
+    await randomSleep(200, 400);
+
+    const success = document.execCommand('insertText', false, text);
+    if (!success) {
+      editor.innerText = text;
+    }
+
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+    await randomSleep(800, 1200);
+    return true;
+  } catch (e) {
+    console.error('Fehler beim Ausfüllen der Reel-Beschreibung:', e);
+    return false;
   }
 }
 
