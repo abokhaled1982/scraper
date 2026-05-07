@@ -496,14 +496,19 @@ async function postAsReel(text, base64Video, commentToPost) {
     inputToTrigger.dispatchEvent(new Event("change", { bubbles: true }));
     inputToTrigger.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  await randomSleep(3500, 6000);
-
-  // 3. Falls nötig: Weiter klicken, um zur Beschreibung zu gelangen
-  const continueBtn = findButtonByText(["Weiter", "Continue"]);
-  if (continueBtn && !isButtonDisabled(continueBtn)) {
-    console.log("➡️ Weiter-Button nach Upload gefunden. Klicke weiter...");
-    continueBtn.click();
+  // 3. Warte bis Facebook das Video verarbeitet hat und der Weiter-Button aktiv wird
+  console.log("⏳ Warte auf Video-Verarbeitung und aktiven Weiter-Button (max. 3 min)...");
+  const weiterlBtn = await waitForReelReadyAndContinue(180000);
+  if (weiterlBtn) {
+    console.log("➡️ Weiter-Button aktiv! Klicke...");
+    weiterlBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    await randomSleep(400, 800);
+    weiterlBtn.click();
     await randomSleep(2500, 4500);
+  } else {
+    console.warn("⚠️ Weiter-Button kam nicht. Letzter Versuch...");
+    const fallbackBtn = findButtonByText(["Weiter", "Continue"]);
+    if (fallbackBtn) { fallbackBtn.click(); await randomSleep(2500, 4500); }
   }
 
   // 4. Reel-Beschreibung einfügen
@@ -521,6 +526,70 @@ async function postAsReel(text, base64Video, commentToPost) {
   } else {
     console.error("❌ Reel-Post-Flow konnte nicht abgeschlossen werden.");
   }
+}
+
+
+/**
+ * Wartet bis der Weiter-Button nicht mehr aria-disabled="true" ist.
+ * Erkennt Bereitschaft auch am grünen Banner "Dein Reel kann problemlos veröffentlicht werden!".
+ * Sucht den Button sowohl per aria-label als auch per verschachteltem Span-Text.
+ */
+function waitForReelReadyAndContinue(timeout = 180000) {
+  const READY_TEXTS = [
+    'dein reel kann problemlos veröffentlicht werden',
+    'your reel is ready to share',
+  ];
+  const start = Date.now();
+
+  function findWeiterBtn() {
+    // 1. Direkt per aria-label (zuverlässigste Methode für diesen Button)
+    const byAria = document.querySelector('[aria-label="Weiter"][role="button"], [aria-label="Continue"][role="button"]');
+    if (byAria) return byAria;
+
+    // 2. Per verschachteltem Span-Text (der Button hat <span>Weiter</span> tief drin)
+    const xpath = `.//*[normalize-space(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'))='weiter' or normalize-space(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'))='continue']`;
+    const result = document.evaluate(xpath, document.body, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    for (let i = 0; i < result.snapshotLength; i++) {
+      let node = result.snapshotItem(i);
+      for (let d = 0; d < 6; d++) {
+        if (!node) break;
+        if (node.getAttribute && node.getAttribute('role') === 'button') return node;
+        if (node.tagName && node.tagName.toLowerCase() === 'button') return node;
+        node = node.parentElement;
+      }
+    }
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    const check = () => {
+      const isReady = Array.from(document.querySelectorAll('span')).some(s =>
+        READY_TEXTS.some(t => (s.innerText || s.textContent || '').toLowerCase().includes(t))
+      );
+      if (isReady) console.log("✅ Reel bereit! Suche Weiter-Button...");
+
+      const btn = findWeiterBtn();
+      if (btn && btn.getAttribute('aria-disabled') !== 'true' && !btn.disabled) {
+        return resolve(btn);
+      }
+
+      if (isReady && btn) {
+        // Banner da aber Button kurz noch disabled — schnell nochmal
+        setTimeout(check, 300);
+        return;
+      }
+
+      if (Date.now() - start > timeout) {
+        console.warn("⏰ Timeout. Gebe auf.");
+        return resolve(null);
+      }
+
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      if (elapsed > 0 && elapsed % 10 === 0) console.log(`⏳ Warte auf Reel-Verarbeitung... (${elapsed}s)`);
+      setTimeout(check, 1000);
+    };
+    check();
+  });
 }
 
 async function clickReelActionButtons() {
