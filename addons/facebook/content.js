@@ -511,13 +511,47 @@ async function postAsReel(text, base64Video, commentToPost) {
     if (fallbackBtn) { fallbackBtn.click(); await randomSleep(2500, 4500); }
   }
 
-  // 4. Reel-Beschreibung einfügen
-  if (text) {
-    const filled = await fillReelDescription(text);
-    if (!filled) {
-      console.warn("⚠️ Reel-Beschreibung konnte nicht automatisch eingefügt werden.");
-    }
+  // =========================================================
+  // REEL EDIT-SCREEN: Beschreibung + Copyright-Check + Weiter
+  // =========================================================
+
+  // --- SCHRITT A: Warten bis Edit-Screen (Beschreibungsfeld) sichtbar ist ---
+  console.log("✍️ Warte auf Reel-Beschreibungsfeld im Edit-Screen...");
+  const reelDescFilled = await fillReelEditDescription(text, 60000);
+  if (reelDescFilled) {
+    console.log("✅ Reel-Beschreibung erfolgreich eingefügt.");
+  } else {
+    console.warn("⚠️ Reel-Beschreibungsfeld nicht gefunden oder konnte nicht befüllt werden.");
   }
+
+  // --- kurze Stabilisierungspause nach dem Tippen ---
+  await randomSleep(1500, 2500);
+
+  // --- SCHRITT B: Warten bis Copyright-Check abgeschlossen ---
+  console.log("⏳ Warte auf Copyright-Check...");
+  const copyrightOk = await waitForCopyrightCheckDone(30000);
+  if (copyrightOk) {
+    console.log("✅ Copyright-Check abgeschlossen. Bereit zum Weiter-Klicken.");
+  } else {
+    console.warn("⚠️ Copyright-Check Timeout oder Status unklar. Versuche trotzdem weiterzumachen.");
+  }
+
+  // --- kurze Pause nach Copyright-Check ---
+  await randomSleep(1500, 2500);
+
+  // --- SCHRITT C: Weiter-Button im Edit-Screen klicken ---
+  console.log("🖱️ Klicke Weiter-Button im Edit-Screen...");
+  const editWeiterClicked = await clickReelEditWeiterButton();
+  if (editWeiterClicked) {
+    console.log("✅ Weiter-Button geklickt.");
+  } else {
+    console.warn("⚠️ Weiter-Button im Edit-Screen nicht gefunden.");
+  }
+
+  // --- kurze Pause nach Weiter-Klick ---
+  await randomSleep(2000, 3500);
+
+  // =========================================================
 
   // 5. Klick den Reel-Flow weiter bis zum finalen Posten
   const posted = await clickReelActionButtons();
@@ -527,6 +561,198 @@ async function postAsReel(text, base64Video, commentToPost) {
     console.error("❌ Reel-Post-Flow konnte nicht abgeschlossen werden.");
   }
 }
+
+
+// =========================================================
+// REEL EDIT-SCREEN SELEKTOREN & FUNKTIONEN
+// =========================================================
+
+/**
+ * SELEKTOR 1: Reel-Beschreibungsfeld im Edit-Screen
+ * Sucht das contenteditable Feld mit data-lexical-editor="true"
+ * Stabiler Selektor - nutzt data-Attribute statt CSS-Klassen
+ */
+function findReelEditDescriptionField() {
+  // Primär: data-lexical-editor Attribut (stabil, FB-spezifisch)
+  const editor = document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]');
+  if (editor) return editor;
+
+  // Fallback: aria-placeholder mit Beschreibungs-Text
+  const byPlaceholder = Array.from(
+    document.querySelectorAll('div[contenteditable="true"]')
+  ).find(el => {
+    const ph = (el.getAttribute('aria-placeholder') || '').toLowerCase();
+    return ph.includes('beschreibe') || ph.includes('describe') || ph.includes('reel');
+  });
+  if (byPlaceholder) return byPlaceholder;
+
+  return null;
+}
+
+/**
+ * Wartet bis das Beschreibungsfeld erscheint und füllt es mit Text
+ * @param {string} text - Der einzufügende Text
+ * @param {number} timeout - Max. Wartezeit in ms
+ */
+async function fillReelEditDescription(text, timeout = 10000) {
+  const start = Date.now();
+
+  // Warten bis Feld erscheint
+  const editor = await new Promise((resolve) => {
+    const check = () => {
+      const el = findReelEditDescriptionField();
+      if (el) return resolve(el);
+      if (Date.now() - start > timeout) return resolve(null);
+      setTimeout(check, 300);
+    };
+    check();
+  });
+
+  if (!editor) {
+    console.warn("⚠️ Reel Edit Beschreibungsfeld nicht gefunden.");
+    return false;
+  }
+
+  // Warten bis das Feld auch wirklich sichtbar im Viewport ist
+  await new Promise((resolve) => {
+    const obs = new IntersectionObserver((entries, o) => {
+      if (entries[0].isIntersecting) { o.disconnect(); resolve(); }
+    }, { threshold: 0.1 });
+    obs.observe(editor);
+    // Fallback: nach 3s trotzdem weitermachen
+    setTimeout(resolve, 3000);
+  });
+
+  try {
+    // Fokus setzen und scrollen
+    editor.scrollIntoView({ behavior: "smooth", block: "center" });
+    await randomSleep(400, 700);
+    editor.focus();
+    editor.click();
+    await randomSleep(400, 700);
+
+    // Text direkt via execCommand einfügen (funktioniert mit Lexical Editor)
+    const success = document.execCommand('insertText', false, text);
+
+    if (!success) {
+      console.warn("⚠️ execCommand fehlgeschlagen, versuche Fallback...");
+      // Fallback: Zeichen für Zeichen simulieren
+      for (const char of text) {
+        editor.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+        editor.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
+        document.execCommand('insertText', false, char);
+        editor.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+      }
+    }
+
+    await randomSleep(500, 800);
+    console.log(`✅ Text eingefügt: "${editor.innerText.trim()}"`);
+    return true;
+  } catch (e) {
+    console.error("Fehler beim Befüllen des Reel Edit Beschreibungsfelds:", e);
+    return false;
+  }
+}
+
+/**
+ * SELEKTOR 2: Copyright-Check Status
+ * Prüft ob der Copyright-Check noch läuft oder fertig ist.
+ * Sucht den Text im DOM - stabil weil textbasiert statt CSS-Klassen
+ *
+ * Mögliche Texte:
+ * - "Check auf urheberrechtlich geschützten Content läuft" → noch am Prüfen
+ * - "Dein Reel kann problemlos veröffentlicht werden!"    → fertig ✅
+ */
+function getCopyrightCheckStatus() {
+  const CHECK_RUNNING_TEXT = 'urheberrechtlich';
+  const CHECK_DONE_TEXT    = 'problemlos veröffentlicht';
+
+  // Alle sichtbaren Spans durchsuchen
+  const allSpans = Array.from(document.querySelectorAll('span'));
+
+  const isRunning = allSpans.some(el =>
+    (el.innerText || el.textContent || '').toLowerCase().includes(CHECK_RUNNING_TEXT)
+  );
+
+  const isDone = allSpans.some(el =>
+    (el.innerText || el.textContent || '').toLowerCase().includes(CHECK_DONE_TEXT)
+  );
+
+  if (isDone)    return 'done';
+  if (isRunning) return 'running';
+  return 'unknown';
+}
+
+/**
+ * Wartet bis der Copyright-Check den Status "done" hat
+ * @param {number} timeout - Max. Wartezeit in ms (default 30s)
+ */
+function waitForCopyrightCheckDone(timeout = 30000) {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      const status = getCopyrightCheckStatus();
+      console.log(`🔍 Copyright-Check Status: ${status}`);
+
+      if (status === 'done') return resolve(true);
+
+      if (Date.now() - start > timeout) {
+        console.warn("⏰ Copyright-Check Timeout.");
+        return resolve(false);
+      }
+
+      setTimeout(check, 1500);
+    };
+    check();
+  });
+}
+
+/**
+ * SELEKTOR 3: Weiter-Button im Reel Edit-Screen
+ * Nutzt aria-label - stabil, ändert sich nicht mit CSS-Klassen
+ */
+function findReelEditWeiterButton() {
+  // Primär: aria-label (zuverlässigster Selektor)
+  const byAria = document.querySelector('[aria-label="Weiter"][role="button"]');
+  if (byAria) return byAria;
+
+  // Fallback: Span-Text "Weiter" innerhalb eines Buttons
+  const allButtons = Array.from(document.querySelectorAll('[role="button"]'));
+  const byText = allButtons.find(btn => {
+    const text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+    return text === 'weiter' || text === 'continue';
+  });
+  if (byText) return byText;
+
+  return null;
+}
+
+/**
+ * Klickt den Weiter-Button im Reel Edit-Screen
+ * Wartet maximal 5 Sekunden bis er erscheint
+ */
+async function clickReelEditWeiterButton(timeout = 5000) {
+  const start = Date.now();
+
+  const btn = await new Promise((resolve) => {
+    const check = () => {
+      const el = findReelEditWeiterButton();
+      if (el) return resolve(el);
+      if (Date.now() - start > timeout) return resolve(null);
+      setTimeout(check, 300);
+    };
+    check();
+  });
+
+  if (!btn) return false;
+
+  btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  await randomSleep(300, 600);
+  btn.click();
+  return true;
+}
+
+// =========================================================
 
 
 /**
@@ -592,12 +818,70 @@ function waitForReelReadyAndContinue(timeout = 180000) {
   });
 }
 
+/**
+ * Sucht den "Fertig"-Button im finalen Bestätigungs-Modal.
+ * Der Button hat role="none" und keinen aria-label – Suche via Span-Text.
+ */
+function findFertigButton() {
+  const allSpans = Array.from(document.querySelectorAll('span'));
+  const fertigSpan = allSpans.find(el => {
+    const t = (el.innerText || el.textContent || '').trim();
+    return t === 'Fertig' || t === 'Done';
+  });
+  if (!fertigSpan) return null;
+
+  // Einen klickbaren Vorfahren suchen (div[role="button"] oder button)
+  let node = fertigSpan.parentElement;
+  while (node && node !== document.body) {
+    if (
+      node.tagName === 'BUTTON' ||
+      node.getAttribute('role') === 'button'
+    ) return node;
+    node = node.parentElement;
+  }
+  // Fallback: den direkten klickbaren Container zurückgeben
+  return fertigSpan.closest('div') || fertigSpan;
+}
+
+/**
+ * Wartet bis der "Fertig"-Button erscheint, dann klickt ihn.
+ * @param {number} timeout - Max. Wartezeit in ms
+ */
+async function clickFertigButton(timeout = 30000) {
+  console.log("⏳ Warte auf Fertig-Button...");
+  const start = Date.now();
+
+  const btn = await new Promise((resolve) => {
+    const check = () => {
+      const el = findFertigButton();
+      if (el) return resolve(el);
+      if (Date.now() - start > timeout) return resolve(null);
+      setTimeout(check, 400);
+    };
+    check();
+  });
+
+  if (!btn) {
+    console.warn("⚠️ Fertig-Button nicht gefunden.");
+    return false;
+  }
+
+  btn.scrollIntoView({ behavior: "smooth", block: "center" });
+  await randomSleep(500, 900);
+  btn.click();
+  console.log("✅ Fertig-Button geklickt.");
+  return true;
+}
+
 async function clickReelActionButtons() {
   for (let attempt = 0; attempt < 8; attempt++) {
     const postBtn = findButtonByText(["Teilen", "Post", "Share", "Veröffentlichen"]);
     if (postBtn && !isButtonDisabled(postBtn)) {
       postBtn.click();
       await randomSleep(4000, 7000);
+
+      // Nach dem Teilen: Fertig-Modal abschließen
+      await clickFertigButton(30000);
       return true;
     }
 
