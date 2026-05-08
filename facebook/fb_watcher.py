@@ -85,8 +85,25 @@ async def run_init_phase(fb_service) -> None:
     print("✅ [INIT] Facebook-Verbindung gesichert. Bot startet jetzt mit dem Posten.")
 
 
+async def route_single_deal(file: pathlib.Path, sent_ids: set, fb_service) -> bool:
+    """Liest die JSON und leitet an Post- oder Reel-Processor weiter."""
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[ROUTE] Fehler beim Lesen {file.name}: {e}")
+        return False
+
+    deal_type = data.get("type", "post")
+
+    if deal_type == "reel":
+        from facebook.reels_processor import process_single_deal as reel_process
+        return await reel_process(file, sent_ids)
+    else:
+        from facebook.fb_processor import process_single_deal as fb_process
+        return await fb_process(file, sent_ids, fb_service)
+
+
 async def run_batch_phase(sent_ids: set, fb_service) -> None:
-    from facebook.fb_processor import process_single_deal
     print("\n2️⃣  [BATCH] Prüfe Rückstand...")
     candidates = get_candidates(sent_ids)
     if not candidates:
@@ -96,7 +113,7 @@ async def run_batch_phase(sent_ids: set, fb_service) -> None:
     print(f"📦 [START] Starte Abarbeitung von {total} Deals.")
     for i, file in enumerate(candidates):
         num      = i + 1
-        was_sent = await process_single_deal(file, sent_ids, fb_service)
+        was_sent = await route_single_deal(file, sent_ids, fb_service)
         if was_sent:
             save_sent_ids(sent_ids)
             print_status_block(num, total, "BATCH")
@@ -110,7 +127,6 @@ async def run_batch_phase(sent_ids: set, fb_service) -> None:
 
 
 async def run_watch_loop(sent_ids: set, fb_service) -> None:
-    from facebook.fb_processor import process_single_deal
     print("\n3️⃣  [WATCHER] 👁️  Live-Modus aktiv...")
     while True:
         try:
@@ -119,7 +135,7 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
                 total = len(candidates)
                 print(f"\n[LIVE] 🎯 {total} neue Datei(en) entdeckt!")
                 for i, file in enumerate(candidates):
-                    was_sent = await process_single_deal(file, sent_ids, fb_service)
+                    was_sent = await route_single_deal(file, sent_ids, fb_service)
                     if was_sent:
                         save_sent_ids(sent_ids)
                         print_status_block(i + 1, total, "LIVE-INPUT")

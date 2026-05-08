@@ -82,6 +82,14 @@ def init():
     _server_thread.start()
 
 
+def is_server_running() -> bool:
+    """Prüft ob der WebSocket-Server bereits läuft (eigener Thread oder externer Prozess)."""
+    import socket
+    # Prüfe ob Port bereits belegt ist (Server läuft)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex((HOST, PORT)) == 0
+
+
 def ensure_connected(timeout: int = 120, check_interval: float = 2.0) -> bool:
     """
     Blockiert bis mindestens eine Chrome-Extension verbunden ist.

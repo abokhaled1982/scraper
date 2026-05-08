@@ -16,6 +16,9 @@ DOWNLOAD_HEADERS = {
 
 
 def validate_deal_data(data: dict) -> dict:
+    # Reel-Dateien werden vom Reels-Watcher behandelt, nicht hier
+    if data.get("type") == "reel":
+        return {"valid": False, "reason": "Typ ist 'reel' – wird vom Reels-Watcher verarbeitet", "discount": 0}
     if not data.get("title") or not data.get("affiliate_url"):
         return {"valid": False, "reason": "Daten unvollständig (Titel/URL fehlt)", "discount": 0}
     discount_value = 0.0

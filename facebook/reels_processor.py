@@ -7,7 +7,7 @@ import pathlib
 import re
 import sys
 import requests
-from .reels_service import render_reel, download_video
+from facebook.reels_service import render_reel, download_video
 
 HERE          = pathlib.Path(__file__).resolve().parent
 IMAGES_FOLDER = HERE / "images"
@@ -49,6 +49,11 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
         return False
     try:
         data       = json.loads(full_path.read_text(encoding="utf-8"))
+
+        # Nur Dateien mit "type": "reel" verarbeiten
+        if data.get("type") != "reel":
+            return False
+
         validation = validate_deal_data(data)
         if not validation["valid"]:
             print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Lösche Datei.")

@@ -9,12 +9,13 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
-from reels.reels_processor import process_single_deal
+from facebook.reels_processor import process_single_deal
 from facebook import fb_service
 
 async def test_with_dummy_data():
     # Erstelle Dummy-Deal-Datei
     dummy_data = {
+        "type": "reel",
         "title": "Test Deal",
         "affiliate_url": "https://example.com",
         "discount_percent": 25,

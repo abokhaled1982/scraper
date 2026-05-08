@@ -823,24 +823,9 @@ function waitForReelReadyAndContinue(timeout = 180000) {
  * Der Button hat role="none" und keinen aria-label – Suche via Span-Text.
  */
 function findFertigButton() {
-  const allSpans = Array.from(document.querySelectorAll('span'));
-  const fertigSpan = allSpans.find(el => {
-    const t = (el.innerText || el.textContent || '').trim();
-    return t === 'Fertig' || t === 'Done';
-  });
-  if (!fertigSpan) return null;
-
-  // Einen klickbaren Vorfahren suchen (div[role="button"] oder button)
-  let node = fertigSpan.parentElement;
-  while (node && node !== document.body) {
-    if (
-      node.tagName === 'BUTTON' ||
-      node.getAttribute('role') === 'button'
-    ) return node;
-    node = node.parentElement;
-  }
-  // Fallback: den direkten klickbaren Container zurückgeben
-  return fertigSpan.closest('div') || fertigSpan;
+  return Array.from(document.querySelectorAll('[role="button"]')).find(btn =>
+    (btn.innerText || btn.textContent || '').trim() === 'Fertig'
+  ) || null;
 }
 
 /**
@@ -870,19 +855,110 @@ async function clickFertigButton(timeout = 30000) {
   await randomSleep(500, 900);
   btn.click();
   console.log("✅ Fertig-Button geklickt.");
+
+  // Nach Fertig kommt nochmal ein "Posten"-Button
+  console.log("⏳ Warte auf finalen Posten-Button...");
+  const start2 = Date.now();
+  const postenBtn = await new Promise((resolve) => {
+    const check = () => {
+      const el = Array.from(document.querySelectorAll('[role="button"]')).find(b =>
+        (b.innerText || b.textContent || '').trim() === 'Posten'
+      );
+      if (el) return resolve(el);
+      if (Date.now() - start2 > 20000) return resolve(null);
+      setTimeout(check, 400);
+    };
+    check();
+  });
+
+  if (postenBtn) {
+    postenBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    await randomSleep(500, 900);
+    postenBtn.click();
+    console.log("✅ Finaler Posten-Button geklickt. Reel wurde gepostet!");
+  } else {
+    console.warn("⚠️ Finaler Posten-Button nicht gefunden.");
+  }
+
+  return true;
+}
+
+/**
+ * Hilfsfunktion: Wartet auf einen Button anhand exaktem Text, dann klickt ihn.
+ */
+async function waitAndClickByExactText(label, timeout = 20000) {
+  console.log(`⏳ Warte auf Button "${label}"...`);
+  const start = Date.now();
+  const btn = await new Promise((resolve) => {
+    const check = () => {
+      const el = Array.from(document.querySelectorAll('[role="button"], button')).find(b =>
+        (b.innerText || b.textContent || '').trim() === label
+      );
+      if (el && !isButtonDisabled(el)) return resolve(el);
+      if (Date.now() - start > timeout) return resolve(null);
+      setTimeout(check, 400);
+    };
+    check();
+  });
+
+  if (!btn) {
+    console.warn(`⚠️ Button "${label}" nicht gefunden oder nicht aktiv.`);
+    return false;
+  }
+  btn.scrollIntoView({ behavior: "smooth", block: "center" });
+  await randomSleep(500, 900);
+  btn.click();
+  console.log(`✅ "${label}" geklickt.`);
   return true;
 }
 
 async function clickReelActionButtons() {
+  // Schritt 1: Weiter-Buttons durchklicken bis "Posten" erscheint
   for (let attempt = 0; attempt < 8; attempt++) {
-    const postBtn = findButtonByText(["Teilen", "Post", "Share", "Veröffentlichen"]);
-    if (postBtn && !isButtonDisabled(postBtn)) {
+    const postBtn = Array.from(document.querySelectorAll('[role="button"], button')).find(b =>
+      (b.innerText || b.textContent || '').trim() === 'Posten' && !isButtonDisabled(b)
+    );
+    if (postBtn) {
+      console.log("🔴 Klicke ersten Posten-Button...");
+      postBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      await randomSleep(500, 900);
       postBtn.click();
-      await randomSleep(4000, 7000);
+      await randomSleep(3000, 5000);
 
-      // Nach dem Teilen: Fertig-Modal abschließen
-      await clickFertigButton(30000);
-      return true;
+      // Schritt 2: "Fertig"-Modal – optional, kommt nicht immer
+      const fertigBtn = await new Promise((resolve) => {
+        const start = Date.now();
+        const check = () => {
+          const el = Array.from(document.querySelectorAll('[role="button"]')).find(b =>
+            (b.innerText || b.textContent || '').trim() === 'Fertig'
+          );
+          if (el) return resolve(el);
+          if (Date.now() - start > 8000) return resolve(null); // kurzes Timeout – optional
+          setTimeout(check, 400);
+        };
+        check();
+      });
+
+      if (fertigBtn) {
+        console.log("📋 Fertig-Modal erschienen. Klicke Fertig...");
+        fertigBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+        await randomSleep(500, 900);
+        fertigBtn.click();
+        console.log("✅ Fertig geklickt.");
+        await randomSleep(2000, 3500);
+      } else {
+        console.log("ℹ️ Kein Fertig-Modal erschienen. Weiter...");
+      }
+
+      // Schritt 3: Finaler "Posten"-Button
+      const finalPosted = await waitAndClickByExactText("Posten", 20000);
+      if (finalPosted) {
+        console.log("✅ Reel erfolgreich gepostet!");
+        return true;
+      } else {
+        console.warn("⚠️ Finaler Posten-Button nicht gefunden.");
+        return false;
+      }
     }
 
     const continueBtn = findButtonByText(["Weiter", "Continue"]);
