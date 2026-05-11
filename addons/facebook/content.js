@@ -7,7 +7,23 @@ const randomSleep = (min = 2000, max = 5000) => {
   return new Promise((resolve) => setTimeout(resolve, delay));
 };
 
+// --- STATUS REPORTER ---
+function reportStatus(state, activity, logMsg, logLevel = "info", result = null) {
+  if (logMsg) console.log(`[content] ${logMsg}`);
+  try {
+    chrome.runtime.sendMessage({
+      type:     "content_status",
+      state,
+      activity,
+      log:      logMsg || "",
+      logLevel,
+      result,
+    });
+  } catch (e) { /* popup geschlossen */ }
+}
+
 console.log("✅ Facebook Content Script geladen.");
+reportStatus("ready", "Content Script geladen", "Content Script bereit");
 
 // --- HELPER: BLOCKADEN ENTFERNEN ---
 function fixFocusBlockers() {
@@ -24,15 +40,15 @@ function fixFocusBlockers() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === "remote_post") {
-    console.log("🤖 Empfange Befehl...", {
-      text: request.text ? request.text.slice(0, 80) : null,
-      hasImage: !!request.image,
-      hasVideo: !!request.video,
-      comment: request.comment ? request.comment.slice(0, 40) : null,
-    });
+    const jobType = request.video ? "🎥 Reel" : "📝 Post";
+    reportStatus("busy", `${jobType} wird vorbereitet...`, `Auftrag empfangen: ${jobType}`);
     startPostingProcess(request.text, request.image, request.video, request.comment)
-      .then(() => sendResponse({ received: true }))
+      .then(() => {
+        reportStatus("ready", "Fertig", `${jobType} erfolgreich abgeschlossen`, "ok", { success: true });
+        sendResponse({ received: true });
+      })
       .catch((error) => {
+        reportStatus("error", "Fehler aufgetreten", String(error), "error", { success: false, error: String(error) });
         console.error('Fehler in startPostingProcess:', error);
         sendResponse({ received: false, error: String(error) });
       });
@@ -46,7 +62,7 @@ async function startPostingProcess(text, base64Image, base64Video, commentToPost
 
   if (base64Video) {
     // --- REEL MODE ---
-    console.log("🎥 Poste als Reel...");
+    reportStatus("busy", "🎥 Reel-Upload gestartet...", "Starte Reel-Upload");
     await postAsReel(text, base64Video, commentToPost);
     return;
   }
@@ -416,18 +432,18 @@ async function postAsReel(text, base64Video, commentToPost) {
   // 1. Suche den Reel-Button im aktuellen Facebook-Dialog
   const reelBtn = findReelButton();
   if (!reelBtn) {
-    console.error("❌ Reel-Button nicht gefunden.");
+    reportStatus("error", "Reel-Button nicht gefunden", "Reel-Button nicht gefunden", "error");
     return;
   }
 
-  console.log("🎥 Klicke Reel-Button...");
+  reportStatus("busy", "Öffne Reel-Dialog...", "Klicke Reel-Button");
   reelBtn.scrollIntoView({ behavior: "smooth", block: "center" });
   await randomSleep(300, 700);
   reelBtn.click();
   await randomSleep(2500, 4500);
 
-  // 2. Warte bis der Reel-Upload-Container sichtbar ist, DANN erst nach dem File-Input suchen
-  console.log("⏳ Warte auf Reel-Upload-Dialog...");
+  // 2. Warte bis der Reel-Upload-Container sichtbar ist
+  reportStatus("busy", "Warte auf Upload-Dialog...", "Warte auf Reel-Upload-Dialog");
   const reelContainerAppeared = await new Promise((resolve) => {
     const start = Date.now();
     const check = () => {
@@ -448,10 +464,10 @@ async function postAsReel(text, base64Video, commentToPost) {
 
   const fileInput = await waitForVideoUploadInput();
   if (!fileInput) {
-    console.error("❌ Upload-Input nicht gefunden.");
+    reportStatus("error", "Upload-Input nicht gefunden", "Upload-Input nicht gefunden", "error");
     return;
   }
-  console.log("📁 Upload-Input gefunden. Lade Video...");
+  reportStatus("busy", "Video wird übertragen...", "Lade Video hoch...");
 
   // Base64 zu Blob konvertieren
   console.log(`📊 Base64-Größe: ${base64Video.length} bytes`);
