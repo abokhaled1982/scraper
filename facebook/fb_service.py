@@ -189,6 +189,17 @@ async def _do_send(payload: dict) -> bool:
     return False
 
 
+def _build_comment_text(data: dict, offer_url: str) -> str:
+    """Baut den Kommentar-Text mit Affiliate-Link und optionalem Gutscheincode."""
+    parts = []
+    if offer_url:
+        parts.append(f"🔗 Zum Angebot: {offer_url}")
+    coupon = str(data.get("coupon_code") or data.get("voucher_code") or "").strip()
+    if coupon and coupon.lower() not in ("n/a", "null", "none", ""):
+        parts.append(f"🏷️ Gutscheincode: {coupon}")
+    return "\n".join(parts) if parts else ""
+
+
 async def send_post(data: dict, local_image_path=None, local_video_path=None) -> bool:
     """Sendet einen Facebook-Post oder Reel."""
     from facebook.fb_message import create_facebook_message

@@ -1,5 +1,38 @@
 // content.js - Robust mit Scroll-Fix für unsichtbare Felder
 
+// --- KONSTANTEN ---
+const REEL_PROFILE_URL = "https://www.facebook.com/profile.php?id=61584368422265&locale=de_DE";
+
+// =========================================================
+// AUTO-KOMMENTAR NACH SEITENNEULAD (sessionStorage)
+// Läuft automatisch wenn die Profilseite nach einem Reel-Post geladen wird.
+// =========================================================
+(async function checkPendingReelComment() {
+  const comment = sessionStorage.getItem("pending_reel_comment");
+  if (!comment) return; // nichts zu tun
+
+  // Nur auf der Profilseite ausführen
+  if (!window.location.href.includes("61584368422265")) return;
+
+  sessionStorage.removeItem("pending_reel_comment"); // sofort löschen – einmalig
+  console.log(`💬 Ausstehender Reel-Kommentar gefunden: "${comment}"`);
+  console.log("⏳ Warte auf vollständiges Laden der Seite...");
+
+  // Warte bis DOM bereit
+  await new Promise((resolve) => {
+    if (document.readyState === "complete") return resolve();
+    window.addEventListener("load", resolve, { once: true });
+  });
+
+  // Zusätzliche Wartezeit damit Feed-Elemente erscheinen (10-15s)
+  const waitMs = Math.floor(Math.random() * 5000) + 10000;
+  console.log(`⏳ Warte noch ${(waitMs / 1000).toFixed(1)}s damit das Reel im Feed erscheint...`);
+  await new Promise((r) => setTimeout(r, waitMs));
+
+  console.log("💬 Starte Auto-Kommentar auf Profilseite...");
+  await processAutoComment(comment);
+})();
+
 // --- HELPER: WARTEZEIT ---
 const randomSleep = (min = 2000, max = 5000) => {
   const delay = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -573,6 +606,21 @@ async function postAsReel(text, base64Video, commentToPost) {
   const posted = await clickReelActionButtons();
   if (posted) {
     console.log("✅ Reel gepostet!");
+
+    if (commentToPost) {
+      // Zufällige Wartezeit 60-120 Sekunden damit das Reel verarbeitet wird
+      const waitSec = Math.floor(Math.random() * 61) + 60; // 60..120s
+      console.log(`⏳ Warte ${waitSec}s bevor Kommentar gepostet wird (Reel muss im Feed erscheinen)...`);
+      reportStatus("busy", `Warte ${waitSec}s vor Kommentar...`, `Reel gepostet – warte ${waitSec}s`);
+      await new Promise((r) => setTimeout(r, waitSec * 1000));
+
+      // Kommentar in sessionStorage speichern
+      sessionStorage.setItem("pending_reel_comment", commentToPost);
+      console.log("💾 Kommentar in sessionStorage gespeichert. Lade Profilseite...");
+
+      // Gleicher Tab – Profilseite laden; checkPendingReelComment() übernimmt nach dem Load
+      window.location.href = REEL_PROFILE_URL;
+    }
   } else {
     console.error("❌ Reel-Post-Flow konnte nicht abgeschlossen werden.");
   }
@@ -928,65 +976,96 @@ async function waitAndClickByExactText(label, timeout = 20000) {
   return true;
 }
 
+// =========================================================
+// SCHRITT 5: Reel-Publikations-Flow
+// Nach dem Edit-Screen gibt es 0-N mal "Weiter", dann "Posten".
+// Danach optional ein "Fertig"-Modal.
+// Nutzt simulateClick() statt .click() – React-Buttons brauchen echte MouseEvents.
+// =========================================================
 async function clickReelActionButtons() {
-  // Schritt 1: Weiter-Buttons durchklicken bis "Posten" erscheint
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const postBtn = Array.from(document.querySelectorAll('[role="button"], button')).find(b =>
-      (b.innerText || b.textContent || '').trim() === 'Posten' && !isButtonDisabled(b)
-    );
-    if (postBtn) {
-      console.log("🔴 Klicke ersten Posten-Button...");
-      postBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+  const MAX_STEPS   = 12;
+  const STEP_TIMEOUT = 12000; // ms pro Schritt bis Button erscheint
+
+  for (let step = 0; step < MAX_STEPS; step++) {
+    console.log(`🔄 Publikations-Schritt ${step + 1}/${MAX_STEPS}: suche Weiter/Posten...`);
+
+    // Warte bis "Posten" ODER "Weiter"/"Continue" aktiv erscheint
+    const found = await new Promise((resolve) => {
+      const start = Date.now();
+      const check = () => {
+        const all = Array.from(document.querySelectorAll('[role="button"], button'));
+
+        // "Posten" hat Priorität
+        const postBtn = all.find(b =>
+          (b.innerText || b.textContent || '').trim() === 'Posten' && !isButtonDisabled(b)
+        );
+        if (postBtn) return resolve({ type: 'post', btn: postBtn });
+
+        // "Weiter" / "Continue"
+        const weiterBtn = all.find(b => {
+          const t = (b.innerText || b.textContent || '').trim();
+          return (t === 'Weiter' || t === 'Continue') && !isButtonDisabled(b);
+        });
+        if (weiterBtn) return resolve({ type: 'continue', btn: weiterBtn });
+
+        if (Date.now() - start > STEP_TIMEOUT) return resolve(null);
+        setTimeout(check, 300);
+      };
+      check();
+    });
+
+    if (!found) {
+      console.warn(`⚠️ Schritt ${step + 1}: kein aktiver Weiter/Posten-Button nach ${STEP_TIMEOUT / 1000}s.`);
+      break;
+    }
+
+    // ── POSTEN ──────────────────────────────────────────────
+    if (found.type === 'post') {
+      console.log("🔴 Posten-Button gefunden – klicke...");
+      found.btn.scrollIntoView({ behavior: "smooth", block: "center" });
       await randomSleep(500, 900);
-      postBtn.click();
+      simulateClick(found.btn);
       await randomSleep(3000, 5000);
 
-      // Schritt 2: "Fertig"-Modal – optional, kommt nicht immer
-      const fertigBtn = await new Promise((resolve) => {
+      // Optional: "Fertig"-Bestätigungs-Modal (kommt nicht immer)
+      console.log("⏳ Prüfe auf Fertig-Modal (max. 10s)...");
+      const fertig = await new Promise((resolve) => {
         const start = Date.now();
         const check = () => {
           const el = Array.from(document.querySelectorAll('[role="button"]')).find(b =>
             (b.innerText || b.textContent || '').trim() === 'Fertig'
           );
           if (el) return resolve(el);
-          if (Date.now() - start > 8000) return resolve(null); // kurzes Timeout – optional
+          if (Date.now() - start > 10000) return resolve(null);
           setTimeout(check, 400);
         };
         check();
       });
 
-      if (fertigBtn) {
-        console.log("📋 Fertig-Modal erschienen. Klicke Fertig...");
-        fertigBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (fertig) {
+        console.log("📋 Fertig-Modal – klicke Fertig...");
+        fertig.scrollIntoView({ behavior: "smooth", block: "center" });
         await randomSleep(500, 900);
-        fertigBtn.click();
-        console.log("✅ Fertig geklickt.");
+        simulateClick(fertig);
         await randomSleep(2000, 3500);
       } else {
-        console.log("ℹ️ Kein Fertig-Modal erschienen. Weiter...");
+        console.log("ℹ️ Kein Fertig-Modal erschienen.");
       }
 
-      // Schritt 3: Finaler "Posten"-Button
-      const finalPosted = await waitAndClickByExactText("Posten", 20000);
-      if (finalPosted) {
-        console.log("✅ Reel erfolgreich gepostet!");
-        return true;
-      } else {
-        console.warn("⚠️ Finaler Posten-Button nicht gefunden.");
-        return false;
-      }
+      console.log("✅ Reel erfolgreich gepostet!");
+      return true;
     }
 
-    const continueBtn = findButtonByText(["Weiter", "Continue"]);
-    if (continueBtn && !isButtonDisabled(continueBtn)) {
-      continueBtn.click();
-      console.log("➡️ Klicke Weiter im Reel-Flow...");
-      await randomSleep(2500, 4500);
-      continue;
-    }
-
-    await randomSleep(1000, 2000);
+    // ── WEITER ──────────────────────────────────────────────
+    console.log(`➡️ Weiter-Button gefunden – klicke (Schritt ${step + 1})...`);
+    found.btn.scrollIntoView({ behavior: "smooth", block: "center" });
+    await randomSleep(500, 900);
+    simulateClick(found.btn);
+    // Warte bis der Button aus dem DOM verschwindet oder sich der Screen ändert
+    await randomSleep(2500, 4000);
   }
+
+  console.error("❌ clickReelActionButtons: max. Schritte erreicht, Reel nicht gepostet.");
   return false;
 }
 
@@ -995,6 +1074,18 @@ function isButtonDisabled(btn) {
   if (btn.getAttribute('aria-disabled') === 'true') return true;
   if (btn.disabled) return true;
   return false;
+}
+
+/**
+ * Simuliert einen echten Maus-Klick mit MouseEvents.
+ * .click() allein funktioniert nicht bei Facebook-React-Buttons.
+ */
+function simulateClick(el) {
+  const opts = { bubbles: true, cancelable: true, view: window };
+  el.dispatchEvent(new MouseEvent('mouseover', opts));
+  el.dispatchEvent(new MouseEvent('mousedown', opts));
+  el.dispatchEvent(new MouseEvent('mouseup',   opts));
+  el.dispatchEvent(new MouseEvent('click',     opts));
 }
 
 function findReelButton() {
