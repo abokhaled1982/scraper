@@ -7,7 +7,11 @@ import pathlib
 import re
 import sys
 import requests
-from facebook.reels_service import render_reel, download_video
+from facebook.reels_service import download_video, render_reel
+from facebook.template_interface import (
+    build_modifications_for_template,
+    resolve_template_selection,
+)
 
 HERE          = pathlib.Path(__file__).resolve().parent
 IMAGES_FOLDER = HERE / "images"
@@ -60,27 +64,22 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             full_path.unlink(missing_ok=True)
             return False
         print(f"[PROCESS] 🚀 Guter Deal für Reels ({validation['discount']}%): {product_id}")
-        
-        images = data.get("images") or []
-        image_urls = [img for img in images[:3] if img]  # Take up to 3 images
-        
-        discount_text = f"-{int(validation['discount'])}%" if validation['discount'] else "-0%"
-        
-        modifications = {
-            "Call to Action.text": "See you at\nwww.mybrand.com"
-        }
-        
-        for i, img_url in enumerate(image_urls, 1):
-            modifications[f"Product Image {i}.source"] = img_url
-            modifications[f"Product Offer {i}.text"] = discount_text
-        
-        # If less than 3, perhaps repeat or leave empty
-        for i in range(len(image_urls) + 1, 4):
-            if image_urls:
-                modifications[f"Product Image {i}.source"] = image_urls[0]
-                modifications[f"Product Offer {i}.text"] = discount_text
-        
-        render_result = await asyncio.get_event_loop().run_in_executor(None, render_reel, modifications)
+
+        template_type, template_id = resolve_template_selection(data, default_template_type="offer_type1")
+        modifications = build_modifications_for_template(
+            data,
+            template_type=template_type,
+            discount_value=validation["discount"],
+        )
+
+        print(f"[TEMPLATE] type={template_type} id={template_id}")
+
+        render_result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            render_reel,
+            modifications,
+            template_id,
+        )
         print(f"[DONE] ✅ Reel erfolgreich gerendert: {product_id}, URL: {render_result.get('url')}")
         
         # Video herunterladen

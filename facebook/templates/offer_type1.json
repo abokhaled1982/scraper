@@ -1,0 +1,7 @@
+{
+  "template_type": "offer_type1",
+  "template_id": "69c1b5e7-fcd2-4a8d-adda-a7f37603547f",
+  "kind": "offer",
+  "image_fit": "contain",
+  "description": "Single product offer template using Product-Image/Product-Name/Product-Description and price fields."
+}

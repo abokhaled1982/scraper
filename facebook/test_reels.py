@@ -16,6 +16,7 @@ async def test_with_dummy_data():
     # Erstelle Dummy-Deal-Datei
     dummy_data = {
         "type": "reel",
+        "template_type": "offer_type1",
         "title": "Test Deal",
         "affiliate_url": "https://example.com",
         "discount_percent": 25,

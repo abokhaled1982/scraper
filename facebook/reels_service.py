@@ -1,13 +1,17 @@
 # reels/reels_service.py
 # Service für Creatomate API zum Rendern von Reels
 
-import requests
-import time
-import json
+import os
 import pathlib
+import time
+
+import requests
 
 API_URL = "https://api.creatomate.com/v2/renders"
-API_KEY = "688232cc736747d08d2c0be29bb54729c84559095069862a8bf917abec15d5bdbc0ba11f777157d7df9196ecf340a18f"
+API_KEY = os.getenv(
+    "CREATOMATE_API_KEY",
+    "688232cc736747d08d2c0be29bb54729c84559095069862a8bf917abec15d5bdbc0ba11f777157d7df9196ecf340a18f",
+)
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -16,13 +20,13 @@ HEADERS = {
 
 TEMPLATE_ID = "e7704305-e17f-46d9-a4e6-f26a2888bd14"
 
-def render_reel(modifications: dict) -> dict:
+def render_template(template_id: str, modifications: dict) -> dict:
     """
-    Rendert ein Reel mit den gegebenen Modifikationen über die Creatomate API.
+    Rendert ein Template mit den gegebenen Modifikationen über die Creatomate API.
     Wartet bis der Render abgeschlossen ist und gibt das Ergebnis zurück.
     """
     data = {
-        "template_id": TEMPLATE_ID,
+        "template_id": template_id,
         "modifications": modifications
     }
     try:
@@ -59,6 +63,11 @@ def render_reel(modifications: dict) -> dict:
             time.sleep(5)
     except requests.RequestException as e:
         raise Exception(f"Creatomate API-Fehler: {e}")
+
+
+def render_reel(modifications: dict, template_id: str | None = None) -> dict:
+    """Backward-compatible wrapper for reel rendering."""
+    return render_template(template_id or TEMPLATE_ID, modifications)
 
 def download_video(render_result: dict, product_id: str) -> pathlib.Path | None:
     """

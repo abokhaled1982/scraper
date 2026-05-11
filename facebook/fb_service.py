@@ -198,12 +198,14 @@ async def send_post(data: dict, local_image_path=None, local_video_path=None) ->
     if offer_url in ("N/A", "null"):
         offer_url = ""
 
+    comment_text = _build_comment_text(data, offer_url)
+
     payload = {
         "type":    "reel" if local_video_path else "post",
         "text":    fb_text,
         "image":   None,
         "video":   None,
-        "comment": offer_url,
+        "comment": comment_text,
     }
 
     if local_image_path:
