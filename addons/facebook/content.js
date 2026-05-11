@@ -637,18 +637,27 @@ async function postAsReel(text, base64Video, commentToPost) {
  * Stabiler Selektor - nutzt data-Attribute statt CSS-Klassen
  */
 function findReelEditDescriptionField() {
-  // Primär: data-lexical-editor Attribut (stabil, FB-spezifisch)
-  const editor = document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]');
-  if (editor) return editor;
+  // Primär: aria-placeholder "Beschreibe dein Reel" – spezifischster Selektor,
+  // verhindert dass ein anderes Lexical-Feld (z.B. altes Kommentarfeld) getroffen wird
+  const byExactPlaceholder =
+    document.querySelector('[aria-placeholder="Beschreibe dein Reel \u2026"][data-lexical-editor="true"]') ||
+    document.querySelector('[aria-placeholder="Beschreibe dein Reel …"][data-lexical-editor="true"]') ||
+    document.querySelector('[aria-placeholder*="Beschreibe"][data-lexical-editor="true"]') ||
+    document.querySelector('[aria-placeholder*="describe"][data-lexical-editor="true"]');
+  if (byExactPlaceholder) return byExactPlaceholder;
 
-  // Fallback: aria-placeholder mit Beschreibungs-Text
+  // Fallback: aria-placeholder ohne data-lexical-editor
   const byPlaceholder = Array.from(
     document.querySelectorAll('div[contenteditable="true"]')
   ).find(el => {
     const ph = (el.getAttribute('aria-placeholder') || '').toLowerCase();
-    return ph.includes('beschreibe') || ph.includes('describe') || ph.includes('reel');
+    return ph.includes('beschreibe') || ph.includes('describe reel') || ph.includes('beschreib');
   });
   if (byPlaceholder) return byPlaceholder;
+
+  // Letzter Ausweg: erstes Lexical-Feld (kann falsch sein)
+  const editor = document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]');
+  if (editor) return editor;
 
   return null;
 }
@@ -690,28 +699,60 @@ async function fillReelEditDescription(text, timeout = 10000) {
   try {
     // Fokus setzen und scrollen
     editor.scrollIntoView({ behavior: "smooth", block: "center" });
-    await randomSleep(400, 700);
+    await randomSleep(500, 900);
     editor.focus();
     editor.click();
-    await randomSleep(400, 700);
+    await randomSleep(600, 900);
 
-    // Text direkt via execCommand einfügen (funktioniert mit Lexical Editor)
-    const success = document.execCommand('insertText', false, text);
+    // Strategie 1: Clipboard Paste – zuverlässigste Methode für Lexical Editor
+    let inserted = false;
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      editor.dispatchEvent(new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt,
+      }));
+      await randomSleep(300, 500);
+      // Prüfen ob Text wirklich eingefügt wurde
+      if ((editor.innerText || '').trim().length > 0) {
+        inserted = true;
+        console.log("✅ Text via Clipboard-Paste eingefügt.");
+      }
+    } catch (e) {
+      console.warn("⚠️ Clipboard-Paste fehlgeschlagen:", e);
+    }
 
-    if (!success) {
-      console.warn("⚠️ execCommand fehlgeschlagen, versuche Fallback...");
-      // Fallback: Zeichen für Zeichen simulieren
-      for (const char of text) {
-        editor.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-        editor.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
-        document.execCommand('insertText', false, char);
-        editor.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+    // Strategie 2: execCommand insertText
+    if (!inserted) {
+      console.warn("⚠️ Versuche execCommand insertText...");
+      const success = document.execCommand('insertText', false, text);
+      if (success && (editor.innerText || '').trim().length > 0) {
+        inserted = true;
+        console.log("✅ Text via execCommand eingefügt.");
       }
     }
 
+    // Strategie 3: Zeichen für Zeichen (letzter Ausweg)
+    if (!inserted) {
+      console.warn("⚠️ Versuche Zeichen-für-Zeichen-Eingabe...");
+      for (const char of text) {
+        editor.dispatchEvent(new KeyboardEvent('keydown', { key: char, code: 'Key', bubbles: true }));
+        document.execCommand('insertText', false, char);
+        editor.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      inserted = true;
+    }
+
+    // Input-Events feuern damit React/Lexical den State aktualisiert
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+
     await randomSleep(500, 800);
-    console.log(`✅ Text eingefügt: "${editor.innerText.trim()}"`);
-    return true;
+    console.log(`✅ Text eingefügt: "${(editor.innerText || '').trim().slice(0, 60)}"`);
+    return inserted;
   } catch (e) {
     console.error("Fehler beim Befüllen des Reel Edit Beschreibungsfelds:", e);
     return false;
