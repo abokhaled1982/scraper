@@ -141,12 +141,15 @@ def _build_reel_type_modifications(
         fallback="www.deealsboss.de",
     )
 
+    caption_text = _extract_caption_text(deal_data, discount_text)
+
     modifications: dict[str, Any] = {
         "Call to Action.text": cta_text,
         "CTA.text": cta_text,
         "Website.text": website_text,
         "Product-Name.text": product_name,
         "Product-Description.text": product_description,
+        "Caption.text": caption_text,
         "Normal-Price.text": normal_price,
         "Discounted-Price.text": discounted_price,
         "Discount.text": discount_text,
@@ -207,6 +210,8 @@ def _build_offer_type_modifications(
         fallback="www.deealsboss.de",
     )
 
+    caption_text = _extract_caption_text(deal_data, discount_text)
+
     modifications = {
         "Product-Image.source": first_image,
         "Product-Name.text": product_name,
@@ -218,6 +223,7 @@ def _build_offer_type_modifications(
         "Discount-Amount.text": discount_amount_text,
         "Rabatt-Text.text": rabatt_text,
         "Rabatt.text": rabatt_text,
+        "Caption.text": caption_text,
         "CTA.text": cta_text,
         "Website.text": website_text,
     }
@@ -225,17 +231,65 @@ def _build_offer_type_modifications(
     return modifications
 
 
+def _truncate_for_reel(text: str, max_chars: int = 22) -> str:
+    """Kürzt Text an Wortgrenze für das Reel-Display."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    last_space = truncated.rfind(" ")
+    if last_space > 4:
+        truncated = truncated[:last_space]
+    return truncated.rstrip(",.;:") + "..."
+
+
+def _extract_caption_text(payload: dict[str, Any], discount_text: str) -> str:
+    """Baut den Caption-Text für das Reel-Template."""
+    existing = _first_present_str(payload, ["reel_caption"], fallback="N/A")
+    if existing != "N/A":
+        return existing
+
+    # Fallback: aus Rabatt-Info aufbauen
+    if discount_text and discount_text not in ("-0%", "N/A", ""):
+        caption = f"Sale Alert {discount_text} 🔥"
+    else:
+        caption = "Discount Alert 🔥"
+
+    # Gutscheincode aus verschachteltem coupon-Dict oder flachem Feld lesen
+    coupon_raw = payload.get("coupon") or {}
+    coupon_code = ""
+    if isinstance(coupon_raw, dict):
+        coupon_code = str(coupon_raw.get("code") or "").strip()
+    if not coupon_code:
+        coupon_code = str(
+            payload.get("coupon_code") or payload.get("gutschein_code") or ""
+        ).strip()
+    if coupon_code and coupon_code.lower() not in ("n/a", "null", "none", ""):
+        caption += f"\nCode: {coupon_code}"
+
+    return caption
+
+
 def _extract_product_texts(payload: dict[str, Any]) -> tuple[str, str]:
+    # LLM-generierter Kurztitel hat Priorität, sonst Fallback mit Kürzung
     product_name = _first_present_str(
         payload,
-        ["title", "product_name", "name"],
+        ["reel_titel", "title", "product_name", "name"],
         fallback="Top Deal",
     )
+    if not str(payload.get("reel_titel") or "").strip():
+        product_name = _truncate_for_reel(product_name, max_chars=22)
+
+    # LLM-generierte Kurzbeschreibung hat Priorität, sonst auf 4 Wörter kürzen
     product_description = _first_present_str(
         payload,
-        ["description", "subtitle", "feature_text", "rabatt_text"],
-        fallback="Starkes Angebot nur fuer kurze Zeit.",
+        ["reel_beschreibung", "description", "subtitle", "feature_text", "rabatt_text"],
+        fallback="Starkes Angebot nur kurze Zeit.",
     )
+    if not str(payload.get("reel_beschreibung") or "").strip():
+        words = product_description.split()
+        if len(words) > 4:
+            product_description = " ".join(words[:4]) + " ..."
+
     return product_name, product_description
 
 

@@ -17,6 +17,15 @@ def _clean(v) -> str:
 
 def create_facebook_message(data: dict) -> str:
     """Erzeugt den Facebook-Post-Text aus einem Deal-Dict."""
+
+    # Für Reels: nur minimaler Text — Link und Details kommen als Kommentar
+    if data.get("type") == "reel":
+        raw_tags = data.get("hashtags") or []
+        hashtags = " ".join(_clean(t) for t in raw_tags if _clean(t))
+        if not hashtags:
+            hashtags = "#Angebot #Schnäppchen #Deal #Rabatt"
+        return f"👇 Link zum Deal in den Kommentaren 👇\n\n{hashtags}"
+
     title     = _strip_stars(data.get("title") or data.get("name") or "Super Angebot")
     price_raw = data.get("price") or {}
     price     = _clean(price_raw.get("raw") if isinstance(price_raw, dict) else price_raw)

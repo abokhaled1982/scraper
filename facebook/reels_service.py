@@ -10,7 +10,7 @@ import requests
 API_URL = "https://api.creatomate.com/v2/renders"
 API_KEY = os.getenv(
     "CREATOMATE_API_KEY",
-    "688232cc736747d08d2c0be29bb54729c84559095069862a8bf917abec15d5bdbc0ba11f777157d7df9196ecf340a18f",
+    "0c68a0c4838c45fbb43dd920d08ffe4453edd08c6c5d357b7dc49070907ae348486d39d2e366bedc3219f1ca53056eb3",
 )
 
 HEADERS = {
@@ -18,7 +18,7 @@ HEADERS = {
     "Authorization": f"Bearer {API_KEY}"
 }
 
-TEMPLATE_ID = "e7704305-e17f-46d9-a4e6-f26a2888bd14"
+TEMPLATE_ID = "a39e2efb-e7b6-43ca-ad09-524ef8ba91ac"
 
 def render_template(template_id: str, modifications: dict) -> dict:
     """

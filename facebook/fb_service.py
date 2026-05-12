@@ -194,7 +194,16 @@ def _build_comment_text(data: dict, offer_url: str) -> str:
     parts = []
     if offer_url:
         parts.append(f"🔗 Zum Angebot: {offer_url}")
-    coupon = str(data.get("coupon_code") or data.get("voucher_code") or "").strip()
+
+    # Coupon aus verschachteltem Dict oder flachem Feld lesen
+    coupon_raw = data.get("coupon") or {}
+    if isinstance(coupon_raw, dict):
+        coupon = str(coupon_raw.get("code") or "").strip()
+    else:
+        coupon = str(coupon_raw or "").strip()
+    if not coupon:
+        coupon = str(data.get("coupon_code") or data.get("voucher_code") or "").strip()
+
     if coupon and coupon.lower() not in ("n/a", "null", "none", ""):
         parts.append(f"🏷️ Gutscheincode: {coupon}")
     return "\n".join(parts) if parts else ""

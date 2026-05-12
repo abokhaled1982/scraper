@@ -119,6 +119,43 @@ class Produktinformation(BaseModel):
         )
     )
 
+    reel_titel: str = Field(
+        description=(
+            "Kurzer Produkttitel AUSSCHLIESSLICH für das Reel-Video-Template (erscheint groß im Video). "
+            "SPRACHE: IMMER AUF DEUTSCH. "
+            "MAXIMAL 22 ZEICHEN (inkl. Leerzeichen). Nur: Marke + Produkttyp + EINE kritische Kennzahl. "
+            "Beispiele: 'Anker USB-C 240W', 'Samsung QLED 65\"', 'Nike Air Max 90'. "
+            "KEINE Farbe, KEINE Füllwörter, KEINE Punkte am Ende, KEINE Emojis. "
+            "Kürze intelligent an einer Wortgrenze. "
+            "Gib NUR den fertigen Kurztitel zurück."
+        )
+    )
+
+    reel_beschreibung: str = Field(
+        description=(
+            "Kurze Produkt-Beschreibung AUSSCHLIESSLICH für das Reel-Video-Template. "
+            "SPRACHE: IMMER AUF DEUTSCH. "
+            "MAXIMAL 4 WÖRTER. Beschreibt den Hauptnutzen oder das Highlight des Produkts. "
+            "Beispiele: 'Schnellste USB-C Ladung', '4K HDR Gaming Display', 'Leichtes Laufschuh-Design'. "
+            "KEINE Emojis, KEIN Preis, KEINE Rabattinfos, KEINE Markennamen wiederholen. "
+            "Gib NUR die fertigen max. 4 Wörter zurück."
+        )
+    )
+
+    reel_caption: str = Field(
+        description=(
+            "Caption-Text AUSSCHLIESSLICH für das Reel-Video-Template (kleines Label-Feld im Video oben). "
+            "SPRACHE: IMMER AUF DEUTSCH. "
+            "AUFBAU:\n"
+            "  Zeile 1: Kurzer Deal-Hook auf Deutsch mit passendem Emoji "
+            "(MEGA-DEAL >40%: 'Sale Alert 🔥' | DEAL 20-40%: 'Deal Alert 🎁' | KLEIN <20%: 'Angebot ✅'). "
+            "  Zeile 2 (NUR wenn gutschein_code vorhanden): 'Code: [CODE]'. "
+            "MAXIMAL 2 Zeilen. Nutze \\n für Zeilenumbruch. "
+            "Beispiele: 'Sale Alert 🔥', 'Deal Alert 🎁\\nCode: SAVE20'. "
+            "Gib NUR den fertigen Caption-Text zurück, keine Erklärung."
+        )
+    )
+
     hashtags: list[str] = Field(
         description=(
             "Strategisch optimierte Hashtag-Liste. "
@@ -133,8 +170,13 @@ class Produktinformation(BaseModel):
 # --- 2. LLM-FUNKTIONEN ---
 
 SYSTEM_PROMPT = (
-    "Du bist ein hochpräziser Datenextraktions-Experte. Extrahiere alle angeforderten "
-    "Produktdetails aus dem gesamten Kontext. Halte dich exakt an das JSON-Schema. "
+    "Du bist ein hochpräziser Datenextraktions-Experte für den deutschen Markt. "
+    "Extrahiere alle angeforderten Produktdetails aus dem gesamten Kontext. "
+    "Halte dich exakt an das JSON-Schema. "
+    "SPRACHE: Alle Textfelder (insbesondere reel_titel, reel_beschreibung, reel_caption, "
+    "rabatt_text, produkt_titel) IMMER AUF DEUTSCH ausgeben — auch wenn der Originaltitel "
+    "auf Englisch ist. Produktnamen und Markennamen dürfen englisch bleiben, "
+    "aber Beschreibungen, Captions und sonstige Texte sind IMMER DEUTSCH. "
 
     "OBERSTE PRIORITÄT: BERECHNE IMMER DEN FINALEN, NIEDRIGSTEN PREIS (akt_preis)! "
     "Erkenne ALLE DIREKTEN, SOFORT ANWENDBAREN Preisvorteile: "

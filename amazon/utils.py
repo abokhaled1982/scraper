@@ -127,7 +127,8 @@ TARGET_SCHEMA_TEMPLATE = {
     "images": [], "features": [], 
     "feature_text": None, "description": None,
     "units_sold": "N/A", "seller_name": "N/A", "availability": "N/A", "shipping_info": "N/A",
-    "hashtags": []  # <--- HIER HINZUFÜGEN
+    "hashtags": [],  # <--- HIER HINZUFÜGEN
+    "reel_titel": "N/A", "reel_beschreibung": "N/A", "reel_caption": "N/A",
 }
 
 def map_ai_output_to_target_format(
@@ -197,6 +198,11 @@ def map_ai_output_to_target_format(
     final_output['seller_name'] = extracted.get('haendler_verkaeufer', 'N/A')
     final_output['availability'] = extracted.get('verfuegbarkeit', 'N/A')
     final_output['shipping_info'] = extracted.get('lieferinformation', 'N/A')
+
+    # REEL-FELDER (für Template)
+    final_output['reel_titel'] = extracted.get('reel_titel', 'N/A')
+    final_output['reel_beschreibung'] = extracted.get('reel_beschreibung', 'N/A')
+    final_output['reel_caption'] = extracted.get('reel_caption', 'N/A')
     
     # TEXT FELDER
     ai_features = extracted.get('features')
