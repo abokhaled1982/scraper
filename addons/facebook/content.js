@@ -382,6 +382,12 @@ async function insertTextAndSendComment(element, text, postContainer) {
 
     console.log("🚀 5. Klicke Senden...");
     clickCommentSendButton(postContainer);
+
+    // 6. Fokus entfernen, damit Scrollen wieder funktioniert
+    await randomSleep(500, 800);
+    console.log("🔓 6. Entferne Fokus vom Kommentarfeld...");
+    element.blur();
+    document.activeElement?.blur();
   } catch (e) {
     console.error("Fehler beim Kommentieren:", e);
   }
@@ -412,6 +418,8 @@ function clickCommentSendButton(postContainer) {
     setTimeout(() => {
         lastBtn.click();
         console.log("✅ Fallback-Klick ausgeführt.");
+        // Fokus entfernen nach dem Senden
+        setTimeout(() => { document.activeElement?.blur(); }, 600);
     }, 500);
     return;
   }
@@ -470,8 +478,9 @@ async function postAsReel(text, base64Video, commentToPost) {
   }
 
   reportStatus("busy", "Öffne Reel-Dialog...", "Klicke Reel-Button");
+  // Genau wie beim Kommentar-Flow: erst scrollen, warten, dann klicken
   reelBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-  await randomSleep(300, 700);
+  await randomSleep(1000, 1500); // längere Pause wie im Comment-Flow
   reelBtn.click();
   await randomSleep(2500, 4500);
 
@@ -1130,11 +1139,14 @@ function simulateClick(el) {
 }
 
 function findReelButton() {
+  // Genau wie findCommentButton: nur echte Buttons/divs, keine <a>-Navigations-Links
+  const REEL_KEYWORDS = ["reel erstellen", "create reel", "reels erstellen"];
+
+  // Strategie 1: Exakter Text-Match auf Buttons/divs (kein <a>-Tag)
   const selectorCandidates = [
     'button[aria-label*="Reel"]',
     'div[role="button"][aria-label*="Reel"]',
     'span[role="button"][aria-label*="Reel"]',
-    'div[aria-label*="Reel"]',
     'button',
     'div[role="button"]',
     'span[role="button"]',
@@ -1143,25 +1155,33 @@ function findReelButton() {
   for (const selector of selectorCandidates) {
     const els = document.querySelectorAll(selector);
     for (const el of els) {
+      // <a>-Tags ausschließen – das sind Navigations-Links, keine Erstellen-Buttons
+      if (el.tagName === 'A') continue;
       const aria = (el.getAttribute("aria-label") || "").toLowerCase();
-      const text = (el.innerText || "").toLowerCase();
-      if (aria.includes("reel") || text.includes("reel") || text.includes("reel erstellen") || text.includes("create reel")) {
+      const text = (el.innerText || "").toLowerCase().trim();
+      if (
+        REEL_KEYWORDS.some(kw => aria.includes(kw) || text.includes(kw)) ||
+        text === "reel"
+      ) {
+        console.log("✅ Reel-Erstellen-Button gefunden (Strategie 1):", el);
         return el;
       }
     }
   }
 
-  const xpath = `//div[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //span[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')] | //span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'reel')]`;
-  const node = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-  if (node) {
-    return node;
+  // Strategie 2: Alle [aria-label*="Reel"] aber <a>-Tags rausfiltern
+  const ariaMatches = Array.from(document.querySelectorAll('[aria-label*="Reel"], [aria-label*="reel"]'))
+    .filter(el => el.tagName !== 'A');
+  if (ariaMatches.length > 0) {
+    console.log("✅ Reel-Button gefunden (Strategie 2, kein Link):", ariaMatches[0]);
+    return ariaMatches[0];
   }
 
   // Debug: Liste möglicher Kandidaten
   const debugButtons = Array.from(document.querySelectorAll('div[role="button"], button, span[role="button"], div[aria-label], span[aria-label]'))
-    .filter(el => (el.innerText || el.getAttribute("aria-label") || "").toLowerCase().includes("reel"));
+    .filter(el => el.tagName !== 'A' && (el.innerText || el.getAttribute("aria-label") || "").toLowerCase().includes("reel"));
   if (debugButtons.length > 0) {
-    console.log("ℹ️ Mögliche Reel-Kandidaten:", debugButtons.map(el => ({ text: el.innerText?.trim(), aria: el.getAttribute("aria-label") })));
+    console.log("ℹ️ Mögliche Reel-Kandidaten:", debugButtons.map(el => ({ tag: el.tagName, text: el.innerText?.trim(), aria: el.getAttribute("aria-label") })));
     return debugButtons[0];
   }
 
