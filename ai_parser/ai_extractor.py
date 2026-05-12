@@ -144,14 +144,18 @@ class Produktinformation(BaseModel):
 
     reel_caption: str = Field(
         description=(
-            "Caption-Text AUSSCHLIESSLICH für das Reel-Video-Template (kleines Label-Feld im Video oben). "
-            "SPRACHE: IMMER AUF DEUTSCH. "
-            "AUFBAU:\n"
-            "  Zeile 1: Kurzer Deal-Hook auf Deutsch mit passendem Emoji "
-            "(MEGA-DEAL >40%: 'Sale Alert 🔥' | DEAL 20-40%: 'Deal Alert 🎁' | KLEIN <20%: 'Angebot ✅'). "
-            "  Zeile 2 (NUR wenn gutschein_code vorhanden): 'Code: [CODE]'. "
-            "MAXIMAL 2 Zeilen. Nutze \\n für Zeilenumbruch. "
-            "Beispiele: 'Sale Alert 🔥', 'Deal Alert 🎁\\nCode: SAVE20'. "
+            "GEKÜRZTER Rabatt-Text AUSSCHLIESSLICH für das kleine Caption-Label im Reel-Video. "
+            "ABLEITUNG: Nimm den 'rabatt_text' und kürze ihn auf MAXIMAL 25 ZEICHEN. "
+            "REGELN:\n"
+            "- Behalte das/die GLEICHEN Emojis wie in 'rabatt_text' (NIEMALS weglassen oder ersetzen). "
+            "- Kürze den Text intelligent: Emoji + Kernaussage (Betrag oder %). "
+            "- Kürze NIEMALS mitten im Wort. "
+            "- Kein Zeilenumbruch, keine zusätzlichen Infos. "
+            "BEISPIELE (rabatt_text -> reel_caption):\n"
+            "  '🔥 MEGA-DEAL! Ganze 105,80 € gespart!' -> '🔥 105,80 € gespart!'\n"
+            "  '🎁 Satte 110,02 € gespart!' -> '🎁 110,02 € gespart!'\n"
+            "  '✅ Kleiner Rabatt, guter Preis!' -> '✅ Guter Preis!'\n"
+            "  '🚨 Tiefstpreis-Alarm, Unschlagbar! 💥' -> '🚨 Tiefstpreis! 💥'\n"
             "Gib NUR den fertigen Caption-Text zurück, keine Erklärung."
         )
     )
