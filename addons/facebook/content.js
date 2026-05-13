@@ -22,7 +22,7 @@ const REEL_PROFILE_URL = "https://www.facebook.com/profile.php?id=61584368422265
 
   sessionStorage.removeItem("pending_reel_comment"); // sofort löschen – einmalig
   console.log(`💬 Ausstehender Reel-Kommentar gefunden: "${comment}"`);
-  console.log("⏳ Warte auf vollständiges Laden der Seite...");
+  reportStatus("busy", "Profilseite geladen – bereite Kommentar vor...", "Reel-Kommentar: Seite geladen");
 
   // Warte bis DOM bereit
   await new Promise((resolve) => {
@@ -32,11 +32,22 @@ const REEL_PROFILE_URL = "https://www.facebook.com/profile.php?id=61584368422265
 
   // Zusätzliche Wartezeit damit Feed-Elemente erscheinen (10-15s)
   const waitMs = Math.floor(Math.random() * 5000) + 10000;
-  console.log(`⏳ Warte noch ${(waitMs / 1000).toFixed(1)}s damit das Reel im Feed erscheint...`);
+  const waitSec = (waitMs / 1000).toFixed(1);
+  console.log(`⏳ Warte noch ${waitSec}s damit das Reel im Feed erscheint...`);
+  reportStatus("busy", `Warte ${waitSec}s auf Feed-Aktualisierung...`, `Warte ${waitSec}s auf Feed`);
   await new Promise((r) => setTimeout(r, waitMs));
 
   console.log("💬 Starte Auto-Kommentar auf Profilseite...");
-  await processAutoComment(comment);
+  reportStatus("busy", "Schreibe Kommentar...", "Starte Kommentar-Eingabe");
+
+  try {
+    await processAutoComment(comment);
+    console.log("✅ Reel + Kommentar komplett abgeschlossen.");
+    reportStatus("ready", "Fertig", "🎥 Reel + Kommentar erfolgreich abgeschlossen", "ok", { success: true });
+  } catch (e) {
+    console.error("❌ Kommentar fehlgeschlagen:", e);
+    reportStatus("error", "Kommentar fehlgeschlagen", String(e), "error", { success: false, error: String(e) });
+  }
 })();
 
 // --- HELPER: WARTEZEIT ---
@@ -80,10 +91,15 @@ function fixFocusBlockers() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === "remote_post") {
     const jobType = request.video ? "🎥 Reel" : "📝 Post";
+    const hasReelComment = request.video && request.comment;
     reportStatus("busy", `${jobType} wird vorbereitet...`, `Auftrag empfangen: ${jobType}`);
     startPostingProcess(request.text, request.image, request.video, request.comment)
       .then(() => {
-        reportStatus("ready", "Fertig", `${jobType} erfolgreich abgeschlossen`, "ok", { success: true });
+        // Bei Reel+Kommentar: Seite navigiert weg → checkPendingReelComment() meldet Erfolg.
+        // Dieses .then() wird nur bei Posts oder Reels OHNE Kommentar erreicht.
+        if (!hasReelComment) {
+          reportStatus("ready", "Fertig", `${jobType} erfolgreich abgeschlossen`, "ok", { success: true });
+        }
         sendResponse({ received: true });
       })
       .catch((error) => {
@@ -626,15 +642,20 @@ async function postAsReel(text, base64Video, commentToPost) {
       // Zufällige Wartezeit 60-120 Sekunden damit das Reel verarbeitet wird
       const waitSec = Math.floor(Math.random() * 61) + 60; // 60..120s
       console.log(`⏳ Warte ${waitSec}s bevor Kommentar gepostet wird (Reel muss im Feed erscheinen)...`);
-      reportStatus("busy", `Warte ${waitSec}s vor Kommentar...`, `Reel gepostet – warte ${waitSec}s`);
+      reportStatus("busy", `⏳ Warte ${waitSec}s – Reel wird verarbeitet...`, `Reel gepostet – warte ${waitSec}s vor Kommentar`);
       await new Promise((r) => setTimeout(r, waitSec * 1000));
 
       // Kommentar in sessionStorage speichern
       sessionStorage.setItem("pending_reel_comment", commentToPost);
       console.log("💾 Kommentar in sessionStorage gespeichert. Lade Profilseite...");
+      reportStatus("busy", "Lade Profilseite für Kommentar...", "Navigiere zu Profilseite für Kommentar");
 
       // Gleicher Tab – Profilseite laden; checkPendingReelComment() übernimmt nach dem Load
+      // WICHTIG: Nach location.href stirbt dieser JS-Kontext.
+      // Die Fertigmeldung (success: true) kommt aus checkPendingReelComment() auf der neuen Seite.
       window.location.href = REEL_PROFILE_URL;
+      // Ab hier wird nichts mehr ausgeführt – Seite navigiert weg
+      return;
     }
   } else {
     console.error("❌ Reel-Post-Flow konnte nicht abgeschlossen werden.");
