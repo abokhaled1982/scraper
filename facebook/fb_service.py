@@ -67,6 +67,16 @@ async def _handle(ws: WebSocketServerProtocol):
             elif mtype == "pong":
                 pass  # heartbeat response, ignore
 
+            elif mtype == "addon_status":
+                state    = msg.get("state", "?")
+                activity = msg.get("activity", "")
+                logger.info(f"📊 Addon: {state} – {activity}")
+
+            elif mtype == "busy":
+                reason = msg.get("reason", "")
+                queued = msg.get("queued", 0)
+                logger.warning(f"⏳ Addon busy: {reason} ({queued} in Queue)")
+
             elif mtype == "task_result":
                 global _pending_result_event, _pending_result_data
                 success = msg.get("success", False)
@@ -231,7 +241,7 @@ async def send_post(data: dict, local_image_path=None, local_video_path=None) ->
     comment_text = _build_comment_text(data, offer_url)
 
     payload = {
-        "type":    "reel" if local_video_path else "post",
+        "type":    "remote_post",
         "text":    fb_text,
         "image":   None,
         "video":   None,

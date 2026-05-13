@@ -3,7 +3,7 @@
   "name": "FB Deal Bot",
   "version": "3.2",
   "description": "Automatischer Facebook Post & Reel Publisher",
-  "permissions": ["activeTab", "scripting", "tabs", "alarms"],
+  "permissions": ["activeTab", "scripting", "tabs", "alarms", "storage"],
   "host_permissions": [
     "https://*.facebook.com/*",
     "http://*.facebook.com/*",
@@ -19,7 +19,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["https://*.facebook.com/*", "http://*.facebook.com/*"],
       "js": ["content.js"]
     }
   ]
