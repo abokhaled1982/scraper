@@ -6,6 +6,7 @@ import re
 import json
 import hashlib
 import time
+import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Tuple, Any
@@ -143,6 +144,54 @@ def add_link_to_product_list(url: str) -> Tuple[bool, str]:
     return True, f"Hinzugefügt (Key: {key})"
 
 # ------------------------
+# Kurzlink → Amazon-URL auflösen
+# ------------------------
+def resolve_shortlink(url: str, timeout: int = 8) -> str:
+    """Folgt Weiterleitungen und gibt die finale URL zurück. Gibt url zurück bei Fehler."""
+    try:
+        import urllib.request
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        opener = urllib.request.build_opener(NoRedirect())
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="HEAD")
+        try:
+            opener.open(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            loc = e.headers.get("Location")
+            if loc:
+                # Relative URLs auflösen
+                if loc.startswith("/"):
+                    from urllib.parse import urlparse
+                    p = urlparse(url)
+                    loc = f"{p.scheme}://{p.netloc}{loc}"
+                return loc
+        # Fallback GET für Server die kein HEAD unterstützen
+        req2 = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        response = urllib.request.urlopen(req2, timeout=timeout)
+        final = response.geturl()
+        if final and final != url:
+            return final
+    except Exception:
+        pass
+    return url
+
+def extract_best_url(raw_url: str) -> str:
+    """Löst Kurzlinks auf und gibt Amazon-URL zurück falls möglich."""
+    # Wenn bereits Amazon → direkt zurück
+    if re.search(r'amazon\.(de|com|co\.uk|fr|it|es)', raw_url, re.I):
+        return raw_url
+    # Bekannte Kurzlink-Domains → auflösen
+    if re.search(r'(pirat\.deals|amzn\.to|amzn\.eu|t\.co|bit\.ly|tinyurl)', raw_url, re.I):
+        print(f"[PIRATEN] 🔗 Löse Kurzlink auf: {raw_url}")
+        resolved = resolve_shortlink(raw_url)
+        if resolved != raw_url:
+            print(f"[PIRATEN]    → {resolved}")
+        return resolved
+    return raw_url
+
+# ------------------------
 # Channel Management (robust)
 # ------------------------
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
@@ -193,6 +242,45 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
 # ------------------------
 # Message Handling (wie telObserver)
 # ------------------------
+def extract_links_from_msg(msg) -> list:
+    """Extrahiert alle URLs aus Text + Entity-URLs (versteckte Links)."""
+    text = (msg.message or "").strip()
+    url_pattern = re.compile(
+        r'(https?://(?!t\.me/)[^\s<>"\'\)\]]+[^\s\.,;:!?\)\]\<>"\'])',
+        re.IGNORECASE
+    )
+    links = list({f for f in url_pattern.findall(text)})
+
+    # Entity-URLs (Text hinter "Zum Angebot" etc.)
+    if msg.entities:
+        for ent in msg.entities:
+            url = getattr(ent, 'url', None)
+            if url and not re.match(r'https?://t\.me/', url, re.I):
+                if url not in links:
+                    links.append(url)
+    return links
+
+async def process_message_links(links: list, chat_name: str, log_preview: str = ""):
+    """Löst Kurzlinks auf und trägt sie in product_list.json ein."""
+    added_count = 0
+    if log_preview:
+        print(f"[PIRATEN:{chat_name}] Links gefunden ({len(links)}): {log_preview[:120]}")
+    for raw_url in links:
+        try:
+            # In Thread ausführen damit async loop nicht blockiert
+            url = await asyncio.get_event_loop().run_in_executor(None, extract_best_url, raw_url)
+            success, reason = add_link_to_product_list(url)
+            if success:
+                added_count += 1
+                print(f"[PIRATEN] ✅ Hinzugefügt: {url}")
+            else:
+                print(f"[PIRATEN] ℹ️ {reason}: {url}")
+        except Exception as e:
+            print(f"[PIRATEN] Fehler bei {raw_url}: {e}")
+    if added_count > 0:
+        print(f"[PIRATEN:{chat_name}] ✅ {added_count} neue Links gespeichert.")
+    return added_count
+
 async def handle_message(evt: events.NewMessage.Event):
     msg = evt.message
     try:
@@ -202,48 +290,42 @@ async def handle_message(evt: events.NewMessage.Event):
         chat_name = "Kanal"
 
     text = (msg.message or "").strip()
-    # Regex: HTTPS Links, schneidet trailing punctuation ab; t.me-Links werden absichtlich nicht als Produkt-Links behandelt
-    url_pattern = re.compile(r'(https?:\/\/(?!t\.me\/)[^\s<>"\'\)\]]+[^\s\.,;:!?\)\]\<>"\'])', re.IGNORECASE)
-    found = url_pattern.findall(text)
-    links = []
-    for f in found:
-        if isinstance(f, tuple):
-            links.append(f[0])
-        else:
-            links.append(f)
+    log_preview = text.replace('\n', ' ')
+    links = extract_links_from_msg(msg)
 
-    log_preview = text.replace('\n', ' ')[:200]
     if links:
-        added_count = 0
-        print(f"[PIRATEN:{chat_name}] Nachricht (Links gefunden: {len(links)}) -> {log_preview}")
-        for link in set(links):
-            try:
-                success, reason = add_link_to_product_list(link)
-                if success:
-                    added_count += 1
-                    print(f"[PIRATEN] ✅ Hinzugefügt: {link} ({reason})")
-                else:
-                    print(f"[PIRATEN] ℹ️ {reason}: {link}")
-            except Exception as e:
-                print(f"[PIRATEN] Fehler beim Hinzufügen des Links {link}: {e}")
-        if added_count > 0:
-            print(f"[PIRATEN:{chat_name}] ✅ {added_count} neue Links zu {PRODUCT_LIST_PATH} hinzugefügt.")
+        await process_message_links(links, chat_name, log_preview)
     else:
         if log_preview:
-            print(f"[PIRATEN:{chat_name}] {log_preview}")
+            print(f"[PIRATEN:{chat_name}] {log_preview[:120]}")
         else:
             print(f"[PIRATEN:{chat_name}] [Medien/Leer]")
 
 # ------------------------
 # Main Loop
 # ------------------------
+CATCHUP_MESSAGES = int(os.getenv("PIRATEN_CATCHUP", "30"))  # letzte N Nachrichten beim Start nachholen
+
 async def _amain():
     print(f"🏴‍☠️ Starte Piraten-Observer Session: {PIRATEN_SESSION_NAME}")
     client = await ensure_logged_in(PIRATEN_CFG)
     async with client:
         entity = await _ensure_join_and_resolve(client, PIRATEN_CHANNEL_REF)
-        print(f"🏴‍☠️ Überwache Kanal: {getattr(entity, 'title', PIRATEN_CHANNEL_REF)}")
+        chat_name = getattr(entity, 'title', PIRATEN_CHANNEL_REF)
+        print(f"🏴‍☠️ Überwache Kanal: {chat_name}")
 
+        # ── Catch-Up: letzte N Nachrichten beim Start verarbeiten ──────────
+        if CATCHUP_MESSAGES > 0:
+            print(f"⏪ Catch-Up: verarbeite letzte {CATCHUP_MESSAGES} Nachrichten...")
+            total_added = 0
+            async for msg in client.iter_messages(entity, limit=CATCHUP_MESSAGES):
+                links = extract_links_from_msg(msg)
+                if links:
+                    added = await process_message_links(links, chat_name)
+                    total_added += added
+            print(f"⏪ Catch-Up abgeschlossen: {total_added} neue Links hinzugefügt.\n")
+
+        # ── Live-Listener: neue Nachrichten ───────────────────────────────
         @client.on(events.NewMessage(chats=entity))
         async def _on(evt):
             try:
@@ -251,6 +333,7 @@ async def _amain():
             except Exception as e:
                 print(f"❌ Piraten-Error: {e}")
 
+        print("🔴 Live-Listener aktiv – warte auf neue Nachrichten...")
         await client.run_until_disconnected()
 
 if __name__ == "__main__":
