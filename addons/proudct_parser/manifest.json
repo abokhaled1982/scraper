@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "HTML Sanitizer (Modular)",
+  "name": "Amazon Scraper",
   "version": "0.1.0",
   "description": "Parst die aktuelle Seite, entfernt Scripts/Styles/Kommentare/unnÃ¶tige Elemente â€“ modular.",
   "permissions": ["storage", "activeTab", "scripting", "downloads"],
