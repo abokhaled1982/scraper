@@ -103,6 +103,39 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
         sent = await fb_service.send_post(data, None, local_video)
         if sent:
             print(f"[FACEBOOK] ✅ Reel erfolgreich gepostet: {product_id}")
+
+            # ── Instagram: gleiches Video posten ─────────────────────────────
+            try:
+                import instagram.ig_service as ig_service
+                from instagram.ig_message import create_ig_caption
+                ig_caption = create_ig_caption(data)
+                video_path = pathlib.Path(local_video) if local_video else None
+                if video_path and video_path.exists():
+                    ig_ok = ig_service.post_reel(video_path, ig_caption)
+                    if ig_ok:
+                        print(f"[INSTAGRAM] ✅ Reel auch auf Instagram gepostet: {product_id}")
+                        # Affiliate-Link als Kommentar
+                        offer_url = str(data.get("affiliate_url") or data.get("url") or "").strip()
+                        if offer_url and offer_url not in ("N/A", "null", ""):
+                            try:
+                                # user_medias_v1 direkt – überspringt fehlerhafte GQL-Methode
+                                cl = ig_service._client
+                                last = cl.user_medias_v1(cl.user_id, amount=1)
+                                if last:
+                                    ig_service.post_comment(str(last[0].id), f"🔗 Zum Angebot: {offer_url}")
+                            except Exception as ce:
+                                print(f"[INSTAGRAM] ⚠️ Kommentar fehlgeschlagen: {ce}")
+                    else:
+                        print(f"[INSTAGRAM] ⚠️ Instagram-Upload fehlgeschlagen – FB-Post bleibt gültig.")
+                else:
+                    print(f"[INSTAGRAM] ⚠️ Video-Datei nicht mehr vorhanden – Instagram übersprungen.")
+            except SystemExit as e:
+                # ig_service wirft SystemExit wenn keine Session → nur warnen, nicht abbrechen
+                print(f"[INSTAGRAM] ⚠️ Kein Instagram-Login – übersprungen. ({e})")
+            except Exception as ig_e:
+                print(f"[INSTAGRAM] ⚠️ Fehler beim Instagram-Post: {ig_e}")
+            # ─────────────────────────────────────────────────────────────────
+
             # JSON nach deals/sent/ verschieben — NUR wenn wirklich erfolgreich
             dest_json = DEALS_SENT_DIR / full_path.name
             full_path.rename(dest_json)

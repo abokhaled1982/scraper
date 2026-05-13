@@ -29,7 +29,7 @@ VIDEOS_SENT_DIR    = VIDEOS_DIR / "sent"            # bereits gepostet (war: fac
 # 💾 State — Zustandsdateien
 # ---------------------------------------------------------------------------
 STATE_DIR         = DATA_DIR / "state"
-SENT_IDS_PATH     = STATE_DIR / "sent_ids.json"     # (war: data/fb_sent.json)
+SENT_IDS_PATH     = STATE_DIR / "sent_ids.json"     # (war: data/fb_sent.json)IG_SENT_IDS_PATH  = STATE_DIR / "ig_sent_ids.json"  # InstagramIG_SENT_IDS_PATH  = STATE_DIR / "ig_sent_ids.json"  # Instagram
 SENT_ASINS_PATH   = STATE_DIR / "sent_asins.json"   # (war: data/sent_asins.json)
 PRODUCT_LIST_PATH = STATE_DIR / "product_list.json" # (war: data/product_list.json)
 OPENED_PATH       = STATE_DIR / ".opened.json"
