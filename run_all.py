@@ -81,9 +81,8 @@ if MODE == "full":
 # Supervisor Utilities
 # ----------------------------------------------------------
 def _ensure_dirs():
-    (HERE / "data" / "inbox").mkdir(parents=True, exist_ok=True)
-    (HERE / "data" / "produckt").mkdir(parents=True, exist_ok=True)
-    (HERE / "data" / "out").mkdir(parents=True, exist_ok=True)
+    from config import ensure_directories
+    ensure_directories()
     (HERE / SESSION_DIR).mkdir(parents=True, exist_ok=True)
     (HERE / "assets").mkdir(parents=True, exist_ok=True)
 

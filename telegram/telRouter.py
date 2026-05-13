@@ -34,7 +34,7 @@ AFFILIATE_URL = os.getenv("AFFILIATE_URL", "https://amzn.to/42vWlQM")
 WATCH_SECS    = int(float(os.getenv("WATCH_INTERVAL_SECS", "10")))  # alle 10s
 
 # Datei im data/-Ordner mit gesendeten IDs
-SENT_LIST_PATH: Path = DATA_DIR / "sent_asins.json"
+SENT_LIST_PATH: Path = config.SENT_ASINS_PATH
 
 # Helpers
 def chunk_text(s: str, size: int = MAX_TEXT_LEN) -> list[str]:

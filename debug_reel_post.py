@@ -22,11 +22,12 @@ import sys
 import time
 
 HERE        = pathlib.Path(__file__).resolve().parent
-VIDEOS_DIR  = HERE / "facebook" / "videos"
-DATA_DIR    = HERE / "data" / "out"
-SENT_FILE   = HERE / "data" / "fb_sent.json"
-
 sys.path.insert(0, str(HERE))
+
+import config as _cfg
+VIDEOS_DIR  = _cfg.VIDEOS_SENT_DIR    # data/media/videos/sent/
+DATA_DIR    = _cfg.DEALS_QUEUE_DIR    # data/deals/queue/
+SENT_FILE   = _cfg.SENT_IDS_PATH      # data/state/sent_ids.json
 
 from facebook import fb_service
 from facebook.fb_service import _build_comment_text
@@ -35,12 +36,13 @@ from facebook.fb_watcher import get_sent_ids, save_sent_ids
 
 
 def load_deal(product_id: str) -> dict:
-    """Lädt die Deal-JSON-Datei aus data/out/."""
-    path = DATA_DIR / f"{product_id}.json"
-    if not path.exists():
-        print(f"[WARN] Keine Deal-Datei für {product_id} in {DATA_DIR}")
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    """Lädt die Deal-JSON-Datei – sucht in queue/ dann sent/."""
+    for search_dir in [DATA_DIR, _cfg.DEALS_SENT_DIR]:
+        path = search_dir / f"{product_id}.json"
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    print(f"[WARN] Keine Deal-Datei für {product_id} in {DATA_DIR} oder sent/")
+    return {}
 
 
 async def send_video(product_id: str) -> bool:

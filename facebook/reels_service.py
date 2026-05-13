@@ -72,16 +72,18 @@ def render_reel(modifications: dict, template_id: str | None = None) -> dict:
 def download_video(render_result: dict, product_id: str) -> pathlib.Path | None:
     """
     Lädt das gerenderte Video von der Creatomate-URL herunter.
+    Speichert in data/media/videos/queue/ (noch nicht gepostet).
     """
     video_url = render_result.get("url")
     if not video_url:
         print("[VIDEO] ❌ Keine URL im Render-Ergebnis.")
         return None
 
-    HERE = pathlib.Path(__file__).resolve().parent
-    VIDEOS_FOLDER = HERE / "videos"
-    VIDEOS_FOLDER.mkdir(parents=True, exist_ok=True)
-    local_path = VIDEOS_FOLDER / f"{product_id}.mp4"
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    from config import VIDEOS_QUEUE_DIR
+    VIDEOS_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    local_path = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
 
     try:
         print(f"⬇️  Lade Video herunter: {video_url}")

@@ -9,8 +9,6 @@ import sys
 import time
 
 HERE         = pathlib.Path(__file__).resolve().parent.parent
-WATCH_FOLDER = HERE / "data" / "out"
-SENT_FILE    = HERE / "data" / "fb_sent.json"
 
 CHECK_INTERVAL_SECS = 30
 MIN_WAIT_SECS       = 250
@@ -18,6 +16,10 @@ MAX_WAIT_SECS       = 500
 DEFAULT_REEL_TEMPLATE_TYPE = "offer_type1"
 
 sys.path.insert(0, str(HERE))
+from config import DEALS_QUEUE_DIR, SENT_IDS_PATH
+
+WATCH_FOLDER = DEALS_QUEUE_DIR
+SENT_FILE    = SENT_IDS_PATH
 
 
 def get_sent_ids() -> set:
@@ -96,19 +98,12 @@ async def route_single_deal(file: pathlib.Path, sent_ids: set, fb_service) -> bo
 
     deal_type = str(data.get("type") or "").strip().lower()
 
-    # Production mode: all out-folder items should be processed as reels.
-    # If type is missing or not reel, normalize and persist it.
-    if deal_type != "reel":
-        data["type"] = "reel"
-        data.setdefault("template_type", DEFAULT_REEL_TEMPLATE_TYPE)
-        try:
-            file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"[ROUTE] 🔁 {file.name} auf type='reel' normalisiert.")
-        except Exception as write_err:
-            print(f"[ROUTE] ⚠️ Konnte {file.name} nicht aktualisieren: {write_err}")
-
-    from facebook.reels_processor import process_single_deal as reel_process
-    return await reel_process(file, sent_ids)
+    if deal_type == "reel":
+        from facebook.reels_processor import process_single_deal as reel_process
+        return await reel_process(file, sent_ids)
+    else:
+        from facebook.fb_processor import process_single_deal as post_process
+        return await post_process(file, sent_ids, fb_service)
 
 
 async def run_batch_phase(sent_ids: set, fb_service) -> None:

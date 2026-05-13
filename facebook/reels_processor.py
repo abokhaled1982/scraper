@@ -13,8 +13,11 @@ from facebook.template_interface import (
     resolve_template_selection,
 )
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from config import IMAGES_DIR, DEALS_SENT_DIR, DEALS_FAILED_DIR, VIDEOS_SENT_DIR, VIDEOS_QUEUE_DIR
+
 HERE          = pathlib.Path(__file__).resolve().parent
-IMAGES_FOLDER = HERE / "images"
+IMAGES_FOLDER = IMAGES_DIR
 
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
@@ -65,35 +68,49 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             return False
         print(f"[PROCESS] 🚀 Guter Deal für Reels ({validation['discount']}%): {product_id}")
 
-        template_type, template_id = resolve_template_selection(data, default_template_type="offer_type1")
-        modifications = build_modifications_for_template(
-            data,
-            template_type=template_type,
-            discount_value=validation["discount"],
-        )
-
-        print(f"[TEMPLATE] type={template_type} id={template_id}")
-
-        render_result = await asyncio.get_event_loop().run_in_executor(
-            None,
-            render_reel,
-            modifications,
-            template_id,
-        )
-        print(f"[DONE] ✅ Reel erfolgreich gerendert: {product_id}, URL: {render_result.get('url')}")
-        
-        # Video herunterladen
-        local_video = await asyncio.get_event_loop().run_in_executor(None, download_video, render_result, product_id)
-        if local_video:
-            print(f"[VIDEO] ✅ Video heruntergeladen: {local_video}")
+        # Prüfe ob ein bereits gerendertes Video in der Video-Queue vorhanden ist
+        existing_video = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
+        if existing_video.exists():
+            print(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
+            local_video = existing_video
         else:
-            print(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
+            template_type, template_id = resolve_template_selection(data, default_template_type="offer_type1")
+            modifications = build_modifications_for_template(
+                data,
+                template_type=template_type,
+                discount_value=validation["discount"],
+            )
+
+            print(f"[TEMPLATE] type={template_type} id={template_id}")
+
+            render_result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                render_reel,
+                modifications,
+                template_id,
+            )
+            print(f"[DONE] ✅ Reel erfolgreich gerendert: {product_id}, URL: {render_result.get('url')}")
+
+            # Video herunterladen
+            local_video = await asyncio.get_event_loop().run_in_executor(None, download_video, render_result, product_id)
+            if local_video:
+                print(f"[VIDEO] ✅ Video heruntergeladen: {local_video}")
+            else:
+                print(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
 
         # Sende an Facebook-Addon
         from facebook import fb_service
         sent = await fb_service.send_post(data, None, local_video)
         if sent:
             print(f"[FACEBOOK] ✅ Reel erfolgreich an Addon gesendet: {product_id}")
+            # JSON nach deals/sent/ verschieben
+            dest_json = DEALS_SENT_DIR / full_path.name
+            full_path.rename(dest_json)
+            # Video nach media/videos/sent/ verschieben
+            if local_video and pathlib.Path(local_video).exists():
+                dest_video = VIDEOS_SENT_DIR / pathlib.Path(local_video).name
+                pathlib.Path(local_video).rename(dest_video)
+                print(f"[VIDEO] ✅ Video nach sent/ verschoben: {dest_video.name}")
         else:
             print(f"[FACEBOOK] ❌ Reel konnte nicht an Addon gesendet werden: {product_id}")
 

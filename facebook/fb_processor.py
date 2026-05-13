@@ -7,8 +7,11 @@ import re
 import sys
 import requests
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from config import IMAGES_DIR, DEALS_SENT_DIR
+
 HERE          = pathlib.Path(__file__).resolve().parent
-IMAGES_FOLDER = HERE / "images"
+IMAGES_FOLDER = IMAGES_DIR
 
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
@@ -61,8 +64,8 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set, fb_service
         data       = json.loads(full_path.read_text(encoding="utf-8"))
         validation = validate_deal_data(data)
         if not validation["valid"]:
-            print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Lösche Datei.")
-            full_path.unlink(missing_ok=True)
+            print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Verschiebe nach failed.")
+            full_path.rename(DEALS_SENT_DIR.parent / "failed" / full_path.name)
             return False
         print(f"[PROCESS] 🚀 Guter Deal ({validation['discount']}%): {product_id}")
         images    = data.get("images") or []
@@ -70,7 +73,10 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set, fb_service
         local_img = download_image(image_url, product_id)
         await fb_service.send_post(data, local_img)
         sent_ids.add(product_id)
-        print(f"[DONE] ✅ Deal erfolgreich verarbeitet: {product_id}")
+        # Deal-JSON nach sent/ verschieben
+        dest = DEALS_SENT_DIR / full_path.name
+        full_path.rename(dest)
+        print(f"[DONE] ✅ Deal gepostet und nach sent/ verschoben: {product_id}")
         return True
     except Exception as e:
         print(f"[ERROR] Fehler bei {full_path.name}: {e}", file=sys.stderr)
