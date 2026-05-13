@@ -50,6 +50,7 @@ function ensureOnTargetUrl() {
       const target = tabs.find(t => t.url && t.url.startsWith("https://www.facebook.com/profile.php?id=61584368422265"));
       if (target) {
         log("ok", `Ziel-URL bereits geöffnet (Tab ${target.id})`);
+        target._wasAlreadyOnTarget = true;
         return resolve(target);
       }
       // Not on target URL — navigate existing FB tab or open new one
@@ -163,42 +164,52 @@ function connectWebSocket() {
 }
 
 function queueOrSendMessage(message) {
-  chrome.tabs.query({ url: ["*://*.facebook.com/*"] }, async (tabs) => {
-    // Find the target tab first
-    let targetTab = tabs.find(t => t.url && t.url.startsWith("https://www.facebook.com/profile.php?id=61584368422265"));
-    if (!targetTab && tabs.length > 0) targetTab = tabs[0];
+  // Always navigate to the target profile page before sending
+  setState("busy", message.video ? "Navigiere zu Profil (Reel)..." : "Navigiere zu Profil (Post)...");
+  ensureOnTargetUrl().then((tab) => {
+    // After navigation give page a moment; after SW restart content.js is gone → re-inject
+    const delay = tab._wasAlreadyOnTarget ? 0 : 2000;
+    setTimeout(() => sendToTab(tab.id, message), delay);
+  }).catch((err) => {
+    log("error", `Navigation fehlgeschlagen: ${err}`);
+    pendingPosts.push(message);
+    setState("error", "Navigation zu Profil fehlgeschlagen");
+  });
+}
 
-    if (!targetTab) {
-      log("warn", "Kein Facebook-Tab gefunden – navigiere zur Ziel-URL...");
-      targetTab = await ensureOnTargetUrl();
-    } else {
-      // Check if on correct URL
-      const isCorrectUrl = targetTab.url && targetTab.url.startsWith("https://www.facebook.com/profile.php?id=61584368422265");
-      if (!isCorrectUrl) {
-        log("info", "Falscher Tab – navigiere zu Deal-Boss Profil...");
-        targetTab = await ensureOnTargetUrl();
-      }
-    }
-
-    if (!targetTab) {
-      log("error", "Konnte Tab nicht öffnen. Nachricht wird gepuffert.");
-      pendingPosts.push(message);
-      return;
-    }
-
-    // Wait a moment for content script to be ready
-    await new Promise(r => setTimeout(r, 800));
-
-    chrome.tabs.sendMessage(targetTab.id, message, (response) => {
-      if (chrome.runtime.lastError) {
-        log("error", `Fehler beim Senden an Tab: ${chrome.runtime.lastError.message}`);
+function sendToTab(tabId, message, isRetry = false) {
+  log("info", `Sende an Tab ${tabId}: ${message.video ? "🎥 Reel" : "📝 Post"}${isRetry ? " (Retry nach Injektion)" : ""}`);
+  setState("busy", message.video ? "Reel wird hochgeladen..." : "Post wird erstellt...");
+  chrome.tabs.sendMessage(tabId, message, (response) => {
+    if (chrome.runtime.lastError) {
+      const errMsg = chrome.runtime.lastError.message;
+      if (!isRetry && errMsg.includes("Receiving end does not exist")) {
+        // Content script lost after SW restart — re-inject and retry once
+        log("warn", "Content Script nicht erreichbar – injiziere neu...");
+        setState("busy", "Content Script wird neu geladen...");
+        chrome.scripting.executeScript(
+          { target: { tabId }, files: ["content.js"] },
+          () => {
+            if (chrome.runtime.lastError) {
+              log("error", `Injektion fehlgeschlagen: ${chrome.runtime.lastError.message}`);
+              pendingPosts.push(message);
+              setState("error", "Content Script Injektion fehlgeschlagen");
+              return;
+            }
+            log("ok", "Content Script neu injiziert – sende erneut...");
+            // Brief pause for the injected script to register its listener
+            setTimeout(() => sendToTab(tabId, message, true), 800);
+          }
+        );
+      } else {
+        log("error", `Fehler beim Senden an Tab: ${errMsg}`);
         pendingPosts.push(message);
         setState("error", "Content Script nicht erreichbar");
-      } else {
-        log("ok", "Auftrag an Content Script übermittelt.");
-        // State will be updated via content script status events
       }
-    });
+    } else {
+      log("ok", "Auftrag an Content Script übermittelt.");
+      // State will be updated via content_status events from content script
+    }
   });
 }
 
@@ -215,8 +226,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "content_status") {
     setState(msg.state || addonState, msg.activity || "");
     if (msg.log) log(msg.logLevel || "info", `[content] ${msg.log}`);
-    if (msg.result && socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "task_result", ...msg.result }));
+    // Forward real result to Python via WebSocket (only when content script reports a result)
+    if (msg.result) {
+      const success = msg.result.success === true;
+      const error   = msg.result.error || null;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "task_result", success, error }));
+      }
+      // Notify popup for last-result display
+      chrome.runtime.sendMessage({ type: "task_done", success, error }).catch(() => {});
     }
     return;
   }
@@ -262,18 +280,14 @@ setInterval(() => {
   if (isHandshakeDone) flushPendingPosts();
 }, 10000);
 
+// NOTE: duplicate legacy function declarations below have been removed.
+// The proper connectWebSocket / queueOrSendMessage / flushPendingPosts
+// definitions above (with handshake + state machine) are the active ones.
+/* ── LEGACY DUPLICATE START (kept as comment for reference only) ──
 function connectWebSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return;
   }
-
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  console.log("Starte Verbindung zum Node.js Server...");
-  socket = new WebSocket(WEBSOCKET_URL);
 
   socket.onopen = () => {
     console.log("✅ Verbunden mit Node.js Server");
@@ -314,60 +328,4 @@ function connectWebSocket() {
     socket.close();
   };
 }
-
-function queueOrSendMessage(message) {
-  console.log("📨 WebSocket-Nachricht erhalten:", message.type || 'remote_post', message.text ? message.text.slice(0, 80) : '(kein Text)');
-  chrome.tabs.query({ url: ["*://*.facebook.com/*", "*://facebook.com/*"] }, (tabs) => {
-    if (tabs.length > 0) {
-      const targetTab = tabs[0];
-      console.log("Sende Post an Tab ID:", targetTab.id, "URL:", targetTab.url);
-
-      chrome.tabs.sendMessage(targetTab.id, message, (response) => {
-        if (chrome.runtime.lastError) {
-          console.log("Fehler beim Senden an Tab:", chrome.runtime.lastError.message);
-          pendingPosts.push(message);
-        } else {
-          console.log("Erfolgreich an Content-Script gesendet.");
-          if (pendingPosts.length > 0) {
-            pendingPosts = pendingPosts.filter((item) => item !== message);
-          }
-        }
-      });
-    } else {
-      console.log("Kein Facebook-Tab gefunden! Nachricht wird zwischengespeichert.");
-      pendingPosts.push(message);
-    }
-  });
-}
-
-function flushPendingPosts() {
-  if (!pendingPosts.length) return;
-
-  chrome.tabs.query({ url: "*://*.facebook.com/*" }, (tabs) => {
-    if (tabs.length > 0) {
-      const targetTab = tabs[0];
-      console.log(`🔄 Sende ${pendingPosts.length} ausstehende Nachricht(en) an Tab ID: ${targetTab.id}`);
-      const queueCopy = [...pendingPosts];
-      pendingPosts = [];
-      queueCopy.forEach((message) => {
-        chrome.tabs.sendMessage(targetTab.id, message, (response) => {
-          if (chrome.runtime.lastError) {
-            console.log("Fehler beim Senden ausstehender Nachricht:", chrome.runtime.lastError.message);
-            pendingPosts.push(message);
-          } else {
-            console.log("Erfolgreich an Content-Script gesendet.");
-          }
-        });
-      });
-    }
-  });
-}
-
-connectWebSocket();
-
-setInterval(() => {
-  if (!socket || socket.readyState === WebSocket.CLOSED) {
-    connectWebSocket();
-  }
-  flushPendingPosts();
-}, 10000);
+── LEGACY DUPLICATE END ── */

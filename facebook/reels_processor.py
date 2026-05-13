@@ -102,8 +102,8 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
         from facebook import fb_service
         sent = await fb_service.send_post(data, None, local_video)
         if sent:
-            print(f"[FACEBOOK] ✅ Reel erfolgreich an Addon gesendet: {product_id}")
-            # JSON nach deals/sent/ verschieben
+            print(f"[FACEBOOK] ✅ Reel erfolgreich gepostet: {product_id}")
+            # JSON nach deals/sent/ verschieben — NUR wenn wirklich erfolgreich
             dest_json = DEALS_SENT_DIR / full_path.name
             full_path.rename(dest_json)
             # Video nach media/videos/sent/ verschieben
@@ -111,11 +111,11 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
                 dest_video = VIDEOS_SENT_DIR / pathlib.Path(local_video).name
                 pathlib.Path(local_video).rename(dest_video)
                 print(f"[VIDEO] ✅ Video nach sent/ verschoben: {dest_video.name}")
+            sent_ids.add(product_id)
+            return True
         else:
-            print(f"[FACEBOOK] ❌ Reel konnte nicht an Addon gesendet werden: {product_id}")
-
-        sent_ids.add(product_id)
-        return True
+            print(f"[FACEBOOK] ❌ Reel konnte nicht gepostet werden (Addon Fehler/Timeout): {product_id}. Datei bleibt in queue/.")
+            return False
     except Exception as e:
         print(f"[ERROR] Fehler bei {full_path.name}: {e}", file=sys.stderr)
         return False

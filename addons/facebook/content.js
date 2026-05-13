@@ -1,5 +1,11 @@
 // content.js - Robust mit Scroll-Fix für unsichtbare Felder
 
+// Guard against double injection (e.g. after SW restart + re-inject)
+if (window.__fbDealBotLoaded) {
+  console.log("ℹ️ Content Script bereits geladen – skip.");
+} else {
+window.__fbDealBotLoaded = true;
+
 // --- KONSTANTEN ---
 const REEL_PROFILE_URL = "https://www.facebook.com/profile.php?id=61584368422265&locale=de_DE";
 
@@ -1415,3 +1421,4 @@ function pasteText(target, text) {
   });
   target.dispatchEvent(pasteEvent);
 }
+} // end __fbDealBotLoaded guard

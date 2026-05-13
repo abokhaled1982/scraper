@@ -129,6 +129,7 @@ TARGET_SCHEMA_TEMPLATE = {
     "units_sold": "N/A", "seller_name": "N/A", "availability": "N/A", "shipping_info": "N/A",
     "hashtags": [],  # <--- HIER HINZUFÜGEN
     "reel_titel": "N/A", "reel_beschreibung": "N/A", "reel_caption": "N/A",
+    "type": "post",   # "reel" wenn Rabatt >= 30%, sonst "post"
 }
 
 def map_ai_output_to_target_format(
@@ -217,6 +218,14 @@ def map_ai_output_to_target_format(
         final_output["hashtags"] = extracted["hashtags"]
     else:
         # Fallback, falls LLM failt oder Feld leer ist
-        final_output["hashtags"] = [ "#angebot", "#rabatt", "#schnäppchen"]
-    
+        final_output["hashtags"] = ["#angebot", "#rabatt", "#schnäppchen"]
+
+    # --- TYPE: reel wenn Rabatt >= 30%, sonst post ---
+    discount_raw = str(final_output.get("discount_percent") or "").replace("-", "").replace("%", "").replace(",", ".").strip()
+    try:
+        discount_val = float(discount_raw)
+    except ValueError:
+        discount_val = 0.0
+    final_output["type"] = "reel" if discount_val >= 30.0 else "post"
+
     return final_output

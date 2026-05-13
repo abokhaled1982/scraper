@@ -24,6 +24,10 @@ _ready_clients: Set[WebSocketServerProtocol] = set()  # Handshake completed
 _server_loop: asyncio.AbstractEventLoop | None = None
 _server_thread: threading.Thread | None        = None
 
+# ── Pending-Task-Result (one post at a time) ───────────────────────────────
+_pending_result_event: asyncio.Event | None = None
+_pending_result_data:  dict | None          = None
+
 # ── Logger ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -64,7 +68,13 @@ async def _handle(ws: WebSocketServerProtocol):
                 pass  # heartbeat response, ignore
 
             elif mtype == "task_result":
-                logger.info(f"📋 Task-Ergebnis von Addon: {msg}")
+                global _pending_result_event, _pending_result_data
+                success = msg.get("success", False)
+                error   = msg.get("error", "–")
+                logger.info(f"📋 Task-Ergebnis: success={success} error={error}")
+                if _pending_result_event and not _pending_result_event.is_set():
+                    _pending_result_data = msg
+                    _pending_result_event.set()
 
             else:
                 logger.debug(f"Unbekannte Nachricht von {addr}: {mtype}")
@@ -241,52 +251,44 @@ async def send_post(data: dict, local_image_path=None, local_video_path=None) ->
         logger.info(f"🎥 Video geladen ({len(b64 or '') // 1024} KB)")
 
     if _server_loop and _server_loop.is_running():
-        future = asyncio.run_coroutine_threadsafe(_do_send(payload), _server_loop)
-        return future.result(timeout=30)
+        # Reels brauchen deutlich länger — 30 min für Videos, 10 min für Posts
+        wait_timeout = 1800.0 if local_video_path else 600.0
+        future = asyncio.run_coroutine_threadsafe(
+            _do_send_and_wait(payload, timeout=wait_timeout), _server_loop
+        )
+        try:
+            return future.result(timeout=wait_timeout + 30)
+        except Exception as e:
+            logger.error(f"send_post Fehler: {e}")
+            return False
 
     logger.error("WS-Server-Loop nicht verfügbar.")
     return False
 
 
-async def _handle(ws: WebSocketServerProtocol):
-    _clients.add(ws)
-    print(f"[FACEBOOK] ✅ Chrome Extension verbunden! ({ws.remote_address})")
+async def _do_send_and_wait(payload: dict, timeout: float = 180.0) -> bool:
+    """Sendet Payload an Addon und wartet auf tatsächliche Fertig-Bestätigung."""
+    global _pending_result_event, _pending_result_data
+    _pending_result_event = asyncio.Event()
+    _pending_result_data  = None
     try:
-        async for _ in ws:
-            pass
-    except websockets.exceptions.ConnectionClosed:
-        pass
+        sent = await _do_send(payload)
+        if not sent:
+            return False
+        ptype = payload.get("type", "post")
+        logger.info(f"⏳ Warte auf Addon-Bestätigung für {ptype} (max. {int(timeout)}s)...")
+        await asyncio.wait_for(_pending_result_event.wait(), timeout=timeout)
+        success = bool((_pending_result_data or {}).get("success", False))
+        if success:
+            logger.info("✅ Addon-Bestätigung: Post/Reel erfolgreich gepostet.")
+        else:
+            err = (_pending_result_data or {}).get("error", "unbekannt")
+            logger.warning(f"⚠️ Addon-Bestätigung: Fehler – {err}")
+        return success
+    except asyncio.TimeoutError:
+        logger.error(f"⏰ Timeout: Kein Ergebnis vom Addon nach {int(timeout)}s")
+        return False
     finally:
-        _clients.discard(ws)
-        print(f"[FACEBOOK] ❌ Extension getrennt ({ws.remote_address})")
-
-
-async def _heartbeat():
-    while True:
-        await asyncio.sleep(15)
-        if _clients:
-            dead = set()
-            for ws in list(_clients):
-                try:
-                    await ws.send(json.dumps({"type": "ping"}))
-                except Exception:
-                    dead.add(ws)
-            _clients.difference_update(dead)
-
-
-async def _run_server():
-    async with websockets.serve(_handle, HOST, PORT, max_size=None):
-        print(f"[FACEBOOK] ✅ WebSocket-Server läuft auf ws://{HOST}:{PORT}")
-        asyncio.create_task(_heartbeat())
-        await asyncio.Future()
-
-
-def _thread_main():
-    global _server_loop
-    _server_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(_server_loop)
-    try:
-        _server_loop.run_until_complete(_run_server())
-    finally:
-        _server_loop.close()
+        _pending_result_event = None
+        _pending_result_data  = None
 

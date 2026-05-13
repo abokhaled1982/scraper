@@ -71,9 +71,12 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set, fb_service
         images    = data.get("images") or []
         image_url = data.get("image_url") or (images[0] if images else None)
         local_img = download_image(image_url, product_id)
-        await fb_service.send_post(data, local_img)
+        success = await fb_service.send_post(data, local_img)
+        if not success:
+            print(f"[WARN] ⚠️ send_post hat Fehler/Timeout zurückgemeldet für {product_id}. Datei bleibt in queue/.")
+            return False
         sent_ids.add(product_id)
-        # Deal-JSON nach sent/ verschieben
+        # Deal-JSON nach sent/ verschieben — NUR wenn wirklich erfolgreich gepostet
         dest = DEALS_SENT_DIR / full_path.name
         full_path.rename(dest)
         print(f"[DONE] ✅ Deal gepostet und nach sent/ verschoben: {product_id}")

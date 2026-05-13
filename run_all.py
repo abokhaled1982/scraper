@@ -84,7 +84,6 @@ def _ensure_dirs():
     from config import ensure_directories
     ensure_directories()
     (HERE / SESSION_DIR).mkdir(parents=True, exist_ok=True)
-    (HERE / "assets").mkdir(parents=True, exist_ok=True)
 
 async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
     print(f"[supervisor] spawn {name}: {' '.join(argv)}")

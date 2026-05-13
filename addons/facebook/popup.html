@@ -3,207 +3,320 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      width: 340px;
-      min-height: 420px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 12px;
-      background: #0f1117;
-      color: #e0e0e0;
+      background: #0d0f18;
+      color: #d8dae8;
+      overflow-x: hidden;
     }
 
     /* ── Header ── */
     .header {
-      background: linear-gradient(135deg, #1877f2 0%, #0a5ac0 100%);
-      padding: 12px 14px 10px;
+      background: linear-gradient(135deg, #1877f2 0%, #0a4fc4 100%);
+      padding: 11px 14px 10px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      box-shadow: 0 2px 8px rgba(24,119,242,0.35);
+    }
+    .header-icon { font-size: 18px; line-height: 1; }
+    .header-title { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.2px; }
+    .header-sub   { font-size: 10px; color: rgba(255,255,255,0.55); margin-top: 1px; }
+    .header-ver   { font-size: 10px; color: rgba(255,255,255,0.45); margin-left: auto; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 10px; }
+
+    /* ── State Hero ── */
+    .state-hero {
+      margin: 10px 10px 0;
+      border-radius: 10px;
+      background: #161925;
+      border: 1px solid #252839;
+      padding: 10px 12px;
       display: flex;
       align-items: center;
       gap: 10px;
     }
-    .header-icon { font-size: 20px; }
-    .header-title { font-size: 14px; font-weight: 700; color: #fff; }
-    .header-ver { font-size: 10px; color: rgba(255,255,255,0.6); margin-left: auto; }
-
-    /* ── Status Card ── */
-    .status-card {
-      margin: 10px;
-      border-radius: 8px;
-      background: #1a1d27;
-      border: 1px solid #2a2d3e;
-      overflow: hidden;
-    }
-    .status-row {
-      display: flex;
-      align-items: center;
-      padding: 8px 12px;
-      gap: 8px;
-      border-bottom: 1px solid #2a2d3e;
-    }
-    .status-row:last-child { border-bottom: none; }
-    .status-label {
-      color: #888;
-      width: 70px;
-      flex-shrink: 0;
-      font-size: 11px;
-    }
-    .status-value { font-size: 11px; font-weight: 500; flex: 1; }
-
-    /* ── State Badge ── */
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 2px 8px;
+      padding: 3px 10px;
       border-radius: 20px;
       font-size: 11px;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
     }
     .badge .dot {
       width: 7px; height: 7px;
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .badge.disconnected { background: #2a2020; color: #f44; }
-    .badge.disconnected .dot { background: #f44; }
-    .badge.connecting   { background: #2a2515; color: #fa0; }
-    .badge.connecting .dot { background: #fa0; animation: pulse 1s infinite; }
-    .badge.handshake    { background: #2a2515; color: #fa0; }
-    .badge.handshake .dot { background: #fa0; animation: pulse 0.6s infinite; }
-    .badge.ready        { background: #152a1e; color: #4caf50; }
-    .badge.ready .dot   { background: #4caf50; }
-    .badge.busy         { background: #1a1f35; color: #64b5f6; }
-    .badge.busy .dot    { background: #64b5f6; animation: pulse 0.4s infinite; }
-    .badge.error        { background: #2a1515; color: #f44; }
-    .badge.error .dot   { background: #f44; }
+    .badge.disconnected { background: #2b1a1a; color: #f55; }
+    .badge.disconnected .dot { background: #f55; }
+    .badge.connecting   { background: #2a2010; color: #ffb300; }
+    .badge.connecting .dot { background: #ffb300; animation: pulse 1s infinite; }
+    .badge.handshake    { background: #2a2010; color: #ffb300; }
+    .badge.handshake .dot { background: #ffb300; animation: pulse 0.6s infinite; }
+    .badge.ready        { background: #0f2518; color: #4cde7a; }
+    .badge.ready .dot   { background: #4cde7a; }
+    .badge.busy         { background: #101a30; color: #5aabff; }
+    .badge.busy .dot    { background: #5aabff; animation: pulse 0.45s infinite; }
+    .badge.error        { background: #2b1010; color: #f55; }
+    .badge.error .dot   { background: #f55; animation: pulse 0.8s infinite; }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.3; }
+    .state-meta { flex: 1; min-width: 0; }
+    .state-activity {
+      font-size: 11px;
+      color: #8b90a8;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .state-activity.active { color: #5aabff; }
+
+    /* ── Progress Bar ── */
+    .progress-wrap {
+      margin: 8px 10px 0;
+      height: 4px;
+      background: #1e2130;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      border-radius: 4px;
+      background: #5aabff;
+      width: 0%;
+      transition: width 0.5s ease;
+    }
+    .progress-bar.indeterminate {
+      animation: indeterminate 1.4s ease-in-out infinite;
+      width: 40%;
+    }
+    .progress-bar.done    { background: #4cde7a; width: 100%; }
+    .progress-bar.failed  { background: #f55; width: 100%; }
+    .progress-bar.hidden  { display: none; }
+
+    @keyframes indeterminate {
+      0%   { transform: translateX(-150%); }
+      100% { transform: translateX(350%); }
     }
 
-    /* ── Activity Bar ── */
-    .activity-bar {
-      margin: 0 10px 10px;
-      background: #1a1d27;
-      border: 1px solid #2a2d3e;
-      border-radius: 8px;
+    /* ── Steps ── */
+    .steps-panel {
+      margin: 8px 10px 0;
+      background: #161925;
+      border: 1px solid #252839;
+      border-radius: 10px;
       padding: 8px 12px;
-      min-height: 32px;
+      display: none;
+    }
+    .steps-panel.visible { display: block; }
+    .steps-title {
+      font-size: 10px;
+      color: #555b7a;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 6px;
+    }
+    .steps-list { display: flex; flex-direction: column; gap: 4px; }
+    .step {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
+      font-size: 11px;
+      color: #555b7a;
+      transition: color 0.2s;
     }
-    .activity-icon { font-size: 14px; }
-    .activity-text { font-size: 11px; color: #aaa; flex: 1; }
-    .activity-text.active { color: #64b5f6; }
+    .step .step-icon { font-size: 11px; width: 14px; text-align: center; flex-shrink: 0; }
+    .step.done    { color: #4cde7a; }
+    .step.active  { color: #d8dae8; font-weight: 600; }
+    .step.failed  { color: #f55; }
+
+    /* ── Last Result ── */
+    .last-result {
+      margin: 8px 10px 0;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+    .last-result.success { background: #0f2518; border: 1px solid #1d4a2e; color: #4cde7a; display: flex; }
+    .last-result.failure { background: #2b1010; border: 1px solid #4a1a1a; color: #f77; display: flex; }
+    .last-result-icon { font-size: 13px; }
+    .last-result-text { flex: 1; }
+    .last-result-time { color: #5a6080; font-size: 10px; }
+
+    /* ── Info Rows ── */
+    .info-rows {
+      margin: 8px 10px 0;
+      background: #161925;
+      border: 1px solid #252839;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .info-row {
+      display: flex;
+      align-items: center;
+      padding: 7px 12px;
+      gap: 8px;
+      border-bottom: 1px solid #1e2130;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: #555b7a; width: 64px; flex-shrink: 0; font-size: 10.5px; }
+    .info-value { font-size: 10.5px; font-weight: 500; flex: 1; color: #9ba0bc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .info-value.highlight { color: #ffb300; font-weight: 700; }
 
     /* ── Log Panel ── */
     .log-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 5px 12px 4px;
-      background: #1a1d27;
-      border-top: 1px solid #2a2d3e;
+      padding: 6px 12px 5px;
+      margin-top: 8px;
+      background: #161925;
+      border-top: 1px solid #252839;
+      border-bottom: 1px solid #1e2130;
     }
-    .log-header span { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
-    .log-clear { font-size: 10px; color: #555; cursor: pointer; }
-    .log-clear:hover { color: #888; }
+    .log-header-title { font-size: 10px; color: #555b7a; text-transform: uppercase; letter-spacing: 0.6px; }
+    .log-clear {
+      font-size: 10px;
+      color: #454a66;
+      cursor: pointer;
+      padding: 1px 6px;
+      border-radius: 4px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .log-clear:hover { background: #252839; color: #8b90a8; }
     .log-panel {
-      height: 140px;
+      height: 130px;
       overflow-y: auto;
-      padding: 4px 0;
-      background: #0f1117;
+      padding: 3px 0 2px;
+      background: #0d0f18;
     }
+    .log-panel::-webkit-scrollbar { width: 4px; }
+    .log-panel::-webkit-scrollbar-track { background: transparent; }
+    .log-panel::-webkit-scrollbar-thumb { background: #252839; border-radius: 4px; }
     .log-entry {
       display: flex;
       align-items: baseline;
       gap: 6px;
       padding: 2px 12px;
       font-size: 10px;
-      line-height: 1.5;
-      border-bottom: 1px solid #16181f;
+      line-height: 1.55;
+      border-bottom: 1px solid #12141e;
     }
     .log-entry:last-child { border-bottom: none; }
-    .log-ts   { color: #444; flex-shrink: 0; }
-    .log-msg  { flex: 1; word-break: break-all; }
-    .log-msg.info  { color: #bbb; }
-    .log-msg.ok    { color: #4caf50; }
-    .log-msg.warn  { color: #ffa726; }
-    .log-msg.error { color: #ef5350; }
+    .log-ts  { color: #3a3f57; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .log-msg { flex: 1; word-break: break-word; }
+    .log-msg.info  { color: #8b90a8; }
+    .log-msg.ok    { color: #4cde7a; }
+    .log-msg.warn  { color: #ffb300; }
+    .log-msg.error { color: #ff5252; }
 
     /* ── Footer ── */
     .footer {
       padding: 8px 10px;
-      background: #1a1d27;
-      border-top: 1px solid #2a2d3e;
+      background: #161925;
+      border-top: 1px solid #252839;
       display: flex;
-      gap: 8px;
+      gap: 6px;
+      margin-top: 8px;
     }
     .btn {
       flex: 1;
-      padding: 6px;
+      padding: 7px 4px;
       border: none;
-      border-radius: 6px;
+      border-radius: 7px;
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s, transform 0.1s;
     }
-    .btn:hover { opacity: 0.85; }
+    .btn:hover  { opacity: 0.88; }
+    .btn:active { transform: scale(0.97); }
     .btn-primary { background: #1877f2; color: #fff; }
-    .btn-danger  { background: #c0392b; color: #fff; }
-    .btn-neutral { background: #2a2d3e; color: #aaa; }
+    .btn-neutral { background: #252839; color: #8b90a8; }
+    .btn-danger  { background: #8b1a1a; color: #ffaaaa; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.25; }
+    }
   </style>
 </head>
 <body>
 
+  <!-- Header -->
   <div class="header">
     <span class="header-icon">🤖</span>
     <div>
       <div class="header-title">FB Deal Bot</div>
+      <div class="header-sub">Automation Agent</div>
     </div>
     <span class="header-ver">v3.2</span>
   </div>
 
-  <!-- Status Card -->
-  <div class="status-card">
-    <div class="status-row">
-      <span class="status-label">Status</span>
-      <span id="stateBadge" class="badge disconnected">
-        <span class="dot"></span>
-        <span id="stateText">Getrennt</span>
-      </span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Server</span>
-      <span class="status-value" id="wsUrl">ws://localhost:8080</span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Puffer</span>
-      <span class="status-value" id="pendingCount">0 Nachrichten</span>
+  <!-- State Hero -->
+  <div class="state-hero">
+    <span id="stateBadge" class="badge disconnected">
+      <span class="dot"></span>
+      <span id="stateText">Getrennt</span>
+    </span>
+    <div class="state-meta">
+      <div id="activityText" class="state-activity">Warte auf Verbindung...</div>
     </div>
   </div>
 
-  <!-- Activity -->
-  <div class="activity-bar">
-    <span class="activity-icon" id="activityIcon">💤</span>
-    <span class="activity-text" id="activityText">Warte auf Verbindung...</span>
+  <!-- Progress Bar -->
+  <div class="progress-wrap">
+    <div class="progress-bar hidden" id="progressBar"></div>
+  </div>
+
+  <!-- Steps Panel (visible when busy) -->
+  <div class="steps-panel" id="stepsPanel">
+    <div class="steps-title">Fortschritt</div>
+    <div class="steps-list" id="stepsList"></div>
+  </div>
+
+  <!-- Last Result -->
+  <div class="last-result" id="lastResult">
+    <span class="last-result-icon" id="lastResultIcon"></span>
+    <span class="last-result-text" id="lastResultText"></span>
+    <span class="last-result-time" id="lastResultTime"></span>
+  </div>
+
+  <!-- Info Rows -->
+  <div class="info-rows">
+    <div class="info-row">
+      <span class="info-label">Server</span>
+      <span class="info-value" id="wsUrl">ws://localhost:8080</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Puffer</span>
+      <span class="info-value" id="pendingCount">–</span>
+    </div>
   </div>
 
   <!-- Log Panel -->
   <div class="log-header">
-    <span>Live Log</span>
+    <span class="log-header-title">Live Log</span>
     <span class="log-clear" id="clearLog">löschen</span>
   </div>
   <div class="log-panel" id="logPanel"></div>
 
   <!-- Footer -->
   <div class="footer">
-    <button class="btn btn-primary" id="goToPageBtn">📍 Profil öffnen</button>
+    <button class="btn btn-primary" id="goToPageBtn">📍 Profil</button>
     <button class="btn btn-neutral" id="refreshBtn">🔄 Refresh</button>
+    <button class="btn btn-danger"  id="clearLogBtn">🗑 Log</button>
   </div>
 
   <script src="popup.js"></script>
