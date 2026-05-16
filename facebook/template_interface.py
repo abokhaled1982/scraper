@@ -141,7 +141,7 @@ def _build_reel_type_modifications(
         fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
     )
 
-    caption_text = _extract_caption_text(deal_data, discount_text)
+    caption_text = _extract_caption_text(deal_data, rabatt_text)
 
     modifications: dict[str, Any] = {
         "Call to Action.text": cta_text,
@@ -210,7 +210,7 @@ def _build_offer_type_modifications(
         fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
     )
 
-    caption_text = _extract_caption_text(deal_data, discount_text)
+    caption_text = _extract_caption_text(deal_data, rabatt_text)
 
     modifications = {
         "Product-Image.source": first_image,
@@ -242,19 +242,21 @@ def _truncate_for_reel(text: str, max_chars: int = 22) -> str:
     return truncated.rstrip(",.;:") + "..."
 
 
-def _extract_caption_text(payload: dict[str, Any], discount_text: str) -> str:
-    """Baut den Caption-Text für das Reel-Template."""
+def _extract_caption_text(payload: dict[str, Any], rabatt_text: str) -> str:
+    """Caption-Text für das Reel-Display.
+
+    Priorität:
+    1. reel_caption – vom LLM fertig formatiert (mit Emojis, Coupon, Zeilenumbrüchen)
+    2. Einfacher Fallback aus rabatt_text + optionalem Couponcode
+    """
     existing = _first_present_str(payload, ["reel_caption"], fallback="N/A")
     if existing != "N/A":
         return existing
 
-    # Fallback: aus Rabatt-Info aufbauen
-    if discount_text and discount_text not in ("-0%", "N/A", ""):
-        caption = f"Sale Alert {discount_text} 🔥"
-    else:
-        caption = "Discount Alert 🔥"
+    # Fallback: rabatt_text als Basis
+    caption = rabatt_text if rabatt_text and rabatt_text not in ("Top Angebot", "") else "🔥 Deal Alert"
 
-    # Gutscheincode aus verschachteltem coupon-Dict oder flachem Feld lesen
+    # Gutscheincode anhängen
     coupon_raw = payload.get("coupon") or {}
     coupon_code = ""
     if isinstance(coupon_raw, dict):

@@ -95,7 +95,14 @@ def render_template(template_id: str, modifications: dict) -> dict:
                 raise ValueError(f"Render fehlgeschlagen: {status_data.get('error', status_data)}")
             time.sleep(5)
     except requests.RequestException as e:
-        raise Exception(f"Creatomate API-Fehler: {e}")
+        # Bei HTTP-Fehlern: Body mit ausgeben, damit Creatomate-Validierungsfehler sichtbar sind
+        body = ""
+        try:
+            if response is not None:
+                body = response.text[:800]
+        except Exception:
+            pass
+        raise Exception(f"Creatomate API-Fehler: {e}" + (f" | Body: {body}" if body else ""))
 
 
 def render_reel(modifications: dict, template_id: str | None = None) -> dict:

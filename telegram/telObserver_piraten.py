@@ -304,7 +304,7 @@ async def handle_message(evt: events.NewMessage.Event):
 # ------------------------
 # Main Loop
 # ------------------------
-CATCHUP_MESSAGES = int(os.getenv("PIRATEN_CATCHUP", "30"))  # letzte N Nachrichten beim Start nachholen
+CATCHUP_MESSAGES = int(os.getenv("PIRATEN_CATCHUP", "0"))  # 0 = nur zukünftige Nachrichten verarbeiten
 
 async def _amain():
     print(f"🏴‍☠️ Starte Piraten-Observer Session: {PIRATEN_SESSION_NAME}")

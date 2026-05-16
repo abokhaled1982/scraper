@@ -13,7 +13,7 @@ HERE         = pathlib.Path(__file__).resolve().parent.parent
 CHECK_INTERVAL_SECS = 30
 MIN_WAIT_SECS       = 250
 MAX_WAIT_SECS       = 500
-DEFAULT_REEL_TEMPLATE_TYPE = "offer_type1"
+DEFAULT_REEL_TEMPLATE_TYPE = "offer_type2"
 
 sys.path.insert(0, str(HERE))
 from config import DEALS_QUEUE_DIR, SENT_IDS_PATH
@@ -107,26 +107,30 @@ async def route_single_deal(file: pathlib.Path, sent_ids: set, fb_service) -> bo
 
 
 async def run_batch_phase(sent_ids: set, fb_service) -> None:
-    print("\n2️⃣  [BATCH] Prüfe Rückstand...")
-    candidates = get_candidates(sent_ids)
-    if not candidates:
-        print("✅ [BATCH] Kein Rückstand vorhanden.")
-        return
-    total = len(candidates)
-    print(f"📦 [START] Starte Abarbeitung von {total} Deals.")
-    for i, file in enumerate(candidates):
-        num      = i + 1
-        was_sent = await route_single_deal(file, sent_ids, fb_service)
-        if was_sent:
-            save_sent_ids(sent_ids)
-            print_status_block(num, total, "BATCH")
-            if num < total:
-                await safety_wait()
-            else:
-                print("🏁 [BATCH] Letzter Deal fertig!")
-        else:
-            print(f"[SKIP] {file.name} übersprungen/gelöscht.")
-    print("✅ [BATCH] Rückstand komplett erledigt.")
+    """Observer-Modus: bestehende Queue-Dateien werden NICHT verarbeitet.
+
+    Stattdessen werden alle bereits beim Start vorhandenen Dateien als
+    'baseline' in sent_ids aufgenommen, damit nur künftig neu eintreffende
+    Deals verarbeitet werden.
+    """
+    print("\n2️⃣  [BASELINE] Markiere bestehende Queue-Dateien als ignoriert...")
+    try:
+        existing = [p for p in WATCH_FOLDER.iterdir() if p.suffix == ".json"]
+    except Exception as e:
+        print(f"[BASELINE] Fehler beim Lesen: {e}")
+        existing = []
+
+    added = 0
+    for p in existing:
+        if p.stem not in sent_ids:
+            sent_ids.add(p.stem)
+            added += 1
+
+    if added:
+        save_sent_ids(sent_ids)
+        print(f"✅ [BASELINE] {added} bestehende Deals übersprungen (nur neue werden verarbeitet).")
+    else:
+        print("✅ [BASELINE] Keine alten Deals in der Queue.")
 
 
 async def run_watch_loop(sent_ids: set, fb_service) -> None:

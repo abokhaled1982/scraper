@@ -74,7 +74,7 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             print(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
             local_video = existing_video
         else:
-            template_type, template_id = resolve_template_selection(data, default_template_type="offer_type1")
+            template_type, template_id = resolve_template_selection(data, default_template_type="offer_type2")
             modifications = build_modifications_for_template(
                 data,
                 template_type=template_type,

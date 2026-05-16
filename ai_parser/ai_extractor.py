@@ -144,21 +144,24 @@ class Produktinformation(BaseModel):
 
     reel_caption: str = Field(
         description=(
-            "GEKÜRZTER Rabatt-Text AUSSCHLIESSLICH für das kleine Caption-Label im Reel-Video. "
-            "ABLEITUNG: Nimm den 'rabatt_text' und kürze ihn auf MAXIMAL 25 ZEICHEN. "
-            "REGELN:\n"
-            "- Behalte das/die GLEICHEN Emojis wie in 'rabatt_text' (NIEMALS weglassen oder ersetzen). "
-            "- Kürze den Text intelligent: Emoji + Kernaussage (Betrag oder %). "
-            "- Kürze NIEMALS mitten im Wort. "
-            "- Kein Zeilenumbruch, keine zusätzlichen Infos. "
-            "BEISPIELE (rabatt_text -> reel_caption):\n"
-            "  '🔥 MEGA-DEAL! Ganze 105,80 € gespart!' -> '🔥 105,80 € gespart!'\n"
-            "  '🎁 Satte 110,02 € gespart!' -> '🎁 110,02 € gespart!'\n"
-            "  '✅ Kleiner Rabatt, guter Preis!' -> '✅ Guter Preis!'\n"
-            "  '🚨 Tiefstpreis-Alarm, Unschlagbar! 💥' -> '🚨 Tiefstpreis! 💥'\n"
-            "Gib NUR den fertigen Caption-Text zurück, keine Erklärung."
+            "Caption AUSSCHLIESSLICH für das Reel-Video (9:16 Hochformat, sehr schmale Anzeigefläche). "
+            "INHALT: Identische Botschaft wie 'rabatt_text' (gleicher Preisvorteil, absoluter Euro-Rabatt, "
+            "passendes Emoji am Anfang nach derselben Logik: MEGA-DEAL >40% 🔥/🚨 | SOLIDER DEAL 20-40% 🎁 🔑 💸 | "
+            "KLEINER RABATT <20% ✅ 📧 📦 | Kein Rabatt: '🚨 Tiefstpreis-Alarm, Unschlagbar! 💥'). "
+            "Den 'akt_preis' NICHT wiederholen.\n\n"
+            "FORMATIERUNGS-REGELN (PFLICHT — du formatierst das selbst, NICHT der Code):\n"
+            "- Verwende ECHTE Zeilenumbrüche (\\n im JSON-String) für eine gut lesbare, mehrzeilige Darstellung.\n"
+            "- MAX. 3 ZEILEN, jede Zeile MAX. ~22 Zeichen (das Reel-Bild ist schmal).\n"
+            "- Zeile 1: Emoji + Hauptbotschaft (z.B. '🔥 Mega-Deal!').\n"
+            "- Zeile 2: Konkreter Vorteil/Ersparnis in Euro (z.B. 'Spare 120 € sofort').\n"
+            "- Zeile 3 (NUR wenn Gutschein vorhanden): 'Code: XYZ123' — den Wert aus 'gutschein_code' nehmen, "
+            "  NIEMALS 'N/A' anzeigen. Ohne Gutschein diese Zeile komplett weglassen.\n"
+            "- KEINE überlangen Zeilen, KEINE Hashtags, KEINE URLs.\n"
+            "- KEIN literales '\\n' als Text — verwende den JSON-Newline-Escape, sodass im geparsten Wert "
+            "  echte Zeilenumbrüche stehen."
         )
     )
+
 
     hashtags: list[str] = Field(
         description=(
