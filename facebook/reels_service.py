@@ -27,7 +27,9 @@ def render_template(template_id: str, modifications: dict) -> dict:
     """
     data = {
         "template_id": template_id,
-        "modifications": modifications
+        "modifications": modifications,
+        "width": 1080,
+        "height": 1920,
     }
     try:
         print("🚀 Starte Creatomate Render...")

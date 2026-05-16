@@ -121,7 +121,8 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             if video_candidates:
                 video_path = video_candidates[0]
                 thumb = local_img if local_img else None
-                success = ig_service.post_reel(video_path, caption, thumb)
+                media_id = ig_service.post_reel(video_path, caption, thumb)
+                success = bool(media_id)
             else:
                 print(f"[IG-PROCESS] ⚠️ Kein Video für Reel {product_id} gefunden – überspringe.")
                 return False
@@ -130,13 +131,11 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             print(f"[IG-WARN] ⚠️ Upload fehlgeschlagen für {product_id}. Datei bleibt in queue/.")
             return False
 
-        # Affiliate-Link als erster Kommentar posten
-        if offer_url and ig_service._client:
+        # Bio-Link + Kommentar mit Affiliate-Link
+        if offer_url and media_id:
+            ig_service.update_bio_link(offer_url)
             try:
-                cl = ig_service._client
-                last_media = cl.user_medias_v1(cl.user_id, amount=1)
-                if last_media:
-                    ig_service.post_comment(str(last_media[0].id), f"🔗 Zum Angebot: {offer_url}")
+                ig_service.post_comment(media_id, f"🔗 Zum Angebot: {offer_url}")
             except Exception as e:
                 print(f"[IG-COMMENT] Konnte Kommentar nicht posten: {e}")
 

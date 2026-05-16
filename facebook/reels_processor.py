@@ -111,18 +111,17 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
                 ig_caption = create_ig_caption(data)
                 video_path = pathlib.Path(local_video) if local_video else None
                 if video_path and video_path.exists():
-                    ig_ok = ig_service.post_reel(video_path, ig_caption)
-                    if ig_ok:
+                    media_id = ig_service.post_reel(video_path, ig_caption)
+                    if media_id:
                         print(f"[INSTAGRAM] ✅ Reel auch auf Instagram gepostet: {product_id}")
-                        # Affiliate-Link als Kommentar
+                        # Affiliate-Link als Kommentar + Bio-Link aktualisieren
                         offer_url = str(data.get("affiliate_url") or data.get("url") or "").strip()
                         if offer_url and offer_url not in ("N/A", "null", ""):
+                            # Bio-Link auf aktuelles Angebot setzen (klickbar!)
+                            ig_service.update_bio_link(offer_url)
+                            # Kommentar als Backup
                             try:
-                                # user_medias_v1 direkt – überspringt fehlerhafte GQL-Methode
-                                cl = ig_service._client
-                                last = cl.user_medias_v1(cl.user_id, amount=1)
-                                if last:
-                                    ig_service.post_comment(str(last[0].id), f"🔗 Zum Angebot: {offer_url}")
+                                ig_service.post_comment(media_id, f"🔗 Zum Angebot: {offer_url}")
                             except Exception as ce:
                                 print(f"[INSTAGRAM] ⚠️ Kommentar fehlgeschlagen: {ce}")
                     else:
