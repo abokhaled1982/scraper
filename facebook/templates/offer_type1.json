@@ -1,6 +1,7 @@
 {
   "template_type": "offer_type1",
   "template_id": "a39e2efb-e7b6-43ca-ad09-524ef8ba91ac",
+  "api_key": "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f",
   "kind": "offer",
   "image_fit": "contain",
   "description": "Single product offer template using Product-Image/Product-Name/Product-Description and price fields."
