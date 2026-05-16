@@ -1,0 +1,9 @@
+{
+  "template_type": "offer_type2",
+  "template_id": "65d0c5db-a2a1-40b6-8240-0d1b68c0a706",
+  "kind": "offer",
+  "image_fit": "contain",
+  "default_website": "www.dealsboss.de",
+  "default_cta": "Folgt uns für mehr Rabatte!",
+  "description": "Single product offer with Caption, Website and CTA fields."
+}

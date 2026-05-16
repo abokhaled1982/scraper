@@ -133,12 +133,12 @@ def _build_reel_type_modifications(
     cta_text = _first_present_str(
         deal_data,
         ["cta_text", "cta", "call_to_action"],
-        fallback="Folgt uns fuer mehr Rabattaktionen!",
+        fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
     website_text = _first_present_str(
         deal_data,
         ["website_text", "website", "domain"],
-        fallback="www.deealsboss.de",
+        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
     )
 
     caption_text = _extract_caption_text(deal_data, discount_text)
@@ -202,12 +202,12 @@ def _build_offer_type_modifications(
     cta_text = _first_present_str(
         deal_data,
         ["cta_text", "cta", "call_to_action"],
-        fallback="Folgt uns fuer mehr Rabattaktionen!",
+        fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
     website_text = _first_present_str(
         deal_data,
         ["website_text", "website", "domain"],
-        fallback="www.deealsboss.de",
+        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
     )
 
     caption_text = _extract_caption_text(deal_data, discount_text)

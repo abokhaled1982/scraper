@@ -170,13 +170,8 @@ async def _run_full():
     # 1. Telegram Login
     await do_telegram_login_check()
 
-    # 2. Instagram Session prüfen (wie Telegram – interaktiv wenn nötig)
-    from instagram.ig_login import ensure_ig_session
-    ig_session_ok = ensure_ig_session()   # blockiert kurz im Terminal wenn Login nötig
-    if ig_session_ok:
-        print("[supervisor] ✅ Instagram-Session bereit.\n")
-    else:
-        print("[supervisor] ⚠️  Instagram-Login fehlgeschlagen – ig_watcher wird nicht gestartet.\n")
+    # 2. Instagram deaktiviert
+    ig_session_ok = False  # Instagram ist deaktiviert
 
     # 3. Alle Services starten
     ws_server      = await spawn("ws_server",      PY, str(AMAZON / "ws_server.py"))
@@ -184,7 +179,7 @@ async def _run_full():
     product_opener = await spawn("product_opener", PY, str(AMAZON / "product_opener.py"))
     product_parser = await spawn("product_parser", PY, str(AMAZON / "product_parser.py"))
     fb_watcher     = await spawn("fb_watcher",     PY, "-m", "facebook.fb_watcher")
-    ig_watcher     = await spawn("ig_watcher",     PY, "-m", "instagram.ig_watcher") if ig_session_ok else None
+    ig_watcher     = None  # Instagram deaktiviert
     tel_router     = await spawn("telegram_router",   PY, "-m", "telegram.telRouter")
     tel_observer   = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
     tel_sender     = await spawn("telegram_sender",   PY, "-m", "telegram.telSender")
