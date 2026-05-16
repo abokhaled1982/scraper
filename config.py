@@ -67,7 +67,7 @@ def ensure_directories() -> None:
     for p in [
         DEALS_QUEUE_DIR, DEALS_SENT_DIR, DEALS_FAILED_DIR,
         IMAGES_DIR, VIDEOS_QUEUE_DIR, VIDEOS_SENT_DIR,
-        STATE_DIR, INBOX_DIR, FAILED_DIR, PRODUCKT_DIR,
+        STATE_DIR,
     ]:
         p.mkdir(parents=True, exist_ok=True)
     print(

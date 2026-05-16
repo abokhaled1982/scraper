@@ -34,7 +34,6 @@ def _sha1_bytes(b: bytes) -> str:
    
 def move_to_failed(fp: Path, reason: str, FAILED_DIR: Path) -> None:
     """Verschiebt die Quelldatei und den Fehlergrund in den Fehler-Ordner."""
-    FAILED_DIR.mkdir(parents=True, exist_ok=True)
     target = FAILED_DIR / f"{fp.name}.txt"
     try:
         with target.open("w", encoding="utf-8") as f:

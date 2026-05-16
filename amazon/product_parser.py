@@ -434,8 +434,5 @@ def daemon_loop(interval: int = INTERVAL_SECS) -> None:
 
 
 if __name__ == '__main__':
-    PRODUCKT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    FAILED_DIR.mkdir(parents=True, exist_ok=True)
-    
     daemon_loop()

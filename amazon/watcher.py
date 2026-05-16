@@ -15,8 +15,6 @@ def _pick_oldest_html(inbox: Path) -> Path | None:
     return files[0]
 
 def main():
-    INBOX_DIR.mkdir(parents=True, exist_ok=True)  
-
     print(f"[watcher] started. polling {INBOX_DIR} every {WATCH_INTERVAL_SECS}s")
     while True:
         try:
