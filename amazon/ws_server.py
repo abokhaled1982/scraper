@@ -160,6 +160,7 @@ async def handle(ws):
                 url = a.get("url", "unknown")
                 doc_type = a.get("docType")
                 out = choose_target_path(url, _id, doc_type)
+                out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(html, encoding="utf-8")
                 saved_ids.add(_id)
                 assemblies.pop(_id, None)
