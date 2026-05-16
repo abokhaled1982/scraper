@@ -243,7 +243,7 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
 # Message Handling (wie telObserver)
 # ------------------------
 def extract_links_from_msg(msg) -> list:
-    """Extrahiert alle URLs aus Text + Entity-URLs (versteckte Links)."""
+    """Extrahiert alle URLs aus Text, Entity-URLs und Inline-Button-URLs."""
     text = (msg.message or "").strip()
     url_pattern = re.compile(
         r'(https?://(?!t\.me/)[^\s<>"\'\)\]]+[^\s\.,;:!?\)\]\<>"\'])',
@@ -258,6 +258,19 @@ def extract_links_from_msg(msg) -> list:
             if url and not re.match(r'https?://t\.me/', url, re.I):
                 if url not in links:
                     links.append(url)
+
+    # Inline-Keyboard-Button-URLs (pirat.deals nutzt oft Buttons statt Text-Links)
+    if msg.reply_markup:
+        try:
+            for row in msg.reply_markup.rows:
+                for button in row.buttons:
+                    url = getattr(button, 'url', None)
+                    if url and not re.match(r'https?://t\.me/', url, re.I):
+                        if url not in links:
+                            links.append(url)
+        except Exception:
+            pass
+
     return links
 
 async def process_message_links(links: list, chat_name: str, log_preview: str = ""):
