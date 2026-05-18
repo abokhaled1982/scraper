@@ -8,7 +8,7 @@ import sys
 import requests
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from config import IMAGES_DIR, DEALS_SENT_DIR
+from config import IMAGES_DIR, DEALS_SENT_DIR, DEALS_FAILED_DIR
 
 HERE          = pathlib.Path(__file__).resolve().parent
 IMAGES_FOLDER = IMAGES_DIR
@@ -18,12 +18,40 @@ DOWNLOAD_HEADERS = {
 }
 
 
+def _is_empty(value) -> bool:
+    """Gibt True zurück wenn der Wert leer, 'N/A', 'null', '0', '0.00' o.ä. ist."""
+    if value is None:
+        return True
+    s = str(value).strip()
+    return s in ("", "N/A", "null", "none", "0", "0.00", "0.00 €", "0 €")
+
+
 def validate_deal_data(data: dict) -> dict:
     # Reel-Dateien werden vom Reels-Watcher behandelt, nicht hier
     if data.get("type") == "reel":
         return {"valid": False, "reason": "Typ ist 'reel' – wird vom Reels-Watcher verarbeitet", "discount": 0}
-    if not data.get("title") or not data.get("affiliate_url"):
-        return {"valid": False, "reason": "Daten unvollständig (Titel/URL fehlt)", "discount": 0}
+
+    # Titel-Check
+    title = str(data.get("title") or "").strip()
+    if not title or title.upper() == "N/A":
+        return {"valid": False, "reason": "Kein gültiger Titel vorhanden", "discount": 0}
+
+    # URL-Check
+    if not data.get("affiliate_url"):
+        return {"valid": False, "reason": "Affiliate-URL fehlt", "discount": 0}
+
+    # Preis-Check: 0.00, N/A oder fehlend → ungültig
+    price_raw = data.get("price") or {}
+    price_str = str(price_raw.get("raw") if isinstance(price_raw, dict) else price_raw).strip()
+    if _is_empty(price_str):
+        return {"valid": False, "reason": f"Kein gültiger Preis vorhanden ('{price_str}')", "discount": 0}
+
+    # Bild-Check: mindestens eine verwertbare Bild-URL
+    images     = data.get("images") or []
+    image_url  = data.get("image_url") or (images[0] if images else None)
+    if not image_url or not str(image_url).startswith("http"):
+        return {"valid": False, "reason": "Kein Bild vorhanden", "discount": 0}
+
     discount_value = 0.0
     raw_discount   = str(data.get("discount_percent") or "").strip()
     if raw_discount and raw_discount != "N/A":
@@ -65,7 +93,8 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set, fb_service
         validation = validate_deal_data(data)
         if not validation["valid"]:
             print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Verschiebe nach failed.")
-            full_path.rename(DEALS_SENT_DIR.parent / "failed" / full_path.name)
+            DEALS_FAILED_DIR.mkdir(parents=True, exist_ok=True)
+            full_path.rename(DEALS_FAILED_DIR / full_path.name)
             return False
         print(f"[PROCESS] 🚀 Guter Deal ({validation['discount']}%): {product_id}")
         images    = data.get("images") or []

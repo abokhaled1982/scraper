@@ -23,9 +23,36 @@ DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
 }
 
+def _is_empty(value) -> bool:
+    """Gibt True zurück wenn der Wert leer, 'N/A', 'null', '0', '0.00' o.ä. ist."""
+    if value is None:
+        return True
+    s = str(value).strip()
+    return s in ("", "N/A", "null", "none", "0", "0.00", "0.00 €", "0 €")
+
+
 def validate_deal_data(data: dict) -> dict:
-    if not data.get("title") or not data.get("affiliate_url"):
+    # Titel-Check
+    title = str(data.get("title") or "").strip()
+    if not title or title.upper() == "N/A":
+        return {"valid": False, "reason": "Kein gültiger Titel vorhanden", "discount": 0}
+
+    # URL-Check
+    if not data.get("affiliate_url"):
         return {"valid": False, "reason": "Daten unvollständig (Titel/URL fehlt)", "discount": 0}
+
+    # Preis-Check: 0.00, N/A oder fehlend → ungültig
+    price_raw = data.get("price") or {}
+    price_str = str(price_raw.get("raw") if isinstance(price_raw, dict) else price_raw).strip()
+    if _is_empty(price_str):
+        return {"valid": False, "reason": f"Kein gültiger Preis vorhanden ('{price_str}')", "discount": 0}
+
+    # Bild-Check: mindestens eine verwertbare Bild-URL
+    images    = data.get("images") or []
+    image_url = data.get("image_url") or (images[0] if images else None)
+    if not image_url or not str(image_url).startswith("http"):
+        return {"valid": False, "reason": "Kein Bild vorhanden", "discount": 0}
+
     discount_value = 0.0
     raw_discount   = str(data.get("discount_percent") or "").strip()
     if raw_discount and raw_discount != "N/A":
@@ -63,8 +90,9 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
 
         validation = validate_deal_data(data)
         if not validation["valid"]:
-            print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Lösche Datei.")
-            full_path.unlink(missing_ok=True)
+            print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Verschiebe nach failed.")
+            DEALS_FAILED_DIR.mkdir(parents=True, exist_ok=True)
+            full_path.rename(DEALS_FAILED_DIR / full_path.name)
             return False
         print(f"[PROCESS] 🚀 Guter Deal für Reels ({validation['discount']}%): {product_id}")
 
