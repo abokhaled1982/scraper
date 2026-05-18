@@ -44,19 +44,40 @@ def session_file_exists(cfg: LoginConfig) -> bool:
 
 # NEU: Helper zum Kanalbeitritt und Auflösen der Entity
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
-    invite_match = re.search(r"(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)", ref)
+    print(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
+
+    # 1. Privater Invite-Link (t.me/+... oder t.me/joinchat/...)
+    invite_match = re.search(r'(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)', ref)
     if invite_match:
         invite_hash = invite_match.group(1)
         try:
             await client(ImportChatInviteRequest(invite_hash))
-            # Keine Print-Ausgabe hier, die Clients machen das selbst, wenn sie es brauchen
+            print(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
         except UserAlreadyParticipantError:
-            pass
-        except Exception:
-            pass
-            
-    return await client.get_entity(ref)
+            print("ℹ️ Bereits Teilnehmer (Invite).")
+        except Exception as e:
+            print(f"⚠️ Invite via Hash fehlgeschlagen: {e}")
 
+    # 2. Öffentlicher Kanal: Username normalisieren → IMMER mit @
+    clean_ref = re.sub(r'https?://t\.me/', '@', ref).strip('/ ')
+    if not clean_ref.startswith('@') and not clean_ref.startswith('+'):
+        clean_ref = '@' + clean_ref
+
+    # 3. Erst beitreten, DANN Entity auflösen
+    try:
+        # Bei öffentlichen Kanälen: erst joinen
+        entity = await client.get_entity(clean_ref)
+        try:
+            await client(JoinChannelRequest(entity))
+            print(f"✅ Öffentlichem Kanal beigetreten: {clean_ref}")
+        except UserAlreadyParticipantError:
+            print("ℹ️ Bereits Teilnehmer.")
+        except Exception as e:
+            print(f"ℹ️ Join nicht nötig oder nicht möglich: {e}")
+        return entity
+    except Exception as e:
+        print(f"❌ Konnte {clean_ref} nicht auflösen: {e}")
+        raise
 
 async def ensure_both_sessions_sequential(
     router_cfg: LoginConfig,
