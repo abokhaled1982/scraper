@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from config import PRODUCKT_DIR, OUT_DIR, FAILED_DIR, INTERVAL_SECS, REGISTRY_PATH, SUMMARY_PATH
 
 # Importiere die fachlich getrennten Module
-from utils import (
+from amazon.utils import (
     _read_text,
     is_amazon_html,
     load_registry, 
@@ -52,11 +52,99 @@ def _get_base_url_path(url: str) -> str:
     except ValueError:
         return url_without_desc # Fehlerfall
 
+def _extract_ldjson_blocks(html_content: str) -> list[dict]:
+    """
+    Extrahiert alle gültigen LD+JSON-Blöcke aus dem HTML.
+    Gibt eine Liste von parsed JSON-Objekten zurück (niemals None).
+    """
+    soup = BeautifulSoup(html_content or "", 'lxml')
+    blocks = []
+    for tag in soup.find_all('script', {'type': 'application/ld+json'}):
+        try:
+            raw = tag.string or ""
+            data = json.loads(raw.strip())
+            # Normalisiere zu Liste (manche Seiten geben ein einzelnes Objekt zurück)
+            if isinstance(data, list):
+                blocks.extend(data)
+            elif isinstance(data, dict):
+                blocks.append(data)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return blocks
+
+
+def _find_product_ldjson(blocks: list[dict]) -> dict | None:
+    """
+    Sucht in einer Liste von LD+JSON-Blöcken nach dem ersten Produkt-Block.
+    Unterstützt @graph-Strukturen und direkte Product-Objekte.
+    """
+    all_nodes: list[dict] = []
+    for block in blocks:
+        # @graph auffalten
+        if "@graph" in block and isinstance(block["@graph"], list):
+            all_nodes.extend(block["@graph"])
+        else:
+            all_nodes.append(block)
+
+    for node in all_nodes:
+        typ = node.get("@type", "")
+        # @type kann ein String oder eine Liste sein
+        types = [typ] if isinstance(typ, str) else (typ if isinstance(typ, list) else [])
+        if any("Product" in t for t in types):
+            return node
+    return None
+
+
+def _extract_image_from_ldjson_product(product_node: dict) -> str:
+    """
+    Extrahiert die beste Bild-URL aus einem LD+JSON Product-Node.
+    Unterstützt: string, Liste von strings, ImageObject (einzeln oder Liste).
+    Gibt '' zurück, wenn kein Bild gefunden.
+    """
+    image_field = product_node.get("image")
+    if not image_field:
+        return ""
+
+    candidates: list[str] = []
+
+    def _resolve(obj) -> str:
+        """Löst ein einzelnes Bild-Objekt zu einer URL auf."""
+        if isinstance(obj, str):
+            return obj.strip()
+        if isinstance(obj, dict):
+            # ImageObject: bevorzuge 'url', dann 'contentUrl'
+            return (obj.get("url") or obj.get("contentUrl") or "").strip()
+        return ""
+
+    if isinstance(image_field, list):
+        for item in image_field:
+            url = _resolve(item)
+            if url:
+                candidates.append(url)
+    else:
+        url = _resolve(image_field)
+        if url:
+            candidates.append(url)
+
+    # Erstes Bild ist laut Schema.org das Hauptbild
+    return candidates[0] if candidates else ""
+
+
 def extrahiere_produktbilder_aus_html(html_content: str) -> str:
     """
     Sucht nach Bild-URLs, extrahiert deren Basis-Pfad und optimiert für eBay/Amazon.
-    Behebt den 'Index out of range' Fehler und priorisiert High-Res-Bilder.
+    HÖCHSTE PRIORITÄT: LD+JSON Product-Schema → 100% zuverlässige Bildquelle.
+    Fallback: HTML-DOM-Suche mit High-Res-Priorisierung.
     """
+    # ── PRIORITÄT 1: LD+JSON (sicherste Quelle) ──────────────────────────────
+    ldjson_blocks = _extract_ldjson_blocks(html_content or "")
+    product_node = _find_product_ldjson(ldjson_blocks)
+    if product_node:
+        ldjson_image = _extract_image_from_ldjson_product(product_node)
+        if ldjson_image:
+            return ldjson_image  # Sofort zurückgeben – kein Fallback nötig
+
+    # ── PRIORITÄT 2: HTML-DOM-Suche (Fallback) ───────────────────────────────
     soup = BeautifulSoup(html_content or "", 'lxml')
     
     # ÄNDERUNG 1: Liste für die Reihenfolge + Set für Duplikat-Check
@@ -149,35 +237,56 @@ def normalize_url(url: str) -> str:
     ))
     return normalized
 
-def extract_and_normalize_url(html_content: str) -> str:
+def extract_and_normalize_url(html_content: str, product_node: dict | None = None) -> str:
     """
     Extrahiert die reinste Produkt-URL aus dem HTML mithilfe intelligenter
     Suche und normalisiert sie anschließend.
+
+    Prioritäten:
+      0. LD+JSON  → product_node["url"]  (sicherste Quelle, wird von außen übergeben
+                                           oder intern aus html_content geparst)
+      1. Canonical Link
+      2. Alternate hreflang="de"
+      3. Open Graph og:url
+      4. Apple iTunes App Meta
+      5. Schema.org Microdata-Links
+      6. Regex-Fallback (aggressiv)
     """
     found_url = None
-    
+
     try:
+        # ── PRIORITÄT 0: LD+JSON ─────────────────────────────────────────────
+        # Falls kein fertiger Node übergeben wurde, selbst parsen (Fallback-Aufruf)
+        if product_node is None:
+            _blocks = _extract_ldjson_blocks(html_content)
+            product_node = _find_product_ldjson(_blocks)
+
+        if product_node:
+            ldjson_url = (product_node.get("url") or "").strip()
+            if ldjson_url and ldjson_url.startswith("http"):
+                return normalize_url(ldjson_url)
+
+        # ── PRIORITÄT 1–6: HTML-Fallbacks ────────────────────────────────────
         soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # 1. HÖCHSTE PRIORITÄT: Kanonische Links
+
+        # 1. Kanonische Links
         canonical_link = soup.find('link', {'rel': 'canonical'})
         if canonical_link and canonical_link.get('href'):
             found_url = canonical_link['href'].strip()
-        
-        # 2. ZWEITE PRIORITÄT: Alternate Link (de)
-        # Sucht nach <link rel="alternate" href="..." hreflang="de">
+
+        # 2. Alternate Link (de)
         if not found_url:
             alternate_de_link = soup.find('link', {'rel': 'alternate', 'hreflang': 'de'})
             if alternate_de_link and alternate_de_link.get('href'):
                 found_url = alternate_de_link['href'].strip()
-        
-        # 3. DRITTE PRIORITÄT: Open Graph Tags
+
+        # 3. Open Graph og:url
         if not found_url:
             og_url_meta = soup.find('meta', {'property': 'og:url'})
             if og_url_meta and og_url_meta.get('content'):
                 found_url = og_url_meta['content'].strip()
 
-        # 4. VIERTE PRIORITÄT: Apple iTunes/App Meta-Tag (z.B. für App-Stores)
+        # 4. Apple iTunes/App Meta-Tag
         if not found_url:
             apple_meta = soup.find('meta', {'name': 'apple-itunes-app'})
             if apple_meta and apple_meta.get('content'):
@@ -185,34 +294,40 @@ def extract_and_normalize_url(html_content: str) -> str:
                 match = re.search(r'app-argument=(https?://.+)', content)
                 if match:
                     found_url = match.group(1).strip()
-        
-        # 5. FÜNFTE PRIORITÄT: Schema.org Product/Offers URL
-        if not found_url:
-            product_links = soup.select('[itemtype*="schema.org/Product"] a[href], [itemtype*="schema.org/Offer"] a[href]')
-            if product_links:
-                found_url = max([link['href'] for link in product_links if link.get('href')], key=len, default=None)
 
-        # 6. LETZTER FALLBACK: AGGRESSIVE REGEX-SUCHE im gesamten HTML-Text
+        # 5. Schema.org Microdata Product/Offer Links
         if not found_url:
-            # Sucht nach http/https URLs, die keine statischen Ressourcen (Bilder, JS, CSS) sind
-            # Wir suchen URLs mit mindestens 3 Pfadsegmenten (wahrscheinlich spezifische Produkt-URL)
-            urls = re.findall(r'https?://(?:www\.)?(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s"\']*)?', html_content)
-            
-            # Filtert nach URLs, die spezifischer erscheinen (mind. 3 Pfadsegmente und keine zu kurzen URLs)
-            product_urls = [u for u in urls if u.count('/') >= 3 and len(u) > 30 and not any(ext in u for ext in ['.js', '.css', '.png', '.jpg', '.svg'])] 
-            
+            product_links = soup.select(
+                '[itemtype*="schema.org/Product"] a[href], '
+                '[itemtype*="schema.org/Offer"] a[href]'
+            )
+            if product_links:
+                found_url = max(
+                    [link['href'] for link in product_links if link.get('href')],
+                    key=len, default=None
+                )
+
+        # 6. Aggressiver Regex-Fallback
+        if not found_url:
+            urls = re.findall(
+                r'https?://(?:www\.)?(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s"\']*)?',
+                html_content
+            )
+            product_urls = [
+                u for u in urls
+                if u.count('/') >= 3
+                and len(u) > 30
+                and not any(ext in u for ext in ['.js', '.css', '.png', '.jpg', '.svg'])
+            ]
             if product_urls:
-                # Wählt die längste gefundene URL, da sie am spezifischsten ist
                 found_url = max(product_urls, key=len)
 
-        # 7. Normalisierung der URL
         if found_url and found_url.startswith('http'):
-            return found_url
+            return normalize_url(found_url)
 
-        return "" # Gibt leeren String zurück, wenn nichts gefunden wurde
-        
+        return ""
+
     except Exception as e:
-        # Hier sollte eine geeignete Fehlerbehandlung stattfinden (z.B. Logging)
         print(f"Fehler beim Parsen: {e}")
         return ""
 def extract_title_from_html(html_content: str) -> str:
@@ -236,14 +351,32 @@ def extract_title_from_html(html_content: str) -> str:
 def extract_core_html_data(html_content: str) -> Dict[str, Any]:
     """
     Führt alle deterministischen HTML-Extraktionen durch und konsolidiert sie in einem Dictionary.
+    HÖCHSTE PRIORITÄT: LD+JSON für Bild, Titel und URL — HTML-Fallbacks nur wenn nötig.
     """
-    title = extract_title_from_html(html_content)
-    url = extract_and_normalize_url(html_content) # <- Ihre Power-Funktion wird hier verwendet
-  
-    
+    # ── SCHRITT 1: LD+JSON auslesen (einmalig, effizient) ────────────────────
+    ldjson_blocks = _extract_ldjson_blocks(html_content)
+    product_node = _find_product_ldjson(ldjson_blocks)
+
+    # ── SCHRITT 2: Bild — LD+JSON hat absolute Priorität ────────────────────
+    bild = ""
+    if product_node:
+        bild = _extract_image_from_ldjson_product(product_node)
+
+    # ── SCHRITT 3: Titel — LD+JSON, dann HTML-Fallback ───────────────────────
+    title = ""
+    if product_node:
+        title = (product_node.get("name") or "").strip()
+    if not title:
+        title = extract_title_from_html(html_content)
+
+    # ── SCHRITT 4: URL — LD+JSON Priorität 0, dann HTML-Fallbacks ───────────
+    # product_node wird direkt übergeben → kein doppeltes LD+JSON-Parsen
+    url = extract_and_normalize_url(html_content, product_node=product_node)
+
     return {
         "title": title,
-        "url": url      
+        "url": url,
+        "bild_ldjson": bild,   # Hauptbild aus LD+JSON (leer = nicht gefunden)
     }
 
 
@@ -313,9 +446,18 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
          product_url=product.product_info["shortlink"]
     else:
         core_data=extract_core_html_data(raw_html)
-        bild_kandidaten = extrahiere_produktbilder_aus_html(raw_html)
         product_url=core_data.get("url","N/A")
         product_title=core_data.get("title","N/A")
+
+        # HÖCHSTE PRIORITÄT: Bild aus LD+JSON (100% zuverlässig)
+        bild_ldjson = core_data.get("bild_ldjson", "")
+        if bild_ldjson:
+            print(f"   -> Bild aus LD+JSON gefunden: {bild_ldjson[:80]}...")
+            bild_kandidaten = bild_ldjson
+        else:
+            # Fallback: HTML-DOM-Suche (nur wenn LD+JSON kein Bild liefert)
+            print("   -> Kein LD+JSON-Bild, starte HTML-DOM-Fallback...")
+            bild_kandidaten = extrahiere_produktbilder_aus_html(raw_html)
     
    
     #print(f" 	-> Gefundene Bild-Kandidaten: {len(bild_kandidaten.split(' | ')) if bild_kandidaten != 'N/A' else 0} URLs/Deskriptoren.")
