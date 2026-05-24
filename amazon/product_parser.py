@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from config import PRODUCKT_DIR, OUT_DIR, FAILED_DIR, INTERVAL_SECS, REGISTRY_PATH, SUMMARY_PATH
 
 # Importiere die fachlich getrennten Module
-from amazon.utils import (
+from utils import (
     _read_text,
     is_amazon_html,
     load_registry, 
@@ -130,112 +130,235 @@ def _extract_image_from_ldjson_product(product_node: dict) -> str:
     return candidates[0] if candidates else ""
 
 
-def extrahiere_produktbilder_aus_html(html_content: str) -> str:
+def _score_img_tag(img, soup) -> int:
     """
-    Sucht nach Bild-URLs, extrahiert deren Basis-Pfad und optimiert für eBay/Amazon.
-    HÖCHSTE PRIORITÄT: LD+JSON Product-Schema → 100% zuverlässige Bildquelle.
-    Fallback: HTML-DOM-Suche mit High-Res-Priorisierung.
+    Bewertet ein <img>-Tag danach, wie wahrscheinlich es das Hauptproduktbild ist.
+    Höherer Score = wahrscheinlicher das Hauptbild.
     """
-    # ── PRIORITÄT 1: LD+JSON (sicherste Quelle) ──────────────────────────────
-    ldjson_blocks = _extract_ldjson_blocks(html_content or "")
-    product_node = _find_product_ldjson(ldjson_blocks)
-    if product_node:
-        ldjson_image = _extract_image_from_ldjson_product(product_node)
-        if ldjson_image:
-            return ldjson_image  # Sofort zurückgeben – kein Fallback nötig
+    score = 0
+    tag_str = str(img).lower()
+    classes = " ".join(img.get("class") or []).lower()
+    parent_classes = " ".join(
+        c for p in img.parents
+        for c in (p.get("class") or [])
+    ).lower()
+    alt = (img.get("alt") or "").lower()
+    img_id = (img.get("id") or "").lower()
 
-    # ── PRIORITÄT 2: HTML-DOM-Suche (Fallback) ───────────────────────────────
-    soup = BeautifulSoup(html_content or "", 'lxml')
-    
-    # ÄNDERUNG 1: Liste für die Reihenfolge + Set für Duplikat-Check
-    basis_url_kandidaten = []
-    seen_urls = set()
-
-    # 1. Container-Suche (erweitert für modernere Layouts)
-    container_tags = ['div', 'figure', 'section', 'ul', 'li']  
-    
-    # Relevante Attribute für Bild-Quellen (High-Res zuerst)
-    target_attrs = [
-        'data-zoom-src',       # eBay Zoom Bild (sehr wichtig!)
-        'data-hi-res',         # Generisch High-Res
-        'data-large',          # Generisch
-        'data-full-image-url', # Manche Shops
-        'data-original',       # Lazy Loading Original
-        'data-src',            # Lazy Loading Standard
-        'src'                  # Fallback
+    # Positive Signale: Klassen/IDs die auf Hauptbild hindeuten
+    PRODUCT_SIGNALS = [
+        "product", "pdp", "main-image", "primary", "hero",
+        "gallery-main", "featured", "zoom", "detail", "article",
+        "hauptbild", "produktbild",
     ]
+    for signal in PRODUCT_SIGNALS:
+        if signal in classes or signal in img_id:
+            score += 10
+        if signal in parent_classes:
+            score += 5
 
-    for container in soup.find_all(container_tags):
-        imgs = container.find_all('img')
-        
-        # Filter lockern: Manchmal sind Hauptbilder isoliert, aber wir behalten
-        # deine Logik bei, Gruppen zu bevorzugen.
-        if len(imgs) < 2:
-            continue 
+    # Negative Signale: Thumbnails, Navigation, Logos, Dekoration
+    NOISE_SIGNALS = [
+        "thumb", "thumbnail", "mini", "small", "icon", "logo",
+        "banner", "badge", "sprite", "avatar", "review",
+        "related", "upsell", "cross", "swatch", "nav", "menu",
+    ]
+    for signal in NOISE_SIGNALS:
+        if signal in classes or signal in img_id or signal in parent_classes:
+            score -= 15
 
-        for img in imgs:
-            urls = []
-            
-            # A) Normale Attribute prüfen
-            for attr in target_attrs:
-                if attr in img.attrs and img[attr]:
-                    urls.append(img[attr])
+    # Größe aus Attributen (größere Bilder = Hauptbild)
+    try:
+        w = int(img.get("width") or 0)
+        h = int(img.get("height") or 0)
+        if w >= 400 or h >= 400:
+            score += 8
+        elif w >= 200 or h >= 200:
+            score += 3
+        elif 0 < w < 80 or 0 < h < 80:
+            score -= 10  # eindeutig Thumbnail
+    except (ValueError, TypeError):
+        pass
 
-            # B) Srcset parsen (mit Crash-Fix)
-            for attr in ['srcset', 'data-srcset']:
-                if attr in img.attrs and img[attr]:
-                    # Split am Komma, aber leere Einträge filtern!
-                    parts = [p.strip() for p in re.split(r',\s*', img[attr]) if p.strip()]
-                    for part in parts:
-                        url_part = part.split()[0]
-                        urls.append(url_part)
+    # Zoom/High-Res Attribute vorhanden = sehr starkes Signal
+    HIRES_ATTRS = ["data-zoom-src", "data-hi-res", "data-large",
+                   "data-full-image-url", "data-zoom"]
+    for attr in HIRES_ATTRS:
+        if img.has_attr(attr):
+            score += 12
 
-            # C) URLs verarbeiten und bereinigen
-            for url in urls:
-                base = _get_base_url_path(url)
-                
-                # eBay-Spezial: Versuche URL auf maximale Auflösung (s-l1600) zu zwingen
-                if "ebayimg.com" in base:
-                    base = re.sub(r's-l\d+\.', 's-l1600.', base)
+    # Alt-Text enthält Produktbezug
+    if alt and len(alt) > 5 and not any(
+        n in alt for n in ["logo", "icon", "banner", "sprite"]
+    ):
+        score += 3
 
-                if base and not base.lower().endswith(('.svg', '.gif')) and not base.startswith('data:'):
-                    # ÄNDERUNG 2: Nur hinzufügen, wenn noch nicht gesehen (behält Reihenfolge)
-                    if base not in seen_urls:
-                        seen_urls.add(base)
-                        basis_url_kandidaten.append(base)
+    # Lazy-Loading data-src ohne src = wahrscheinlich echtes Inhaltsbild
+    if img.has_attr("data-src") and not img.get("src", "").startswith("http"):
+        score += 4
 
-    # ÄNDERUNG 3: 'sorted()' entfernt, Liste direkt joinen
-    kandidaten_string = " | ".join(basis_url_kandidaten)
-    return kandidaten_string if basis_url_kandidaten else "N/A"
+    return score
+
+
+def _resolve_img_url(img) -> str:
+    """
+    Gibt die beste verfügbare URL eines <img>-Tags zurück.
+    Reihenfolge: High-Res-Attribute → data-src → src → srcset (größte).
+    """
+    HIRES_ATTRS = [
+        "data-zoom-src", "data-hi-res", "data-large",
+        "data-full-image-url", "data-original",
+    ]
+    for attr in HIRES_ATTRS:
+        val = (img.get(attr) or "").strip()
+        if val and val.startswith("http"):
+            return val
+
+    for attr in ["data-src", "src"]:
+        val = (img.get(attr) or "").strip()
+        if val and val.startswith("http"):
+            return val
+
+    # srcset: nimm den Kandidaten mit dem größten Deskriptor
+    for attr in ["srcset", "data-srcset"]:
+        val = img.get(attr) or ""
+        if not val:
+            continue
+        best_url, best_w = "", 0
+        for part in re.split(r",\s*", val):
+            part = part.strip()
+            if not part:
+                continue
+            tokens = part.split()
+            u = tokens[0]
+            if not u.startswith("http"):
+                continue
+            w = 0
+            if len(tokens) > 1:
+                m = re.match(r"(\d+)[wx]", tokens[1])
+                w = int(m.group(1)) if m else 0
+            if w > best_w:
+                best_w, best_url = w, u
+        if best_url:
+            return best_url
+
+    return ""
+
+
+# Affiliate/Tracking-Parameter die aus Produkt-URLs entfernt werden sollen
+_AFFILIATE_PARAMS = {
+    "ref", "tag", "linkCode", "linkId", "th",          # Amazon
+    "utm_source", "utm_medium", "utm_campaign",         # UTM
+    "utm_term", "utm_content", "utm_id",
+    "aff_id", "aff", "affiliate", "partner_id",        # Generisch
+    "clickid", "click_id", "subid", "sub_id",
+    "gclid", "fbclid", "msclkid", "ttclid",            # Ad-Tracker
+    "epik", "_ga",
+}
+
+def _clean_product_url(url: str) -> str:
+    """
+    Entfernt Affiliate- und Tracking-Parameter aus einer URL,
+    behält aber produktrelevante Query-Parameter (z.B. Varianten-IDs).
+    """
+    if not url or not url.startswith("http"):
+        return url
+    try:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query, keep_blank_values=False)
+        cleaned_qs = {k: v for k, v in qs.items() if k.lower() not in _AFFILIATE_PARAMS}
+        new_query = urlencode(cleaned_qs, doseq=True)
+        path = parsed.path.rstrip("/") if len(parsed.path) > 1 else parsed.path
+        return urlunparse((
+            parsed.scheme, parsed.netloc, path,
+            parsed.params, new_query, ""
+        ))
+    except Exception:
+        return url
+
+
+def extrahiere_produktbilder_aus_html(
+    html_content: str,
+    product_node: dict | None = None,
+) -> str:
+    """
+    Extrahiert das Hauptproduktbild aus HTML.
+
+    Prioritäten:
+      1. LD+JSON  (product_node übergeben oder intern geparst)
+      2. og:image Meta-Tag
+      3. Scoring-basierte <img>-Suche im DOM
+         – bewertet Klassen, Größe, High-Res-Attribute, Eltern-Kontext
+      4. Größtes <img> im gesamten Body (letzter Fallback)
+    """
+    html_content = html_content or ""
+
+    # ── PRIORITÄT 1: LD+JSON ─────────────────────────────────────────────────
+    if product_node is None:
+        product_node = _find_product_ldjson(_extract_ldjson_blocks(html_content))
+    if product_node:
+        img = _extract_image_from_ldjson_product(product_node)
+        if img:
+            return img
+
+    soup = BeautifulSoup(html_content, "lxml")
+
+    # ── PRIORITÄT 2: og:image ────────────────────────────────────────────────
+    og_img = soup.find("meta", {"property": "og:image"})
+    if og_img:
+        val = (og_img.get("content") or "").strip()
+        if val and val.startswith("http"):
+            return val
+
+    # ── PRIORITÄT 3: Score-basierte IMG-Suche ────────────────────────────────
+    SKIP_EXTENSIONS = (".svg", ".gif", ".webp")   # webp oft Thumbnail auf manchen Shops
+
+    best_img, best_score = None, -999
+    for img in soup.find_all("img"):
+        url = _resolve_img_url(img)
+        if not url:
+            continue
+        url_lower = url.lower()
+        if any(url_lower.endswith(ext) for ext in SKIP_EXTENSIONS):
+            continue
+        if url_lower.startswith("data:"):
+            continue
+
+        sc = _score_img_tag(img, soup)
+        if sc > best_score:
+            best_score, best_img = sc, url
+
+    # Nur akzeptieren wenn Score positiv (echtes Produktbild-Signal vorhanden)
+    if best_img and best_score > 0:
+        # eBay-Spezial: maximale Auflösung erzwingen
+        if "ebayimg.com" in best_img:
+            best_img = re.sub(r"s-l\d+\.", "s-l1600.", best_img)
+        return _get_base_url_path(best_img)
+
+    # ── PRIORITÄT 4: Größtes <img> im Body (letzter Notfall-Fallback) ────────
+    largest_url, largest_area = "", 0
+    for img in soup.find_all("img"):
+        url = _resolve_img_url(img)
+        if not url or url.startswith("data:"):
+            continue
+        try:
+            w = int(img.get("width") or 0)
+            h = int(img.get("height") or 0)
+            area = w * h
+        except (ValueError, TypeError):
+            area = 0
+        if area > largest_area:
+            largest_area, largest_url = area, url
+
+    return _get_base_url_path(largest_url) if largest_url else "N/A"
 def normalize_url(url: str) -> str:
     """
-    Normalisiert eine URL: entfernt Fragmente, sortiert/entfernt bestimmte Query-Parameter und entfernt nachgestellte Schrägstriche.
-    (Diese Hilfsfunktion muss definiert sein, um den Code lauffähig zu machen.)
+    Normalisiert eine Produkt-URL:
+    - Entfernt Affiliate- und Tracking-Parameter
+    - Entfernt Fragment (#...)
+    - Entfernt nachgestellten Schrägstrich
     """
-    if not url or not url.startswith('http'):
-        return url
-    
-    parsed = urlparse(url)
-    # Entferne Fragment-Bezeichner (#...)
-    path = parsed.path
-    query = parsed.query
-    
-    # Optional: Entferne nachgestellten Schrägstrich, außer wenn der Pfad nur '/' ist
-    if path.endswith('/') and len(path) > 1:
-        path = path.rstrip('/')
-        
-    # Optional: Logik zur Bereinigung von Query-Parametern könnte hier eingefügt werden
-    
-    # Erstelle die bereinigte URL neu (ohne Fragment)
-    normalized = urlunparse((
-        parsed.scheme,
-        parsed.netloc,
-        path,
-        parsed.params,
-        query, # Behalte die Query-Parameter
-        ''     # Fragment ist leer
-    ))
-    return normalized
+    return _clean_product_url(url)
 
 def extract_and_normalize_url(html_content: str, product_node: dict | None = None) -> str:
     """
@@ -351,32 +474,33 @@ def extract_title_from_html(html_content: str) -> str:
 def extract_core_html_data(html_content: str) -> Dict[str, Any]:
     """
     Führt alle deterministischen HTML-Extraktionen durch und konsolidiert sie in einem Dictionary.
-    HÖCHSTE PRIORITÄT: LD+JSON für Bild, Titel und URL — HTML-Fallbacks nur wenn nötig.
-    """
-    # ── SCHRITT 1: LD+JSON auslesen (einmalig, effizient) ────────────────────
-    ldjson_blocks = _extract_ldjson_blocks(html_content)
-    product_node = _find_product_ldjson(ldjson_blocks)
+    LD+JSON wird einmalig geparst und an alle Unterfunktionen weitergereicht.
 
-    # ── SCHRITT 2: Bild — LD+JSON hat absolute Priorität ────────────────────
-    bild = ""
-    if product_node:
-        bild = _extract_image_from_ldjson_product(product_node)
+    Rückgabe-Keys:
+      title       – Produkttitel
+      url         – bereinigte Produkt-URL (ohne Affiliate-Parameter)
+      bild_ldjson – Hauptbild (LD+JSON → og:image → Score-DOM → größtes img)
+    """
+    # ── SCHRITT 1: LD+JSON einmalig parsen ───────────────────────────────────
+    ldjson_blocks = _extract_ldjson_blocks(html_content)
+    product_node  = _find_product_ldjson(ldjson_blocks)
+
+    # ── SCHRITT 2: Bild — vollständige Fallback-Kette ────────────────────────
+    # product_node weitergeben → kein doppeltes Parsen in der Funktion
+    bild = extrahiere_produktbilder_aus_html(html_content, product_node=product_node)
 
     # ── SCHRITT 3: Titel — LD+JSON, dann HTML-Fallback ───────────────────────
-    title = ""
-    if product_node:
-        title = (product_node.get("name") or "").strip()
+    title = (product_node.get("name") or "").strip() if product_node else ""
     if not title:
         title = extract_title_from_html(html_content)
 
-    # ── SCHRITT 4: URL — LD+JSON Priorität 0, dann HTML-Fallbacks ───────────
-    # product_node wird direkt übergeben → kein doppeltes LD+JSON-Parsen
+    # ── SCHRITT 4: URL — LD+JSON Priorität 0, dann HTML-Fallbacks ────────────
     url = extract_and_normalize_url(html_content, product_node=product_node)
 
     return {
-        "title": title,
-        "url": url,
-        "bild_ldjson": bild,   # Hauptbild aus LD+JSON (leer = nicht gefunden)
+        "title":      title,
+        "url":        url,
+        "bild_ldjson": bild,
     }
 
 
