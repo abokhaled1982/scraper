@@ -1,0 +1,22 @@
+{
+    "template_type": "typ3_audio",
+    "template_id": "45645112-5bb4-4e25-94ed-cd008d42a9c3",
+    "kind": "reel",
+    "api_key": "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f",
+    "description": "Reel-Template mit ElevenLabs-Voiceover und Hintergrundmusik (9:16, max. 10 Sek.)",
+    "default_cta": "Folgt uns für mehr Rabatte!",
+    "default_website": "www.dealsboss.de",
+    "image_fit": "cover",
+    "layer_mapping": {
+      "Product-Image.source":     "images[0] oder image_url",
+      "Product-Name.text":        "title",
+      "Product-Description.text": "reel_beschreibung",
+      "Normal-Price.text":        "original_price",
+      "Discounted-Price.text":    "price",
+      "Caption.text":             "reel_caption (Fallback: rabatt_text)",
+      "CTA.text":                 "default_cta",
+      "Website.text":             "affiliate_url",
+      "Audio-WXF.source":         "fest: Creatomate-Standard-Hintergrundmusik",
+      "Voiceover-WZ7.source":     "voiceover_text (ElevenLabs TTS, max. 25 Wörter)"
+    }
+  }

@@ -667,7 +667,7 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
         with tmp.open('w', encoding='utf-8') as f:
             json.dump(data_mapped, f, indent=4, ensure_ascii=False)
         tmp.replace(final_output_file)
-        
+
         cleanup_temp_files()
         
         return True, f"AI OK -> {final_output_file.name}"
