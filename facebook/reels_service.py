@@ -172,7 +172,7 @@ def build_typ3_audio_modifications(data: dict) -> dict:
         "Caption.text":             caption,
         "CTA.text":                 "Folgt uns für mehr Rabatte!",
         "Website.text":             data.get("affiliate_url", "N/A"),
-        "Voiceover-WZ7.source":     voiceover,
+        "Voiceover-WZ7":     voiceover,
     }
 
 
