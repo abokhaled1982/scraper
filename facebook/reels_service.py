@@ -123,20 +123,9 @@ def _fmt_price(field_val) -> str:
         return f"{val} {hint}" if val else "N/A"
     return str(field_val) if field_val else "N/A"
 
-
 def build_typ3_audio_modifications(data: dict) -> dict:
     """
     Erstellt das Modifications-Dict für das typ3_audio-Template aus einem Deal-Dict.
-
-    Mapping:
-      images[0]          → Product-Image.source
-      title              → Product-Name.text
-      reel_beschreibung  → Product-Description.text
-      original_price     → Normal-Price.text
-      price              → Discounted-Price.text
-      reel_caption       → Caption.text
-      voiceover_text     → Voiceover-WZ7.source  (ElevenLabs TTS via Creatomate)
-      affiliate_url      → Website.text
     """
     images: list = data.get("images") or []
     product_image_url: str = images[0] if images else ""
@@ -172,7 +161,9 @@ def build_typ3_audio_modifications(data: dict) -> dict:
         "Caption.text":             caption,
         "CTA.text":                 "Folgt uns für mehr Rabatte!",
         "Website.text":             data.get("affiliate_url", "N/A"),
-        "Voiceover-WZ7":     voiceover,
+        
+        # HIER IST DER FIX: .text Suffix hinzugefügt!
+        "Voiceover-WZ7.text":       voiceover,
     }
 
 
