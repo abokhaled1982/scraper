@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import pathlib
+import re
 from datetime import datetime
 from typing import Dict, Any
 from urllib.parse import urlsplit, urlunsplit
@@ -66,6 +67,29 @@ def path_for(url: str, transfer_id: str) -> pathlib.Path:
     return SAVE_DIR / f"{base}_{transfer_id}.html"
 
 
+_AFFILIATE_URL_RE = re.compile(r'^https?://[^\s"<>]+$', re.IGNORECASE)
+
+
+def inject_affiliate_link_meta(html: str, affiliate_link: str) -> str:
+    """Injiziert den Affiliate-Link als <meta name="x-affiliate-link"> in den <head>.
+
+    Validiert das Schema, escaped geänderte Zeichen und fügt das Tag entweder
+    direkt vor </head> oder – falls kein <head> existiert – am Dokumentanfang ein.
+    """
+    if not affiliate_link or not _AFFILIATE_URL_RE.match(affiliate_link.strip()):
+        return html
+    escaped = (
+        affiliate_link.strip()
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    tag = f'<meta name="x-affiliate-link" content="{escaped}">'
+    replaced, n = re.subn(r'(</head\s*>)', tag + r'\1', html, count=1, flags=re.IGNORECASE)
+    return replaced if n else tag + "\n" + html
+
+
 # --- in-memory state ---
 assemblies: Dict[str, Dict[str, Any]] = {}
 saved_ids: set[str] = set()
@@ -112,8 +136,14 @@ async def handle(ws):
                 doc_type = msg.get("docType")
                 prev = assemblies.get(_id)
                 chunks = prev["chunks"] if prev and "chunks" in prev else {}
-                assemblies[_id] = {"total": total, "chunks": chunks, "url": url, "docType": doc_type}
-                print(f"[srv] begin id={_id} total={total} url={url} docType={doc_type}")
+                assemblies[_id] = {
+                    "total": total,
+                    "chunks": chunks,
+                    "url": url,
+                    "docType": doc_type,
+                    "affiliateLink": msg.get("affiliateLink"),
+                }
+                print(f"[srv] begin id={_id} total={total} url={url} docType={doc_type} affiliate={'yes' if msg.get('affiliateLink') else 'no'}")
                 await ws.send(json.dumps({"ok": True, "type": "begin_ack", "id": _id}))
                 continue
 
@@ -159,6 +189,9 @@ async def handle(ws):
                     html = ordered.decode("latin-1", errors="replace")
                 url = a.get("url", "unknown")
                 doc_type = a.get("docType")
+                affiliate_link = msg.get("affiliateLink") or a.get("affiliateLink")
+                if affiliate_link:
+                    html = inject_affiliate_link_meta(html, affiliate_link)
                 out = choose_target_path(url, _id, doc_type)
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(html, encoding="utf-8")

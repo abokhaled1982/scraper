@@ -251,11 +251,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
 
     if (msg?.type === "PRODUCT_HTML") {
-      const { url, html } = msg.payload || {};
-      const res = await sendHTMLAsStream(url, html, {
-        source: "ext",
-        docType: "product",
-      });
+      const { url, html, affiliateLink } = msg.payload || {};
+      const meta = { source: "ext", docType: "product" };
+      if (affiliateLink) meta.affiliateLink = affiliateLink;
+      const res = await sendHTMLAsStream(url, html, meta);
       sendResponse(res);
       return;
     }

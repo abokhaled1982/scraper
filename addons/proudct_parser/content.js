@@ -11,8 +11,37 @@
   const TRIGGER_PARAM = "ext_trigger";
   const TRIGGER_VALUE = "send_html";
   const MIN_RUN_INTERVAL_MS = 60_000; // Max. alle 60s pro URL
-  const STRIPE_BUTTON_SEL = "#amzn-ss-get-link-button, .amzn-ss-get-link-button";
+  const STRIPE_BUTTON_SEL = [
+    "#amzn-ss-copy-affiliate-link-btn-announce",
+    "#amzn-ss-copy-affiliate-link-btn",
+    "button[id*='copy-affiliate-link']",
+    "#amzn-ss-get-link-button",
+    ".amzn-ss-get-link-button",
+  ].join(", ");
   const AFFILIATE_LINK_SEL = "#amzn-ss-text-shortlink-textarea, .amzn-ss-get-shortlink-text";
+  const AFFILIATE_RX = /(amzn\.to|amazon\.[a-z.]+\/.+(?:tag=|ref=as_li))/i;
+
+  // --- Page-World Clipboard-Hook injizieren ---
+  // Fängt navigator.clipboard.writeText ab, sobald Amazons Button den Affiliate-Link kopiert.
+  let capturedClipboardValue = null;
+  let capturedClipboardAt = 0;
+  window.addEventListener("__amzn_clipboard_capture__", (ev) => {
+    const v = (ev?.detail?.value || "").trim();
+    if (v && AFFILIATE_RX.test(v)) {
+      capturedClipboardValue = v;
+      capturedClipboardAt = Date.now();
+      console.log("[clip] captured affiliate link:", v);
+    }
+  });
+  try {
+    const s = document.createElement("script");
+    s.src = chrome.runtime.getURL("inject_clipboard_hook.js");
+    s.async = false;
+    (document.head || document.documentElement).appendChild(s);
+    s.onload = () => s.remove();
+  } catch (e) {
+    console.warn("[clip] inject failed:", e);
+  }
 
   // --- Zustandsvariablen ---
   let autoScrollInterval = null;
@@ -20,7 +49,7 @@
   let lastRunUrl = "";
   const triggerConsumedForUrl = new Set();
   const clickedOnceForUrl = new Set();
-  const linkReadyForUrl = new Set();
+  const linkReadyForUrl = new Map(); // urlKey → affiliate-link string
 
   // --- Dienstprogramme (Utils) ---
 
@@ -112,16 +141,34 @@
     return (el?.value || el?.textContent || "").trim();
   }
 
-  /** Wartet auf das befüllte, sichtbare Affiliate-Link-Element. */
-  async function waitForAffiliateLink(timeoutMs = 25_000, intervalMs = 250) {
+  /**
+   * Wartet auf den Affiliate-Link – primär aus der Zwischenablage (neuer Amazon-Flow),
+   * sekundär aus dem (alten) DOM-Textarea-Element als Fallback.
+   */
+  async function waitForAffiliateLink(timeoutMs = 15_000, intervalMs = 250, sinceTs = 0) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
+      // 1) Clipboard-Hook (per Page-World injiziert)
+      if (capturedClipboardValue && capturedClipboardAt >= sinceTs) {
+        return { el: null, val: capturedClipboardValue, source: "clipboard_hook" };
+      }
+      // 2) Fallback: Clipboard direkt lesen (falls Hook nicht griff)
+      try {
+        if (document.hasFocus()) {
+          const val = (await navigator.clipboard.readText()).trim();
+          if (val && AFFILIATE_RX.test(val)) {
+            return { el: null, val, source: "clipboard_read" };
+          }
+        }
+      } catch (_) {
+        // ignorieren (Permission/Focus)
+      }
+      // 3) Fallback: altes DOM-Element
       const el = findElementInDocAndIframes(document, AFFILIATE_LINK_SEL);
       if (el && isVisible(el)) {
         const val = extractAffiliateValue(el);
-        // Validierung des Link-Inhalts
-        if (/(https?:\/\/|amzn\.to|tag=)/i.test(val)) {
-          return { el, val };
+        if (val && AFFILIATE_RX.test(val)) {
+          return { el, val, source: "dom" };
         }
       }
       await sleep(intervalMs);
@@ -130,20 +177,24 @@
   }
 
   /**
-   * Klickt den Button einmalig und wartet auf den Shortlink (NUR für Produktseiten relevant).
-   * @returns {boolean} True, wenn der Link bereit ist.
+   * Klickt den "Affiliate-Link kopieren"-Button und wartet, bis der Link
+   * im Clipboard landet. Rückgabe: Link-String oder null.
    */
   async function ensureStripeLinkReadyForCurrentProduct() {
     // Diese Funktion wird NUR aufgerufen, wenn isAmazonProductPath() == true
     const urlKey = location.href.split("#")[0];
 
-    if (linkReadyForUrl.has(urlKey)) return true;
+    if (linkReadyForUrl.has(urlKey)) return linkReadyForUrl.get(urlKey);
 
-    // Button einmalig klicken
+    // Button einmalig klicken (löst Amazon's clipboard.writeText aus)
+    const clickTs = Date.now();
     if (!clickedOnceForUrl.has(urlKey)) {
       const btn = await waitForStripeButton();
       if (btn) {
-        console.log("[Stripe] click button");
+        console.log("[Stripe] click button:", btn.id || btn.className);
+        // Capture-State zurücksetzen, damit nur Werte NACH dem Klick zählen
+        capturedClipboardValue = null;
+        capturedClipboardAt = 0;
         btn.click();
         clickedOnceForUrl.add(urlKey);
       } else {
@@ -151,16 +202,16 @@
       }
     }
 
-    // Warten auf befüllten, sichtbaren Link (egal ob geklickt oder bereits offen)
-    const link = await waitForAffiliateLink();
+    // Warten auf Affiliate-Link (Clipboard-Hook primär, DOM sekundär)
+    const link = await waitForAffiliateLink(15_000, 250, clickTs);
     if (link) {
-      console.log("[Stripe] link ready:", link.val);
-      linkReadyForUrl.add(urlKey);
-      return true;
+      console.log(`[Stripe] link ready (${link.source}):`, link.val);
+      linkReadyForUrl.set(urlKey, link.val);
+      return link.val;
     }
 
     console.warn("[Stripe] link not ready -> skip sending this round");
-    return false; // Wichtig: NICHT senden
+    return null; // Wichtig: NICHT senden
   }
 
   // --- Pipeline (Module-Ausführung) ---
@@ -199,8 +250,9 @@
    * Sendet das aktuelle HTML an den Background-Skript.
    * Schließt den Tab NUR, wenn der Typ "PRODUCT_HTML" ist und die Übertragung erfolgreich war.
    */
-  function sendHtml(type, href, html) {
+  function sendHtml(type, href, html, affiliateLink = null) {
     const payload = { url: href, html };
+    if (affiliateLink) payload.affiliateLink = affiliateLink;
     chrome.runtime.sendMessage({ type, payload }, (resp) => {
       // Fehlerbehandlung für Sende-Antworten
       if (chrome.runtime.lastError) {
@@ -251,17 +303,18 @@
         const key = href.split("#")[0];
         if (!triggerConsumedForUrl.has(key)) {
           // NEU: Nur auf den SiteStripe-Link warten, wenn es eine Amazon Produktseite ist.
+          let affiliateLinkOpener = null;
           if (isAmazonProductPath()) {
-            const ok = await ensureStripeLinkReadyForCurrentProduct();
+            affiliateLinkOpener = await ensureStripeLinkReadyForCurrentProduct();
              // Wenn der Link nicht bereit ist, breche den Sendevorgang ab.
-            if (!ok) {
+            if (!affiliateLinkOpener) {
               console.warn("[Opener-Trigger] Link not ready, skipping send.");
               return; 
             }
           }
           
           await runPipeline();
-          sendHtml("PRODUCT_HTML", href, document.documentElement.outerHTML);
+          sendHtml("PRODUCT_HTML", href, document.documentElement.outerHTML, affiliateLinkOpener);
           triggerConsumedForUrl.add(key);
           lastRunAt = Date.now();
           lastRunUrl = href;
@@ -271,9 +324,10 @@
 
       // 2. Produktseiten-Gate (WARTEN AUF SHORTLINK)
       // WARTE NUR auf Shortlink, wenn es eine Produktseite ist und KEIN Opener-Trigger vorliegt.
+      let affiliateLink = null;
       if (isAmazonProductPath()) {
-        const ok = await ensureStripeLinkReadyForCurrentProduct();
-        if (!ok) {
+        affiliateLink = await ensureStripeLinkReadyForCurrentProduct();
+        if (!affiliateLink) {
           // Link nicht bereit -> NICHT senden – nächste Runde abwarten
           return;
         }
@@ -289,7 +343,7 @@
       // Wähle den korrekten Nachrichtentyp: Nur Produktseiten erhalten den "Schließen"-Mechanismus.
       const html = document.documentElement.outerHTML;
       const messageType = isAmazonProductPath() ? "PRODUCT_HTML" : "PARSED_HTML";
-      sendHtml(messageType, href, html);
+      sendHtml(messageType, href, html, affiliateLink);
 
       lastRunAt = Date.now();
       lastRunUrl = href;
