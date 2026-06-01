@@ -1,8 +1,8 @@
 {
     "template_type": "typ3_audio",
-    "template_id": "65d0c5db-a2a1-40b6-8240-0d1b68c0a706",
+    "template_id": "d2c8b591-36d1-44d7-a0f5-7a8c8d5ec39f",
     "kind": "reel",
-    "api_key": "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f",
+    "api_key": "6e5cd9da3b904ca888a7173b676a22b040fbf7dc206139fa0b6996788e4b8bcea1f3509a350f8294412d30ea7741e4bb",
     "description": "Reel-Template mit ElevenLabs-Voiceover (9:16, Stimme: Matilda)",
     "default_cta": "Folgt uns für mehr Rabatte!",
     "default_website": "www.dealsboss.de",
@@ -16,6 +16,6 @@
       "Caption.text":             "reel_caption (Fallback: rabatt_text)",
       "CTA.text":                 "default_cta",
       "Website.text":             "affiliate_url",
-      "Voiceover-SHX.source":     "voiceover_text (ElevenLabs TTS – Matilda)"
+      "Voiceover-C9N.source":     "voiceover_text (ElevenLabs TTS – Matilda)"
     }
   }

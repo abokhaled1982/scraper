@@ -124,8 +124,8 @@ def _fmt_price(field_val) -> str:
     return str(field_val) if field_val else "N/A"
 
 # ─── typ3_audio Konstanten (1:1 wie creatomate.py) ──────────────────────────
-TYP3_AUDIO_TEMPLATE_ID = "65d0c5db-a2a1-40b6-8240-0d1b68c0a706"
-TYP3_AUDIO_API_KEY     = "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f"
+TYP3_AUDIO_TEMPLATE_ID = "d2c8b591-36d1-44d7-a0f5-7a8c8d5ec39f"
+TYP3_AUDIO_API_KEY     = "6e5cd9da3b904ca888a7173b676a22b040fbf7dc206139fa0b6996788e4b8bcea1f3509a350f8294412d30ea7741e4bb"
 
 
 def build_typ3_audio_modifications(data: dict) -> dict:
@@ -177,7 +177,7 @@ def build_typ3_audio_modifications(data: dict) -> dict:
         "Caption.text":             caption,
         "CTA.text":                 "Folgt uns für mehr Rabatte!",
         "Website.text":             website,
-        "Voiceover-SHX.source":     voiceover,
+        "Voiceover-C9N.source":     voiceover,
     }
 
 
