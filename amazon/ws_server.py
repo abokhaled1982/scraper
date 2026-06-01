@@ -12,6 +12,8 @@ import sys
 
 # add parent directory of amazon/ to sys.path
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
+from core.logging import get_logger  # noqa: E402
+log = get_logger("ws_server")  # noqa: E402
 
 # === zentrale Config & Pfade ===
 from config import (
@@ -92,20 +94,20 @@ saved_ids: set[str] = set()
 
 
 async def handle(ws):
-    print(f"[srv] client connected from {ws.remote_address}")
+    log.info(f"[srv] client connected from {ws.remote_address}")
     try:
         async for raw in ws:
             try:
                 msg = json.loads(raw)
             except Exception as e:
-                print("[srv] bad json:", e)
+                log.info("[srv] bad json:", e)
                 continue
 
             t = msg.get("type")
             if t == "product_url":
                 url = msg.get("url") or "unknown"
                 # Ausgabe der URL auf die Konsole
-                print(f"[srv] Received Product URL: {url} (ID: {msg.get('id', 'N/A')})")
+                log.info(f"[srv] Received Product URL: {url} (ID: {msg.get('id', 'N/A')})")
                 await send_url_to_observer(url)
                 # Optional: Sende eine einfache Bestätigung zurück
                 await ws.send(json.dumps({"ok": True, "type": "product_url_ack", "url": url}))
@@ -120,7 +122,7 @@ async def handle(ws):
                 gen_id = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
                 out = path_for(url, gen_id)
                 out.write_text(html, encoding="utf-8")
-                print(f"[srv] saved → {out} (parsed)")
+                log.info(f"[srv] saved → {out} (parsed)")
                 await ws.send(json.dumps({"ok": True, "saved": str(out), "id": gen_id}))
                 continue
 
@@ -133,7 +135,7 @@ async def handle(ws):
                 prev = assemblies.get(_id)
                 chunks = prev["chunks"] if prev and "chunks" in prev else {}
                 assemblies[_id] = {"total": total, "chunks": chunks, "url": url, "docType": doc_type, "affiliateLink": msg.get("affiliateLink")}
-                print(f"[srv] begin id={_id} total={total} url={url} docType={doc_type} affiliate={'yes' if msg.get('affiliateLink') else 'no'}")
+                log.info(f"[srv] begin id={_id} total={total} url={url} docType={doc_type} affiliate={'yes' if msg.get('affiliateLink') else 'no'}")
                 await ws.send(json.dumps({"ok": True, "type": "begin_ack", "id": _id}))
                 continue
 
@@ -145,7 +147,7 @@ async def handle(ws):
                 try:
                     data = base64.b64decode(b64)
                 except Exception as e:
-                    print(f"[srv] decode error id={_id} seq={seq}: {e}")
+                    log.error(f"[srv] decode error id={_id} seq={seq}: {e}")
                     await ws.send(json.dumps({"ok": False, "error": "decode", "id": _id, "seq": seq}))
                     continue
                 a = assemblies.setdefault(_id, {"total": msg.get("total", 0), "chunks": {}, "url": msg.get("url", "")})
@@ -158,18 +160,18 @@ async def handle(ws):
             if t == "end":
                 _id = str(msg["id"])
                 if _id in saved_ids:
-                    print(f"[srv] already saved id={_id}, skip")
+                    log.warning(f"[srv] already saved id={_id}, skip")
                     await ws.send(json.dumps({"ok": True, "skipped": True, "reason": "already_saved", "id": _id}))
                     continue
                 a = assemblies.get(_id)
                 if not a:
-                    print(f"[srv] end without begin id={_id}")
+                    log.info(f"[srv] end without begin id={_id}")
                     await ws.send(json.dumps({"ok": False, "error": "no_begin", "id": _id}))
                     continue
                 total = a["total"] or (max(a["chunks"].keys()) + 1 if a["chunks"] else 0)
                 missing = sorted(set(range(total)) - set(a["chunks"].keys()))
                 if missing:
-                    print(f"[srv] missing chunks id={_id}: {len(missing)} → {missing[:10]}…")
+                    log.info(f"[srv] missing chunks id={_id}: {len(missing)} → {missing[:10]}…")
                     await ws.send(json.dumps({"ok": False, "error": "missing_chunks", "id": _id, "missing": len(missing)}))
                     continue
                 ordered = b"".join(a["chunks"][i] for i in range(total))
@@ -187,20 +189,20 @@ async def handle(ws):
                 out.write_text(html, encoding="utf-8")
                 saved_ids.add(_id)
                 assemblies.pop(_id, None)
-                print(f"[srv] saved → {out} (stream, docType={doc_type})")
+                log.info(f"[srv] saved → {out} (stream, docType={doc_type})")
                 await ws.send(json.dumps({"ok": True, "saved": str(out), "id": _id}))
                 continue
 
             # --- unknown ---
-            print("[srv] unknown message:", msg)
+            log.info("[srv] unknown message:", msg)
 
     finally:
-        print("[srv] client disconnected")
+        log.info("[srv] client disconnected")
 
 
 async def main():
     async with websockets.serve(handle, HOST, PORT, max_size=None, ping_interval=30):
-        print(f"[srv] listening on ws://{HOST}:{PORT} (single-save mode, url+id naming, product routing)")
+        log.info(f"[srv] listening on ws://{HOST}:{PORT} (single-save mode, url+id naming, product routing)")
         await asyncio.Future()  # run forever
 
 

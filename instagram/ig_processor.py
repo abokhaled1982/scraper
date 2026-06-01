@@ -9,7 +9,11 @@ import sys
 import requests
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from config import IMAGES_DIR, DEALS_SENT_DIR
+
+from core.logging import get_logger  # noqa: E402
+log = get_logger("ig_processor")  # noqa: E402
+from config import IMAGES_DIR
+from core.db import deals_repo
 
 IMAGES_FOLDER = IMAGES_DIR
 
@@ -58,7 +62,7 @@ def download_image(url: str, product_id: str) -> pathlib.Path | None:
                 f.write(chunk)
         return local_path
     except Exception as e:
-        print(f"[IG-IMG] Download fehlgeschlagen für {product_id}: {e}")
+        log.info(f"[IG-IMG] Download fehlgeschlagen für {product_id}: {e}")
         return None
 
 
@@ -73,27 +77,28 @@ def ensure_jpeg(path: pathlib.Path) -> pathlib.Path:
         img.save(jpg_path, "JPEG", quality=92)
         return jpg_path
     except Exception as e:
-        print(f"[IG-IMG] Konvertierung fehlgeschlagen: {e} — nutze Original")
+        log.info(f"[IG-IMG] Konvertierung fehlgeschlagen: {e} — nutze Original")
         return path
 
 
-async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
-    """Verarbeitet eine Deal-JSON und postet auf Instagram."""
+async def process_single_deal(deal: dict, sent_ids: set) -> bool:
+    """Verarbeitet einen Deal-Datensatz und postet auf Instagram."""
     import instagram.ig_service as ig_service
     from instagram.ig_message import create_ig_caption
 
-    product_id = full_path.stem
-    if product_id in sent_ids:
+    product_id = deal.get("product_id")
+    deal_id = deal.get("id")
+    data = deal.get("payload") or {}
+    if not product_id or product_id in sent_ids:
         return False
 
     try:
-        data       = json.loads(full_path.read_text(encoding="utf-8"))
         validation = validate_deal_data(data)
         if not validation["valid"]:
-            print(f"[IG-FILTER] ⏭️ {full_path.name}: {validation['reason']}")
+            log.info(f"[IG-FILTER] ⏭️ {product_id}: {validation['reason']}")
             return False
 
-        print(f"[IG-PROCESS] 📸 Deal ({validation['discount']:.0f}%): {product_id}")
+        log.info(f"[IG-PROCESS] 📸 Deal ({validation['discount']:.0f}%): {product_id}")
 
         caption = create_ig_caption(data)
         offer_url = str(data.get("affiliate_url") or data.get("url") or "").strip()
@@ -104,8 +109,7 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
 
         # Nur Reels auf Instagram posten – normale Posts werden übersprungen
         if deal_type != "reel":
-            print(f"[IG-SKIP] Kein Reel (type={deal_type!r}) – Instagram überspringt {product_id}.")
-            full_path.unlink(missing_ok=True)
+            log.warning(f"[IG-SKIP] Kein Reel (type={deal_type!r}) – Instagram überspringt {product_id}.")
             return False
 
         images     = data.get("images") or []
@@ -113,6 +117,7 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
         local_img  = download_image(image_url, product_id) if image_url else None
 
         success = False
+        media_id = None
 
         if deal_type == "reel":
             # Reel-Video posten
@@ -124,11 +129,11 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
                 media_id = ig_service.post_reel(video_path, caption, thumb)
                 success = bool(media_id)
             else:
-                print(f"[IG-PROCESS] ⚠️ Kein Video für Reel {product_id} gefunden – überspringe.")
+                log.warning(f"[IG-PROCESS] ⚠️ Kein Video für Reel {product_id} gefunden – überspringe.")
                 return False
 
         if not success:
-            print(f"[IG-WARN] ⚠️ Upload fehlgeschlagen für {product_id}. Datei bleibt in queue/.")
+            log.warning(f"[IG-WARN] ⚠️ Upload fehlgeschlagen für {product_id}. Deal bleibt in Queue.")
             return False
 
         # Bio-Link + Kommentar mit Affiliate-Link
@@ -137,12 +142,13 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             try:
                 ig_service.post_comment(media_id, f"🔗 Zum Angebot: {offer_url}")
             except Exception as e:
-                print(f"[IG-COMMENT] Konnte Kommentar nicht posten: {e}")
+                log.info(f"[IG-COMMENT] Konnte Kommentar nicht posten: {e}")
 
         sent_ids.add(product_id)
-        print(f"[IG-DONE] ✅ Instagram-Post erfolgreich: {product_id}")
+        # Instagram markiert hier NICHT als sent in DB — Facebook (oder reels_processor) ist primärer Marker.
+        log.info(f"[IG-DONE] ✅ Instagram-Post erfolgreich: {product_id}")
         return True
 
     except Exception as e:
-        print(f"[IG-ERROR] Fehler bei {full_path.name}: {e}", file=sys.stderr)
+        log.error(f"[IG-ERROR] Fehler bei {product_id}: {e}")
         return False

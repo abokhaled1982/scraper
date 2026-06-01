@@ -14,7 +14,10 @@ from facebook.template_interface import (
 )
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from config import IMAGES_DIR, DEALS_SENT_DIR, DEALS_FAILED_DIR, VIDEOS_SENT_DIR, VIDEOS_QUEUE_DIR
+from config import IMAGES_DIR, VIDEOS_SENT_DIR, VIDEOS_QUEUE_DIR
+from core.db import deals_repo
+from core.logging import get_logger  # noqa: E402
+log = get_logger("reels_processor")  # noqa: E402
 
 HERE          = pathlib.Path(__file__).resolve().parent
 IMAGES_FOLDER = IMAGES_DIR
@@ -77,34 +80,34 @@ def download_image(url: str, product_id: str) -> str | None:
     # But to be safe, return the url.
     return url
 
-async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
-    product_id = full_path.stem
-    if product_id in sent_ids:
+async def process_single_deal(deal: dict, sent_ids: set) -> bool:
+    product_id = deal.get("product_id")
+    deal_id = deal.get("id")
+    data = deal.get("payload") or {}
+    if not product_id or product_id in sent_ids:
         return False
     try:
-        data       = json.loads(full_path.read_text(encoding="utf-8"))
-
-        # Nur Dateien mit "type": "reel" verarbeiten
+        # Nur Deals mit "type": "reel" verarbeiten
         if data.get("type") != "reel":
             return False
 
         validation = validate_deal_data(data)
         if not validation["valid"]:
-            print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Verschiebe nach failed.")
-            DEALS_FAILED_DIR.mkdir(parents=True, exist_ok=True)
-            full_path.rename(DEALS_FAILED_DIR / full_path.name)
+            log.error(f"[FILTER] 🗑️ {product_id}: {validation['reason']}. Mark failed in DB.")
+            if deal_id:
+                deals_repo.mark_failed(deal_id, validation["reason"])
             return False
-        print(f"[PROCESS] 🚀 Guter Deal für Reels ({validation['discount']}%): {product_id}")
+        log.info(f"[PROCESS] 🚀 Guter Deal für Reels ({validation['discount']}%): {product_id}")
 
         # Prüfe ob ein bereits gerendertes Video in der Video-Queue vorhanden ist
         existing_video = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
         if existing_video.exists():
-            print(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
+            log.info(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
             local_video = existing_video
         else:
             template_type, template_id = resolve_template_selection(data, default_template_type="typ3_audio")
 
-            print(f"[TEMPLATE] type={template_type} id={template_id}")
+            log.info(f"[TEMPLATE] type={template_type} id={template_id}")
 
             if template_type == "typ3_audio":
                 # Audio-Reel: ElevenLabs-Voiceover via Creatomate
@@ -126,20 +129,20 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
                     modifications,
                     template_id,
                 )
-            print(f"[DONE] ✅ Reel erfolgreich gerendert: {product_id}, URL: {render_result.get('url')}")
+            log.info(f"[DONE] ✅ Reel erfolgreich gerendert: {product_id}, URL: {render_result.get('url')}")
 
             # Video herunterladen
             local_video = await asyncio.get_event_loop().run_in_executor(None, download_video, render_result, product_id)
             if local_video:
-                print(f"[VIDEO] ✅ Video heruntergeladen: {local_video}")
+                log.info(f"[VIDEO] ✅ Video heruntergeladen: {local_video}")
             else:
-                print(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
+                log.error(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
 
         # Sende an Facebook-Addon
         from facebook import fb_service
         sent = await fb_service.send_post(data, None, local_video)
         if sent:
-            print(f"[FACEBOOK] ✅ Reel erfolgreich gepostet: {product_id}")
+            log.info(f"[FACEBOOK] ✅ Reel erfolgreich gepostet: {product_id}")
 
             # ── Instagram: gleiches Video posten ─────────────────────────────
             try:
@@ -150,7 +153,7 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
                 if video_path and video_path.exists():
                     media_id = ig_service.post_reel(video_path, ig_caption)
                     if media_id:
-                        print(f"[INSTAGRAM] ✅ Reel auch auf Instagram gepostet: {product_id}")
+                        log.info(f"[INSTAGRAM] ✅ Reel auch auf Instagram gepostet: {product_id}")
                         # Affiliate-Link als Kommentar + Bio-Link aktualisieren
                         offer_url = str(data.get("affiliate_url") or data.get("url") or "").strip()
                         if offer_url and offer_url not in ("N/A", "null", ""):
@@ -160,31 +163,36 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
                             try:
                                 ig_service.post_comment(media_id, f"🔗 Zum Angebot: {offer_url}")
                             except Exception as ce:
-                                print(f"[INSTAGRAM] ⚠️ Kommentar fehlgeschlagen: {ce}")
+                                log.warning(f"[INSTAGRAM] ⚠️ Kommentar fehlgeschlagen: {ce}")
                     else:
-                        print(f"[INSTAGRAM] ⚠️ Instagram-Upload fehlgeschlagen – FB-Post bleibt gültig.")
+                        log.warning(f"[INSTAGRAM] ⚠️ Instagram-Upload fehlgeschlagen – FB-Post bleibt gültig.")
                 else:
-                    print(f"[INSTAGRAM] ⚠️ Video-Datei nicht mehr vorhanden – Instagram übersprungen.")
+                    log.warning(f"[INSTAGRAM] ⚠️ Video-Datei nicht mehr vorhanden – Instagram übersprungen.")
             except SystemExit as e:
                 # ig_service wirft SystemExit wenn keine Session → nur warnen, nicht abbrechen
-                print(f"[INSTAGRAM] ⚠️ Kein Instagram-Login – übersprungen. ({e})")
+                log.warning(f"[INSTAGRAM] ⚠️ Kein Instagram-Login – übersprungen. ({e})")
             except Exception as ig_e:
-                print(f"[INSTAGRAM] ⚠️ Fehler beim Instagram-Post: {ig_e}")
+                log.error(f"[INSTAGRAM] ⚠️ Fehler beim Instagram-Post: {ig_e}")
             # ─────────────────────────────────────────────────────────────────
 
-            # JSON nach deals/sent/ verschieben — NUR wenn wirklich erfolgreich
-            dest_json = DEALS_SENT_DIR / full_path.name
-            full_path.rename(dest_json)
+            # Deal in DB als 'sent' markieren — NUR wenn wirklich erfolgreich
+            if deal_id:
+                deals_repo.mark_sent(deal_id, detail="facebook+instagram")
             # Video nach media/videos/sent/ verschieben
             if local_video and pathlib.Path(local_video).exists():
                 dest_video = VIDEOS_SENT_DIR / pathlib.Path(local_video).name
                 pathlib.Path(local_video).rename(dest_video)
-                print(f"[VIDEO] ✅ Video nach sent/ verschoben: {dest_video.name}")
+                log.info(f"[VIDEO] ✅ Video nach sent/ verschoben: {dest_video.name}")
             sent_ids.add(product_id)
             return True
         else:
-            print(f"[FACEBOOK] ❌ Reel konnte nicht gepostet werden (Addon Fehler/Timeout): {product_id}. Datei bleibt in queue/.")
+            log.error(f"[FACEBOOK] ❌ Reel konnte nicht gepostet werden (Addon Fehler/Timeout): {product_id}. Deal bleibt in Queue.")
             return False
     except Exception as e:
-        print(f"[ERROR] Fehler bei {full_path.name}: {e}", file=sys.stderr)
+        log.error(f"[ERROR] Fehler bei {product_id}: {e}")
+        if deal_id:
+            try:
+                deals_repo.mark_failed(deal_id, str(e))
+            except Exception:
+                pass
         return False

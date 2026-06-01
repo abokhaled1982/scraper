@@ -28,6 +28,9 @@ if not ROUTER_CHANNEL or not OBSERVER_CHANNEL:
 
 # Login-Helfer importieren
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.logging import get_logger  # noqa: E402
+log = get_logger("telRunner")  # noqa: E402
 from login_once import LoginConfig, ensure_both_sessions_sequential
 
 def info(msg: str): print(msg, flush=True)
@@ -76,9 +79,9 @@ def _start_processes():
     observer_env["OBS_CHANNEL_INVITE_URL"] = OBSERVER_CHANNEL
     observer_cmd = [PY, "-m", "telegram.telObserver"]  # das neue Modul
 
-    print("▶ Starte Router …")
+    log.info("▶ Starte Router …")
     p1 = subprocess.Popen(router_cmd, env=router_env)
-    print("▶ Starte Observer …")
+    log.info("▶ Starte Observer …")
     p2 = subprocess.Popen(observer_cmd, env=observer_env)
 
     return p1, p2
@@ -92,11 +95,11 @@ def _wait_and_forward(p1, p2):
             rc1 = p1.poll()
             rc2 = p2.poll()
             if rc1 is not None or rc2 is not None:
-                print("ℹ️ Ein Prozess ist beendet – fahre alles herunter …")
+                log.info("ℹ️ Ein Prozess ist beendet – fahre alles herunter …")
                 break
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n⛔ Stop angefordert – beende Prozesse …")
+        log.info("\n⛔ Stop angefordert – beende Prozesse …")
     finally:
         for p in (p1, p2):
             if p and p.poll() is None:
@@ -124,13 +127,13 @@ if __name__ == "__main__":
     if args.mode == "login":
         # ✅ Nur Login sicherstellen und beenden (blocking)
         asyncio.run(_do_login())
-        print("✅ Telegram-Login für Router & Observer abgeschlossen. (mode=login)")
+        log.info("✅ Telegram-Login für Router & Observer abgeschlossen. (mode=login)")
         sys.exit(0)
 
     # mode=run: Login + beide Prozesse starten
     asyncio.run(_do_login())
-    print("✅ Login für Router & Observer abgeschlossen.\n")
+    log.info("✅ Login für Router & Observer abgeschlossen.\n")
 
     p_router, p_observer = _start_processes()
     _wait_and_forward(p_router, p_observer)
-    print("✅ Runner beendet.")
+    log.info("✅ Runner beendet.")

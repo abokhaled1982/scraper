@@ -16,6 +16,8 @@ from typing import Set
 import websockets
 from websockets.server import WebSocketServerProtocol
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("fb_service")  # noqa: E402
 HOST = "localhost"
 PORT = 8080
 
@@ -170,9 +172,9 @@ def ensure_connected(timeout: int = 120, check_interval: float = 2.0, on_step=No
         elapsed += check_interval
         remaining = int(timeout - elapsed)
         m, s = divmod(remaining, 60)
-        print(f"\r[WS] ⏳ Warte auf Handshake... {m:02d}:{s:02d} verbleibend  ", end="", flush=True)
+        log.info(f"[WS] ⏳ Warte auf Handshake... {m:02d}:{s:02d} verbleibend  ")
 
-    print()
+    log.info("")
     _log(f"❌ Timeout: Kein Handshake nach {timeout}s.")
     return False
 

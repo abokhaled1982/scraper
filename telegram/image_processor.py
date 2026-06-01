@@ -8,6 +8,8 @@ from io import BytesIO
 import re
 
 # Maximale Dateigröße für Telegram-Bilder (50 MB)
+from core.logging import get_logger  # noqa: E402
+log = get_logger("image_processor")  # noqa: E402
 MAX_FILE_SIZE = 50 * 1024 * 1024 
 
 # Erweitere Regex um Pfad-Segmente, die auf dynamische Größenänderung hindeuten.
@@ -109,7 +111,7 @@ async def download_and_convert_to_jpg(url: Optional[str]) -> Optional[Path]:
     # ... der Rest der Funktion bleibt unverändert ...
     if temp_file.exists(): temp_file.unlink()
 
-    print(f"📥 Starte asynchronen Download & Konvertierung (erforderlich): {url}")
+    log.info(f"📥 Starte asynchronen Download & Konvertierung (erforderlich): {url}")
 
     try:
         # 1. Bild asynchron herunterladen
@@ -120,13 +122,13 @@ async def download_and_convert_to_jpg(url: Optional[str]) -> Optional[Path]:
         ) as session:
             async with session.get(url) as response:
                 if response.status != 200:
-                    print(f"⚠️ Bild-Download fehlgeschlagen (Status {response.status}): {url}")
+                    log.warning(f"⚠️ Bild-Download fehlgeschlagen (Status {response.status}): {url}")
                     return None
                 img_data = await response.read()
                 
         # 2. Prüfen der Dateigröße
         if len(img_data) > MAX_FILE_SIZE:
-             print(f"⚠️ Bild zu groß ({len(img_data)/1024/1024:.1f}MB). Überspringe.")
+             log.warning(f"⚠️ Bild zu groß ({len(img_data)/1024/1024:.1f}MB). Überspringe.")
              return None
 
         # 3. Mit Pillow öffnen, nach RGB konvertieren und als JPG speichern
@@ -141,10 +143,10 @@ async def download_and_convert_to_jpg(url: Optional[str]) -> Optional[Path]:
             temp_file.unlink()
             return None
 
-        print(f"✅ Bild zu JPG konvertiert: {temp_file}")
+        log.info(f"✅ Bild zu JPG konvertiert: {temp_file}")
         return temp_file
         
     except Exception as e:
-        print(f"❌ Bildverarbeitung/Konvertierung fehlgeschlagen ({url}): {e}")
+        log.error(f"❌ Bildverarbeitung/Konvertierung fehlgeschlagen ({url}): {e}")
         if temp_file.exists(): temp_file.unlink()
         return None

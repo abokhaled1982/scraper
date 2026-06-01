@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Tuple
 
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("login_once")  # noqa: E402
 @dataclass
 class LoginConfig:
     api_id: int
@@ -44,7 +46,7 @@ def session_file_exists(cfg: LoginConfig) -> bool:
 
 # NEU: Helper zum Kanalbeitritt und Auflösen der Entity
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
-    print(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
+    log.info(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
 
     # 1. Privater Invite-Link (t.me/+... oder t.me/joinchat/...)
     invite_match = re.search(r'(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)', ref)
@@ -52,11 +54,11 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
         invite_hash = invite_match.group(1)
         try:
             await client(ImportChatInviteRequest(invite_hash))
-            print(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
+            log.info(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
         except UserAlreadyParticipantError:
-            print("ℹ️ Bereits Teilnehmer (Invite).")
+            log.info("ℹ️ Bereits Teilnehmer (Invite).")
         except Exception as e:
-            print(f"⚠️ Invite via Hash fehlgeschlagen: {e}")
+            log.warning(f"⚠️ Invite via Hash fehlgeschlagen: {e}")
 
     # 2. Öffentlicher Kanal: Username normalisieren → IMMER mit @
     clean_ref = re.sub(r'https?://t\.me/', '@', ref).strip('/ ')
@@ -69,14 +71,14 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
         entity = await client.get_entity(clean_ref)
         try:
             await client(JoinChannelRequest(entity))
-            print(f"✅ Öffentlichem Kanal beigetreten: {clean_ref}")
+            log.info(f"✅ Öffentlichem Kanal beigetreten: {clean_ref}")
         except UserAlreadyParticipantError:
-            print("ℹ️ Bereits Teilnehmer.")
+            log.info("ℹ️ Bereits Teilnehmer.")
         except Exception as e:
-            print(f"ℹ️ Join nicht nötig oder nicht möglich: {e}")
+            log.info(f"ℹ️ Join nicht nötig oder nicht möglich: {e}")
         return entity
     except Exception as e:
-        print(f"❌ Konnte {clean_ref} nicht auflösen: {e}")
+        log.error(f"❌ Konnte {clean_ref} nicht auflösen: {e}")
         raise
 
 async def ensure_both_sessions_sequential(
@@ -143,7 +145,7 @@ def _ensure_dir(path: str) -> None:
 
 def _env_or_prompt(value: Optional[str], label: str) -> str:
     if value:
-        print(f"{label}: ✔ (aus .env)")
+        log.info(f"{label}: ✔ (aus .env)")
         return value
     return input(f"{label}: ").strip()
 
@@ -172,10 +174,10 @@ async def ensure_logged_in(cfg: LoginConfig) -> TelegramClient:
     await client.connect() 
 
     if await client.is_user_authorized():
-        print(f"✅ Session '{cfg.session_name}' gültig – kein Login nötig.")
+        log.info(f"✅ Session '{cfg.session_name}' gültig – kein Login nötig.")
         return client
 
-    print("ℹ️  Keine gültige Session – starte Anmelde-Flow …")
+    log.info("ℹ️  Keine gültige Session – starte Anmelde-Flow …")
     phone_cb: Callable[[], str] = lambda: _env_or_prompt(cfg.phone, "Telefonnummer (+49...)")
     password_cb: Callable[[], str] = lambda: _env_or_prompt(cfg.password, "2FA-Passwort")
 
@@ -184,7 +186,7 @@ async def ensure_logged_in(cfg: LoginConfig) -> TelegramClient:
     if not await client.is_user_authorized():
         raise RuntimeError("❌ Login fehlgeschlagen – nicht autorisiert.")
 
-    print(f"✅ Angemeldet. Session gespeichert unter: {session_path}.session")
+    log.info(f"✅ Angemeldet. Session gespeichert unter: {session_path}.session")
     return client
 
 
@@ -194,7 +196,7 @@ async def _amain():
     client = await ensure_logged_in(cfg)
     # Beispiel: wer bin ich?
     me = await client.get_me()
-    print("Angemeldet als:", me.username or me.phone)
+    log.info("Angemeldet als:", me.username or me.phone)
     await client.disconnect()
 
 if __name__ == "__main__":
@@ -202,4 +204,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(_amain())
     except KeyboardInterrupt:
-        print("\nAbgebrochen.")
+        log.info("\nAbgebrochen.")

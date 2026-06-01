@@ -7,6 +7,9 @@ import time
 
 import requests
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("reels_service")  # noqa: E402
+
 API_URL = "https://api.creatomate.com/v2/renders"
 _DEFAULT_API_KEY = os.getenv("CREATOMATE_API_KEY", "")
 
@@ -48,17 +51,17 @@ def render_template(template_id: str, modifications: dict) -> dict:
         "modifications": modifications,
     }
     try:
-        print("🚀 Starte Creatomate Render...")
+        log.info("🚀 Starte Creatomate Render...")
         headers = _make_headers(template_id)
         response = None
         for attempt, delay in enumerate([0] + _RETRY_DELAYS, start=1):
             if delay:
-                print(f"   ⏳ Rate-Limit – warte {delay}s vor Versuch {attempt}...")
+                log.info(f"   ⏳ Rate-Limit – warte {delay}s vor Versuch {attempt}...")
                 time.sleep(delay)
             response = requests.post(API_URL, headers=headers, json=data)
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", delay or 30))
-                print(f"   ⚠️  429 Too Many Requests (Versuch {attempt}/{len(_RETRY_DELAYS)+1}) – warte {retry_after}s...")
+                log.warning(f"   ⚠️  429 Too Many Requests (Versuch {attempt}/{len(_RETRY_DELAYS)+1}) – warte {retry_after}s...")
                 if attempt <= len(_RETRY_DELAYS):
                     time.sleep(retry_after)
                     continue
@@ -78,7 +81,7 @@ def render_template(template_id: str, modifications: dict) -> dict:
         if not render_id:
             raise ValueError(f"Keine Render-ID in der Antwort: {render_data}")
 
-        print(f"⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
+        log.info(f"⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
 
         # Polling bis Status "succeeded" oder "failed"
         status_url = f"{API_URL}/{render_id}"
@@ -87,9 +90,9 @@ def render_template(template_id: str, modifications: dict) -> dict:
             status_response.raise_for_status()
             status_data = status_response.json()
             status = status_data.get("status")
-            print(f"   Status: {status}")
+            log.info(f"   Status: {status}")
             if status == "succeeded":
-                print(f"✅ Render fertig. URL: {status_data.get('url')}")
+                log.info(f"✅ Render fertig. URL: {status_data.get('url')}")
                 return status_data
             elif status in ("failed", "error"):
                 raise ValueError(f"Render fehlgeschlagen: {status_data.get('error', status_data)}")
@@ -203,8 +206,8 @@ def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
         "Authorization": f"Bearer {TYP3_AUDIO_API_KEY}",
     }
 
-    print(f"[typ3_audio] 🚀 Starte Creatomate Render (template_id={resolved_id})")
-    print(f"[typ3_audio]    Modifications: {list(modifications.keys())}")
+    log.info(f"[typ3_audio] 🚀 Starte Creatomate Render (template_id={resolved_id})")
+    log.info(f"[typ3_audio]    Modifications: {list(modifications.keys())}")
 
     response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
     if response.status_code >= 400:
@@ -217,7 +220,7 @@ def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
     if not render_id:
         raise ValueError(f"Keine Render-ID in Antwort: {render_data}")
 
-    print(f"[typ3_audio] ⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
+    log.info(f"[typ3_audio] ⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
 
     status_url = f"{API_URL}/{render_id}"
     start = time.time()
@@ -228,9 +231,9 @@ def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
         status_response.raise_for_status()
         status_data = status_response.json()
         status = status_data.get("status")
-        print(f"[typ3_audio]    Status: {status}")
+        log.info(f"[typ3_audio]    Status: {status}")
         if status == "succeeded":
-            print(f"[typ3_audio] ✅ Render fertig. URL: {status_data.get('url')}")
+            log.info(f"[typ3_audio] ✅ Render fertig. URL: {status_data.get('url')}")
             return status_data
         if status in ("failed", "error"):
             raise ValueError(f"Render fehlgeschlagen: {status_data.get('error', status_data)}")
@@ -259,24 +262,25 @@ def download_video(render_result: dict, product_id: str) -> pathlib.Path | None:
     """
     video_url = render_result.get("url")
     if not video_url:
-        print("[VIDEO] ❌ Keine URL im Render-Ergebnis.")
+        log.error("[VIDEO] ❌ Keine URL im Render-Ergebnis.")
         return None
 
     import sys
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
     from config import VIDEOS_QUEUE_DIR
     VIDEOS_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     local_path = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
 
     try:
-        print(f"⬇️  Lade Video herunter: {video_url}")
+        log.info(f"⬇️  Lade Video herunter: {video_url}")
         resp = requests.get(video_url, stream=True, timeout=120)
         resp.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
-        print(f"✅ Video gespeichert: {local_path} ({local_path.stat().st_size / 1024 / 1024:.1f} MB)")
+        log.info(f"✅ Video gespeichert: {local_path} ({local_path.stat().st_size / 1024 / 1024:.1f} MB)")
         return local_path
     except Exception as e:
-        print(f"[VIDEO] ❌ Download fehlgeschlagen: {e}")
+        log.error(f"[VIDEO] ❌ Download fehlgeschlagen: {e}")
         return None

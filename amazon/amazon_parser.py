@@ -21,6 +21,9 @@ Abhängigkeiten:
 
 from __future__ import annotations
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("amazon_parser")  # noqa: E402
+
 import argparse
 import json
 import re
@@ -986,7 +989,7 @@ class InboxPipeline:
     def run(self) -> Tuple[int, int]:
         files = sorted([p for p in self.inbox_dir.rglob("*") if p.suffix.lower() in {".html", ".htm", ".js"}])
         if not files:
-            print(f"[WARN] No .html/.htm/.js files found in: {self.inbox_dir}")
+            log.warning(f"[WARN] No .html/.htm/.js files found in: {self.inbox_dir}")
             return (0, 0)
 
         summary_path = self.out_dir / "summary.jsonl"
@@ -1009,13 +1012,13 @@ class InboxPipeline:
                     summary_out.write(json.dumps(data, ensure_ascii=False) + "\n")
 
                     parsed += 1
-                    print(f"[OK] {fp.name} -> {out_json.name}")
+                    log.info(f"[OK] {fp.name} -> {out_json.name}")
                 except Exception as e:
                     errors += 1
-                    print(f"[ERR] {fp} : {e}")
+                    log.info(f"[ERR] {fp} : {e}")
 
-        print(f"\nSummary: parsed={parsed}, errors={errors}, out={self.out_dir}")
-        print(f"Summary file: {summary_path}")
+        log.info(f"\nSummary: parsed={parsed}, errors={errors}, out={self.out_dir}")
+        log.info(f"Summary file: {summary_path}")
         return parsed, errors
 
 def main():

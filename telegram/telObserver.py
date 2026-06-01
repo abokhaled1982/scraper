@@ -17,6 +17,8 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from core.logging import get_logger  # noqa: E402
+log = get_logger("telObserver")  # noqa: E402
 
 # Telethon
 try:
@@ -24,7 +26,7 @@ try:
     from telethon.errors import UserAlreadyParticipantError
     from telethon.tl.functions.messages import ImportChatInviteRequest
 except Exception as e:
-    print("❌ Fehlende Abhängigkeit: telethon. Bitte installieren: pip install telethon")
+    log.error("❌ Fehlende Abhängigkeit: telethon. Bitte installieren: pip install telethon")
     raise
 
 # Dein bestehender Login-Helper (falls vorhanden)
@@ -49,16 +51,15 @@ except Exception:
         return client
 
 # config.py (optional). Wenn nicht vorhanden: Fallback auf ENV
-PRODUCT_LIST_PATH = None
 LOCK_FILE = None
 try:
     import config
-    PRODUCT_LIST_PATH = Path(getattr(config, "PRODUCT_LIST_PATH", "product_list.json"))
     LOCK_FILE = Path(getattr(config, "LOCK_FILE", ".locks/product_list.lock"))
 except Exception:
-    # Fallback auf Umgebungsvariablen / defaults
-    PRODUCT_LIST_PATH = Path(os.getenv("PRODUCT_LIST_PATH", "product_list.json"))
     LOCK_FILE = Path(os.getenv("LOCK_FILE", ".locks/product_list.lock"))
+
+from core.db import state_repo
+_PRODUCT_LIST_KEY = "product_list"
 
 # ------------------------
 # ENV / Konfiguration
@@ -104,21 +105,11 @@ except Exception:
         # no-op fallback (Windows)
         yield
 
-def load_store(path: Path) -> Dict[str, Dict]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"⚠️ Fehler beim Laden von {path} ({e}), erstelle neue leere Datenbank.")
-        return {}
+def load_store(path: Path | None = None) -> Dict[str, Dict]:
+    return state_repo.get_dict(_PRODUCT_LIST_KEY)
 
-def save_store(path: Path, store: Dict[str, Dict]):
-    temp_path = path.with_suffix(".tmp")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with temp_path.open('w', encoding='utf-8') as f:
-        json.dump(store, f, ensure_ascii=False, indent=2, sort_keys=True)
-    temp_path.replace(path)
+def save_store(path: Path | None, store: Dict[str, Dict]):
+    state_repo.put(_PRODUCT_LIST_KEY, store)
 
 def product_key(item: Dict[str, Any]) -> str:
     url = item.get("product_url", "").strip()
@@ -139,47 +130,47 @@ def add_link_to_product_list(url: str) -> Tuple[bool, str]:
     }
     key = product_key(minimal_product)
     with _locked_file(LOCK_FILE):
-        store = load_store(PRODUCT_LIST_PATH)
+        store = load_store()
         if key in store:
-            return False, "Link bereits in product_list.json"
+            return False, "Link bereits in product_list (DB)"
         store[key] = minimal_product
-        save_store(PRODUCT_LIST_PATH, store)
+        save_store(None, store)
     return True, f"Link erfolgreich hinzugefügt (Key: {key})"
 
 # ------------------------
 # Channel Management
 # ------------------------
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
-    print(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
+    log.info(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
     # Wenn ein Invite-Hash vorhanden ist (z.B. t.me/+ABC...)
     invite_match = re.search(r'(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)', ref)
     if invite_match:
         invite_hash = invite_match.group(1)
         try:
             await client(ImportChatInviteRequest(invite_hash))
-            print(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
+            log.info(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
         except UserAlreadyParticipantError:
-            print("ℹ️ Bereits Teilnehmer des Kanals (Invite-Hash).")
+            log.info("ℹ️ Bereits Teilnehmer des Kanals (Invite-Hash).")
         except Exception as e:
-            print(f"⚠️ Invite fehlgeschlagen: {e}")
+            log.warning(f"⚠️ Invite fehlgeschlagen: {e}")
 
     # Versuche direkte Auflösung (z.B. t.me/Username oder @Username oder URL)
     try:
         ent = await client.get_entity(ref)
-        print("✅ Entity aufgelöst (get_entity).")
+        log.info("✅ Entity aufgelöst (get_entity).")
         return ent
     except Exception as e1:
-        print(f"⚠️ get_entity(ref) fehlgeschlagen: {e1} — versuche alternative Auflösungen.")
+        log.warning(f"⚠️ get_entity(ref) fehlgeschlagen: {e1} — versuche alternative Auflösungen.")
         # Entferne https://t.me/ Präfix falls vorhanden, versuche Username
         try:
             simple = re.sub(r'https?:\/\/t\.me\/', '', ref).strip('/')
             if simple.startswith('@'):
                 simple = simple[1:]
             ent = await client.get_entity(simple)
-            print(f"✅ Entity mit einfachem Namen aufgelöst: {simple}")
+            log.info(f"✅ Entity mit einfachem Namen aufgelöst: {simple}")
             return ent
         except Exception as e2:
-            print(f"❌ Entität konnte nicht aufgelöst werden: {e2}")
+            log.error(f"❌ Entität konnte nicht aufgelöst werden: {e2}")
             raise
 
 # ------------------------
@@ -208,7 +199,7 @@ async def handle_message(evt: events.NewMessage.Event):
     log_preview = text.replace('\n', ' ')[:200]
     if links:
         added_count = 0
-        print(f"[Observer:{chat_name}] Nachricht (Links gefunden: {len(links)}) -> {log_preview}")
+        log.info(f"[Observer:{chat_name}] Nachricht (Links gefunden: {len(links)}) -> {log_preview}")
         for link in set(links):
             try:
                 success, reason = add_link_to_product_list(link)
@@ -216,16 +207,16 @@ async def handle_message(evt: events.NewMessage.Event):
                     added_count += 1
                 else:
                     # Optional: duplikat/logging
-                    print(f"[Observer] {reason}: {link}")
+                    log.info(f"[Observer] {reason}: {link}")
             except Exception as e:
-                print(f"[Observer] Fehler beim Hinzufügen des Links {link}: {e}")
+                log.error(f"[Observer] Fehler beim Hinzufügen des Links {link}: {e}")
         if added_count > 0:
-            print(f"[Observer:{chat_name}] ✅ {added_count} neue Links zu {PRODUCT_LIST_PATH} hinzugefügt.")
+            log.info(f"[Observer:{chat_name}] ✅ {added_count} neue Links zur DB (product_list) hinzugefügt.")
     else:
         if log_preview:
-            print(f"[Observer:{chat_name}] {log_preview}")
+            log.info(f"[Observer:{chat_name}] {log_preview}")
         else:
-            print(f"[Observer:{chat_name}] [Medien/Leer]")
+            log.info(f"[Observer:{chat_name}] [Medien/Leer]")
 
 # ------------------------
 # Main
@@ -234,14 +225,14 @@ async def _amain():
     client = await ensure_logged_in(OBS_CFG)
     async with client:
         entity = await _ensure_join_and_resolve(client, OBS_CHANNEL_REF)
-        print(f"🔎 Observer aktiv – überwache: {OBS_CHANNEL_REF}")
+        log.info(f"🔎 Observer aktiv – überwache: {OBS_CHANNEL_REF}")
 
         @client.on(events.NewMessage(chats=entity))
         async def _on(evt):
             try:
                 await handle_message(evt)
             except Exception as e:
-                print(f"❌ (Observer) Fehler in handle_message: {e}")
+                log.error(f"❌ (Observer) Fehler in handle_message: {e}")
 
         await client.run_until_disconnected()
 
@@ -249,8 +240,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(_amain())
     except SystemExit as se:
-        print(se)
+        log.info(se)
         sys.exit(1)
     except Exception as e:
-        print(f"❌ (Observer) Kritischer Fehler: {e}")
+        log.error(f"❌ (Observer) Kritischer Fehler: {e}")
         sys.exit(1)

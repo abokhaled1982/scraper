@@ -7,6 +7,8 @@ from pathlib import Path
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("amzon_dealsList_parser")  # noqa: E402
 DEFAULT_BASE = "https://www.amazon.de"
 
 def norm(s): return re.sub(r"\s+", " ", (s or "")).strip()
@@ -182,7 +184,7 @@ def main():
 
     files = sorted([p for p in inbox.rglob("*") if p.suffix.lower() in {".html", ".htm"}])
     if not files:
-        print(f"[WARN] Keine HTML-Dateien in {inbox}")
+        log.warning(f"[WARN] Keine HTML-Dateien in {inbox}")
         return
 
     all_rows = []
@@ -192,14 +194,14 @@ def main():
             rows = parse_deals_from_html(raw)
             for r in rows: r["_source_file"] = str(fp)
             all_rows.extend(rows)
-            print(f"[OK] {fp.name}: {len(rows)} Deals")
+            log.info(f"[OK] {fp.name}: {len(rows)} Deals")
         except Exception as e:
-            print(f"[ERR] {fp}: {e}")
+            log.info(f"[ERR] {fp}: {e}")
 
     (out / "deals.json").write_text(json.dumps(all_rows, ensure_ascii=False, indent=2), encoding="utf-8")
     with (out / "deals.jsonl").open("w", encoding="utf-8") as f:
         for r in all_rows: f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"\n[SUMMARY] total deals: {len(all_rows)} -> {out/'deals.json'}")
+    log.info(f"\n[SUMMARY] total deals: {len(all_rows)} -> {out/'deals.json'}")
 
 if __name__ == "__main__":
     main()

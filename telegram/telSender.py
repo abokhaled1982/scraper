@@ -9,6 +9,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from core.logging import get_logger  # noqa: E402
+log = get_logger("telSender")  # noqa: E402
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
@@ -52,7 +54,7 @@ async def _get_client_and_entity():
     if _SENDER_CLIENT is None:
         # Client erstellen (ensure_logged_in verbindet sich nur für den Login-Flow)
         _SENDER_CLIENT = await ensure_logged_in(SENDER_CFG)
-        print("[Sender] 🔗 Client erstellt")
+        log.info("[Sender] 🔗 Client erstellt")
         
         # Einmalige Entity-Auflösung
         if _ENTITY is None: 
@@ -77,7 +79,7 @@ async def _get_client_and_entity():
                      except UserAlreadyParticipantError:
                          pass
                      except Exception as e:
-                         print(f"⚠️ (Sender) Invite fehlgeschlagen: {e}")
+                         log.warning(f"⚠️ (Sender) Invite fehlgeschlagen: {e}")
                  return await client.get_entity(ref)
                  
              _ENTITY = await _ensure_join_and_resolve_local(_SENDER_CLIENT, OBS_CHANNEL_REF)
@@ -103,7 +105,7 @@ async def send_url_to_observer(url: str):
             
         text = f"🛒 Neue Produkt-URL\n{url}"
         await sender_client.send_message(entity, text) 
-        print(f"[Sender] ✅ URL an Kanal gesendet: {url}")
+        log.info(f"[Sender] ✅ URL an Kanal gesendet: {url}")
         
         # WICHTIG: Verbindung trennen, um die SQLite-Session sofort freizugeben.
         if sender_client.is_connected():
@@ -111,12 +113,12 @@ async def send_url_to_observer(url: str):
             
         return True
     except Exception as e:
-        print(f"[Sender] ❌ Fehler beim Senden der URL: {e}")
+        log.error(f"[Sender] ❌ Fehler beim Senden der URL: {e}")
         return False
 
 # Optional: Main-Loop für den Fall, dass es über run_all.py ohne Argumente gestartet wird
 async def _amain():
-    print("[Sender] Starte im Standby-Modus (verbindet nur bei Bedarf).")
+    log.info("[Sender] Starte im Standby-Modus (verbindet nur bei Bedarf).")
     # Es ist kein run_until_disconnected notwendig, da der Client nur sendet.
     # Der Prozess bleibt am Leben, bis er beendet wird.
     while True:
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(_amain())
     except KeyboardInterrupt:
-        print("\nAbgebrochen.")
+        log.info("\nAbgebrochen.")
     except Exception as e:
-        print(f"❌ (Sender) Kritischer Fehler: {e}")
+        log.error(f"❌ (Sender) Kritischer Fehler: {e}")
         sys.exit(1)

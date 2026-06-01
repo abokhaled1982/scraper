@@ -10,6 +10,8 @@ import time
 import requests
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
+from core.logging import get_logger  # noqa: E402
+log = get_logger("creatomate")  # noqa: E402
 API_KEY     = "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f"
 TEMPLATE_ID = "65d0c5db-a2a1-40b6-8240-0d1b68c0a706"
 API_URL     = "https://api.creatomate.com/v2/renders"
@@ -72,7 +74,7 @@ def poll_render(render_id: str, timeout: int = 180) -> dict:
         resp.raise_for_status()
         data = resp.json()
         status = data.get("status", "unknown")
-        print(f"      [{elapsed:>3}s] Status: {status}")
+        log.info(f"      [{elapsed:>3}s] Status: {status}")
         if status == "succeeded":
             return data
         if status in ("failed", "error"):
@@ -84,32 +86,32 @@ def run_variant(variant: dict) -> dict:
     """Führt einen einzelnen Test-Render durch und gibt das Ergebnis zurück."""
     mods = {**BASE_MODIFICATIONS, variant["key"]: variant["value"]}
 
-    print(f"\n{'─'*60}")
-    print(f"  🧪 {variant['name']}")
-    print(f"     Layer-Key : {variant['key']}")
-    print(f"     Text      : {variant['value'][:60]}...")
-    print()
+    log.info(f"\n{'─'*60}")
+    log.info(f"  🧪 {variant['name']}")
+    log.info(f"     Layer-Key : {variant['key']}")
+    log.info(f"     Text      : {variant['value'][:60]}...")
+    log.info("")
 
     try:
         render = start_render(mods)
         render_id = render.get("id")
         if not render_id:
-            print(f"  ❌ Keine Render-ID in Antwort: {render}")
+            log.error(f"  ❌ Keine Render-ID in Antwort: {render}")
             return {"variant": variant["name"], "status": "no_id", "render": render}
 
-        print(f"     Render-ID : {render_id}")
-        print(f"     Polling   ...")
+        log.info(f"     Render-ID : {render_id}")
+        log.info(f"     Polling   ...")
         result = poll_render(render_id)
         status = result.get("status")
 
         if status == "succeeded":
             url = result.get("url", "N/A")
-            print(f"  ✅ ERFOLG! Video-URL: {url}")
+            log.info(f"  ✅ ERFOLG! Video-URL: {url}")
         elif status == "timeout":
-            print(f"  ⏱️  TIMEOUT nach 180s")
+            log.warning(f"  ⏱️  TIMEOUT nach 180s")
         else:
             error = result.get("error") or result.get("message") or status
-            print(f"  ❌ FEHLGESCHLAGEN: {error}")
+            log.error(f"  ❌ FEHLGESCHLAGEN: {error}")
 
         return {
             "variant": variant["name"],
@@ -126,23 +128,23 @@ def run_variant(variant: dict) -> dict:
             body = e.response.text[:400]
         except Exception:
             pass
-        print(f"  ❌ HTTP-Fehler: {e} | Body: {body}")
+        log.error(f"  ❌ HTTP-Fehler: {e} | Body: {body}")
         return {"variant": variant["name"], "key": variant["key"], "status": "http_error", "error": str(e), "body": body}
 
     except Exception as e:
-        print(f"  ❌ Unbekannter Fehler: {e}")
+        log.error(f"  ❌ Unbekannter Fehler: {e}")
         return {"variant": variant["name"], "key": variant["key"], "status": "exception", "error": str(e)}
 
 
 # ── Hauptprogramm ──────────────────────────────────────────────────────────────
 
 def main():
-    print("=" * 60)
-    print("  CREATOMATE + ELEVENLABS VOICEOVER TEST")
-    print("=" * 60)
-    print(f"  Template-ID : {TEMPLATE_ID}")
-    print(f"  Varianten   : {len(VARIANTS)}")
-    print(f"  Voiceover   : {VOICEOVER_TEXT[:55]}...")
+    log.info("=" * 60)
+    log.info("  CREATOMATE + ELEVENLABS VOICEOVER TEST")
+    log.info("=" * 60)
+    log.info(f"  Template-ID : {TEMPLATE_ID}")
+    log.info(f"  Varianten   : {len(VARIANTS)}")
+    log.info(f"  Voiceover   : {VOICEOVER_TEXT[:55]}...")
 
     results = []
 
@@ -152,22 +154,22 @@ def main():
         time.sleep(2)  # kurze Pause zwischen Renders
 
     # ── Zusammenfassung ──
-    print(f"\n{'='*60}")
-    print("  ERGEBNIS-ZUSAMMENFASSUNG")
-    print(f"{'='*60}")
+    log.info(f"\n{'='*60}")
+    log.info("  ERGEBNIS-ZUSAMMENFASSUNG")
+    log.info(f"{'='*60}")
     for r in results:
         icon = "✅" if r["status"] == "succeeded" else "❌"
-        print(f"  {icon}  {r['variant']}")
+        log.info(f"  {icon}  {r['variant']}")
         if r["status"] == "succeeded":
-            print(f"      URL   : {r.get('url')}")
+            log.info(f"      URL   : {r.get('url')}")
         else:
-            print(f"      Fehler: {r.get('error') or r.get('body') or r['status']}")
+            log.error(f"      Fehler: {r.get('error') or r.get('body') or r['status']}")
 
-    print()
+    log.info("")
 
     # JSON-Output für Debugging
-    print("── JSON-Output ──────────────────────────────────────────")
-    print(json.dumps(results, indent=2, ensure_ascii=False))
+    log.info("── JSON-Output ──────────────────────────────────────────")
+    log.info(json.dumps(results, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

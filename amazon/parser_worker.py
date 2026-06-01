@@ -6,10 +6,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Any, Tuple, List
 
-from config import PRODUCT_LIST_PATH, LOCK_FILE
+from config import LOCK_FILE
 from amazon.amzon_dealsList_parser import parse_deals_from_html  # <-- use the deals-page parser now
+from core.db import state_repo
+
+_PRODUCT_LIST_KEY = "product_list"
 
 # ---- file locking (POSIX preferred; no hard dep for Windows) ----
+from core.logging import get_logger  # noqa: E402
+log = get_logger("parser_worker")  # noqa: E402
 try:
     import fcntl  # type: ignore
     @contextmanager
@@ -104,7 +109,7 @@ def product_key(product: Dict[str, Any]) -> str:
     h = hashlib.sha1()
     h.update(basis.encode("utf-8", errors="ignore"))
     key = h.hexdigest()[:16]
-    print(f"[parser] fallback-key basis name='{name[:80]}' price='{price_val}' -> {key}")
+    log.info(f"[parser] fallback-key basis name='{name[:80]}' price='{price_val}' -> {key}")
     return key
 
 def _compact_snapshot(prod: Dict[str, Any]) -> Dict[str, Any]:
@@ -185,7 +190,7 @@ def parse_and_merge(html_path: Path) -> Dict[str, Any]:
 
     # Parse all deal cards from this HTML
     rows: List[Dict[str, Any]] = parse_deals_from_html(raw)  # provided by angebot.py  :contentReference[oaicite:2]{index=2}
-    print(f"[parser] file='{html_path.name}' parsed_rows={len(rows)}")
+    log.info(f"[parser] file='{html_path.name}' parsed_rows={len(rows)}")
 
     # Pre-merge logging: show each row's compact summary
     for i, r in enumerate(rows, 1):
@@ -199,26 +204,26 @@ def parse_and_merge(html_path: Path) -> Dict[str, Any]:
     # Filter "visible" rows
     vis_rows = [r for r in rows if _is_visible_row(r)]
     if len(vis_rows) != len(rows):
-        print(f"[parser] filtered non-visible rows: {len(rows) - len(vis_rows)} (kept {len(vis_rows)})")
+        log.info(f"[parser] filtered non-visible rows: {len(rows) - len(vis_rows)} (kept {len(vis_rows)})")
 
     # Critical section: lock once for load -> merge all -> write
     new_count = 0
     upd_count = 0
     with _locked_file(LOCK_FILE):
-        store = load_store(PRODUCT_LIST_PATH)
+        store = state_repo.get_dict(_PRODUCT_LIST_KEY)
         before = len(store)
-        print(f"[parser] store size before: {before}")
+        log.info(f"[parser] store size before: {before}")
 
         for r in vis_rows:
             prod = _normalize_row(r, source_file=str(html_path))
             key_preview = product_key(prod)
             key, is_new = merge_product(store, prod)
-            print(f"[parser] MERGE {('NEW' if is_new else 'UPDATED'):7} key={key} preview={key_preview}")
+            log.info(f"[parser] MERGE {('NEW' if is_new else 'UPDATED'):7} key={key} preview={key_preview}")
             if is_new: new_count += 1
             else:      upd_count += 1
 
-        _write_json_atomic(PRODUCT_LIST_PATH, store)
+        state_repo.put(_PRODUCT_LIST_KEY, store)
         after = len(store)
-        print(f"[parser] store size after:  {after} (+{after - before})")
+        log.info(f"[parser] store size after:  {after} (+{after - before})")
 
     return {"parsed": len(rows), "visible": len(vis_rows), "new": new_count, "updated": upd_count}

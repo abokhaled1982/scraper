@@ -4,6 +4,9 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from core.logging import get_logger  # noqa: E402
+log = get_logger("watcher")  # noqa: E402
 from config import INBOX_DIR,WATCH_INTERVAL_SECS
 from parser_worker import parse_and_merge
 
@@ -15,7 +18,7 @@ def _pick_oldest_html(inbox: Path) -> Path | None:
     return files[0]
 
 def main():
-    print(f"[watcher] started. polling {INBOX_DIR} every {WATCH_INTERVAL_SECS}s")
+    log.info(f"[watcher] started. polling {INBOX_DIR} every {WATCH_INTERVAL_SECS}s")
     while True:
         try:
             fp = _pick_oldest_html(INBOX_DIR)
@@ -23,12 +26,12 @@ def main():
                 time.sleep(WATCH_INTERVAL_SECS)
                 continue
 
-            print(f"[watcher] processing {fp.name}")
+            log.info(f"[watcher] processing {fp.name}")
             try:
                 parse_and_merge(fp)
             except Exception:
                 # move bad file for later inspection
-                print(f"[watcher] ERROR while parsing {fp.name} -> moving to bad/")
+                log.error(f"[watcher] ERROR while parsing {fp.name} -> moving to bad/")
                 traceback.print_exc()            
                
                 continue
@@ -36,19 +39,19 @@ def main():
             # only delete after successful merge
             try:
                 fp.unlink()
-                print(f"[watcher] deleted {fp.name}")
+                log.info(f"[watcher] deleted {fp.name}")
             except Exception:
-                print(f"[watcher] WARNING: could not delete {fp.name}")
+                log.info(f"[watcher] WARNING: could not delete {fp.name}")
 
             # immediately continue; if more backlog exists, process next file now
             continue
 
         except KeyboardInterrupt:
-            print("[watcher] stopping (KeyboardInterrupt)")
+            log.info("[watcher] stopping (KeyboardInterrupt)")
             break
         except Exception:
             # never die permanently; log and keep looping
-            print("[watcher] unexpected error, continuing in 1s")
+            log.error("[watcher] unexpected error, continuing in 1s")
             traceback.print_exc()
             time.sleep(1.0)
 

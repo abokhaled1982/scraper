@@ -16,7 +16,11 @@ from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 # Projekt-Config (Annahme: config.py existiert)
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from config import PRODUCKT_DIR, OUT_DIR, FAILED_DIR, INTERVAL_SECS, REGISTRY_PATH, SUMMARY_PATH
+
+from core.logging import get_logger  # noqa: E402
+log = get_logger("product_parser")  # noqa: E402
+from config import PRODUCKT_DIR, FAILED_DIR, INTERVAL_SECS, REGISTRY_PATH
+from core.db import deals_repo
 
 # Importiere die fachlich getrennten Module
 from utils import (
@@ -451,7 +455,7 @@ def extract_and_normalize_url(html_content: str, product_node: dict | None = Non
         return ""
 
     except Exception as e:
-        print(f"Fehler beim Parsen: {e}")
+        log.error(f"Fehler beim Parsen: {e}")
         return ""
 def extract_title_from_html(html_content: str) -> str:
     """Extrahiert den bereinigten Titel."""
@@ -549,7 +553,7 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
     """
     Hauptfunktion, die HTML verarbeitet und die LLM-Input-JSON-Datei speichert.
     """
-    print(f"\n[SCHRITT 1/2: HTML-PROZESSOR]")
+    log.info(f"\n[SCHRITT 1/2: HTML-PROZESSOR]")
    
     isAmazon:bool=False
     product_url=""
@@ -564,7 +568,7 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
         product = parser.parse()
         isAmazon=True
 
-    print("-> Starte Extraktion der Bild-Kandidaten...")
+    log.info("-> Starte Extraktion der Bild-Kandidaten...")
     if(isAmazon):
          bild_kandidaten = product.images
          product_url=product.product_info["shortlink"]
@@ -576,22 +580,22 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
         # HÖCHSTE PRIORITÄT: Bild aus LD+JSON (100% zuverlässig)
         bild_ldjson = core_data.get("bild_ldjson", "")
         if bild_ldjson:
-            print(f"   -> Bild aus LD+JSON gefunden: {bild_ldjson[:80]}...")
+            log.info(f"   -> Bild aus LD+JSON gefunden: {bild_ldjson[:80]}...")
             bild_kandidaten = bild_ldjson
         else:
             # Fallback: HTML-DOM-Suche (nur wenn LD+JSON kein Bild liefert)
-            print("   -> Kein LD+JSON-Bild, starte HTML-DOM-Fallback...")
+            log.info("   -> Kein LD+JSON-Bild, starte HTML-DOM-Fallback...")
             bild_kandidaten = extrahiere_produktbilder_aus_html(raw_html)
     
    
     #print(f" 	-> Gefundene Bild-Kandidaten: {len(bild_kandidaten.split(' | ')) if bild_kandidaten != 'N/A' else 0} URLs/Deskriptoren.")
   
-    print("-> Starte HTML-Bereinigung...")
+    log.info("-> Starte HTML-Bereinigung...")
     clean_text = clean_html_to_core_text(raw_html)
-    print("<- HTML-Bereinigung abgeschlossen.")
+    log.info("<- HTML-Bereinigung abgeschlossen.")
 
     if not clean_text.strip():
-        print("WARNUNG: Der bereinigte Text ist leer.", file=sys.stderr)
+        log.warning("WARNUNG: Der bereinigte Text ist leer.")
         clean_text = "N/A"
 
     llm_input_data = {
@@ -607,7 +611,7 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(llm_input_data, f, ensure_ascii=False, indent=2)
 
-    print(f"\n[ERFOLG] LLM-Input-Datei gespeichert in: {output_path}")
+    log.info(f"\n[ERFOLG] LLM-Input-Datei gespeichert in: {output_path}")
     
     return llm_input_data
 
@@ -615,7 +619,7 @@ def process_html_to_llm_input(html_path: Path, output_path: Path):
 
 
 # ----------------------------- ROUTING & AI-PARSING LOGIK --------------------------------------
-def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
+def process_one(fp: Path, out_dir: Path | None = None) -> Tuple[bool, str, Dict]:
     """
     Orchestriert die AI-Pipeline: HTML-Extraktion -> LLM-Extraktion -> Mapping.
     """      
@@ -655,22 +659,17 @@ def process_one(fp: Path, out_dir: Path) -> Tuple[bool, str, Dict]:
             raise ValueError("Produktpreis 'akt_preis' ist 'N/A'. Überspringe Speicherung.")
 
 
-        # Speichere das Endergebnis
+        # Speichere das Endergebnis in DB (statt JSON in OUT_DIR)
         product_identifier = data_mapped.get('product_id', 'N/A')
         if product_identifier in ('N/A', None):
-            random_id = str(uuid.uuid4()).replace('-', '') 
-            product_identifier = f"random_{random_id[:12]}" 
-            
-        final_output_file = out_dir / f"{product_identifier}.json" 
+            random_id = str(uuid.uuid4()).replace('-', '')
+            product_identifier = f"random_{random_id[:12]}"
 
-        tmp = final_output_file.with_suffix(".tmp")
-        with tmp.open('w', encoding='utf-8') as f:
-            json.dump(data_mapped, f, indent=4, ensure_ascii=False)
-        tmp.replace(final_output_file)
+        deal_id = deals_repo.enqueue(str(product_identifier), data_mapped)
 
         cleanup_temp_files()
-        
-        return True, f"AI OK -> {final_output_file.name}"
+
+        return True, f"AI OK -> deal#{deal_id} ({product_identifier})"
 
     except Exception as e:
         cleanup_temp_files()
@@ -683,7 +682,7 @@ def daemon_loop(interval: int = INTERVAL_SECS) -> None:
     """
     Watch-Loop: zieht regelmäßig die älteste HTML-Datei und verarbeitet sie.
     """
-    print(f"[product-parser] watching {PRODUCKT_DIR} every {interval}s -> {OUT_DIR}")
+    log.info(f"[product-parser] watching {PRODUCKT_DIR} every {interval}s -> DB(deals)")
     reg = load_registry(REGISTRY_PATH) 
     while True:
         try:
@@ -691,14 +690,14 @@ def daemon_loop(interval: int = INTERVAL_SECS) -> None:
             if not fp:
                 time.sleep(interval)
                 continue
-            ok, msg = process_one(fp, OUT_DIR)
-            print(f"[product-parser] {msg}")
+            ok, msg = process_one(fp, None)
+            log.info(f"[product-parser] {msg}")
             time.sleep(1) 
         except Exception as e:
-            print(f"[product-parser] SCHWERWIEGENDER FEHLER IM DAEMON: {e}", file=sys.stderr)
+            log.error(f"[product-parser] SCHWERWIEGENDER FEHLER IM DAEMON: {e}")
             time.sleep(interval)
 
 
 if __name__ == '__main__':
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # OUT_DIR entfällt – Deals werden in die DB geschrieben.
     daemon_loop()

@@ -10,6 +10,8 @@ from vertexai.generative_models import GenerativeModel, GenerationConfig
 from google.api_core import exceptions as google_exceptions
 from dotenv import load_dotenv
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("ai_extractor")  # noqa: E402
 load_dotenv()
 
 # --- Vertex AI Konfiguration ---
@@ -270,17 +272,17 @@ def extrahiere_produktsignale(
     MAX_RETRIES = 3
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            print(f"-> Sende Extraktionsanfrage an {LLM_MODEL} (Versuch {attempt}/{MAX_RETRIES}) ...")
+            log.info(f"-> Sende Extraktionsanfrage an {LLM_MODEL} (Versuch {attempt}/{MAX_RETRIES}) ...")
             response = model.generate_content(
                 contents=user_prompt,
                 generation_config=config,
             )
-            print("<- Antwort erhalten.")
+            log.info("<- Antwort erhalten.")
             produkt_daten = Produktinformation.model_validate_json(response.text.strip())
             return produkt_daten.model_dump()
         except (google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable) as e:
             wait = 2 ** attempt
-            print(f"[WARN] API Overload (Versuch {attempt}): {e}. Warte {wait}s ...", file=sys.stderr)
+            log.warning(f"[WARN] API Overload (Versuch {attempt}): {e}. Warte {wait}s ...")
             if attempt == MAX_RETRIES:
                 raise
             time.sleep(wait)
@@ -292,8 +294,8 @@ def extrahiere_produktsignale(
 
 def extract_and_save_data(llm_input_data: dict, output_path: Path):
     """Liest die Input-JSON, führt die LLM-Extraktion durch und speichert das Ergebnis."""
-    print(f"\n[SCHRITT 2/2: AI-EXTRAKTOR]")
-    print(f"  -> Output: {output_path.resolve()}")
+    log.info(f"\n[SCHRITT 2/2: AI-EXTRAKTOR]")
+    log.info(f"  -> Output: {output_path.resolve()}")
 
     if not llm_input_data:
         raise ValueError("LLM-Input-Datei nicht gefunden oder leer.")
@@ -302,14 +304,14 @@ def extract_and_save_data(llm_input_data: dict, output_path: Path):
     bild_kandidaten = llm_input_data.get("bild_kandidaten", "N/A")
 
     if clean_text == "N/A" or not clean_text.strip():
-        print("WARNUNG: Bereinigter Text ist leer.", file=sys.stderr)
+        log.warning("WARNUNG: Bereinigter Text ist leer.")
         result = {"Fehler": "Bereinigter Text ist leer."}
     else:
         try:
             pack = baue_pattern_pack()
             result = extrahiere_produktsignale(clean_text, bild_kandidaten, pack)
         except Exception as e:
-            print(f"Fehler bei der Extraktion: {e}", file=sys.stderr)
+            log.error(f"Fehler bei der Extraktion: {e}")
             result = {"Extraktionsfehler": str(e)}
 
     final_output = {
@@ -324,4 +326,4 @@ def extract_and_save_data(llm_input_data: dict, output_path: Path):
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(final_output, f, ensure_ascii=False, indent=2)
 
-    print(f"[ERFOLG] Ergebnis gespeichert: {output_path}")
+    log.info(f"[ERFOLG] Ergebnis gespeichert: {output_path}")

@@ -29,7 +29,8 @@ VIDEOS_SENT_DIR    = VIDEOS_DIR / "sent"            # bereits gepostet (war: fac
 # 💾 State — Zustandsdateien
 # ---------------------------------------------------------------------------
 STATE_DIR         = DATA_DIR / "state"
-SENT_IDS_PATH     = STATE_DIR / "sent_ids.json"     # (war: data/fb_sent.json)IG_SENT_IDS_PATH  = STATE_DIR / "ig_sent_ids.json"  # InstagramIG_SENT_IDS_PATH  = STATE_DIR / "ig_sent_ids.json"  # Instagram
+SENT_IDS_PATH     = STATE_DIR / "sent_ids.json"     # (war: data/fb_sent.json)
+IG_SENT_IDS_PATH  = STATE_DIR / "ig_sent_ids.json"  # Instagram
 SENT_ASINS_PATH   = STATE_DIR / "sent_asins.json"   # (war: data/sent_asins.json)
 PRODUCT_LIST_PATH = STATE_DIR / "product_list.json" # (war: data/product_list.json)
 OPENED_PATH       = STATE_DIR / ".opened.json"
@@ -65,16 +66,8 @@ INTERVAL_SECS = 13
 
 def ensure_directories() -> None:
     for p in [
-        DEALS_QUEUE_DIR, DEALS_SENT_DIR, DEALS_FAILED_DIR,
         IMAGES_DIR, VIDEOS_QUEUE_DIR, VIDEOS_SENT_DIR,
-        STATE_DIR,
+        INBOX_DIR, PRODUCKT_DIR,
     ]:
         p.mkdir(parents=True, exist_ok=True)
-    print(
-        f"[config] directories ready:\n"
-        f"  deals/queue  → {DEALS_QUEUE_DIR}\n"
-        f"  deals/sent   → {DEALS_SENT_DIR}\n"
-        f"  media/images → {IMAGES_DIR}\n"
-        f"  media/videos → {VIDEOS_QUEUE_DIR}\n"
-        f"  state        → {STATE_DIR}\n"
-    )
+    # Hinweis: deals/queue|sent|failed und state/* sind ab sofort DB-backed (siehe core/).

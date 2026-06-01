@@ -17,3 +17,6 @@ data/
 *.log
 *.tmp
 .DS_Store
+core_data.db
+.log/
+data/_archive_migration/

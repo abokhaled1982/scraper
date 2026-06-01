@@ -8,7 +8,11 @@ import sys
 import requests
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from config import IMAGES_DIR, DEALS_SENT_DIR, DEALS_FAILED_DIR
+
+from core.logging import get_logger  # noqa: E402
+log = get_logger("fb_processor")  # noqa: E402
+from config import IMAGES_DIR
+from core.db import deals_repo
 
 HERE          = pathlib.Path(__file__).resolve().parent
 IMAGES_FOLDER = IMAGES_DIR
@@ -80,36 +84,41 @@ def download_image(url: str, product_id: str) -> pathlib.Path | None:
                 f.write(chunk)
         return local_path
     except Exception as e:
-        print(f"[IMG] Download fehlgeschlagen für {product_id}: {e}")
+        log.info(f"[IMG] Download fehlgeschlagen für {product_id}: {e}")
         return None
 
 
-async def process_single_deal(full_path: pathlib.Path, sent_ids: set, fb_service) -> bool:
-    product_id = full_path.stem
-    if product_id in sent_ids:
+async def process_single_deal(deal: dict, sent_ids: set, fb_service) -> bool:
+    product_id = deal.get("product_id")
+    deal_id = deal.get("id")
+    data = deal.get("payload") or {}
+    if not product_id or product_id in sent_ids:
         return False
     try:
-        data       = json.loads(full_path.read_text(encoding="utf-8"))
         validation = validate_deal_data(data)
         if not validation["valid"]:
-            print(f"[FILTER] 🗑️ {full_path.name}: {validation['reason']}. Verschiebe nach failed.")
-            DEALS_FAILED_DIR.mkdir(parents=True, exist_ok=True)
-            full_path.rename(DEALS_FAILED_DIR / full_path.name)
+            log.error(f"[FILTER] 🗑️ {product_id}: {validation['reason']}. Mark failed in DB.")
+            if deal_id:
+                deals_repo.mark_failed(deal_id, validation["reason"])
             return False
-        print(f"[PROCESS] 🚀 Guter Deal ({validation['discount']}%): {product_id}")
+        log.info(f"[PROCESS] 🚀 Guter Deal ({validation['discount']}%): {product_id}")
         images    = data.get("images") or []
         image_url = data.get("image_url") or (images[0] if images else None)
         local_img = download_image(image_url, product_id)
         success = await fb_service.send_post(data, local_img)
         if not success:
-            print(f"[WARN] ⚠️ send_post hat Fehler/Timeout zurückgemeldet für {product_id}. Datei bleibt in queue/.")
+            log.error(f"[WARN] ⚠️ send_post hat Fehler/Timeout zurückgemeldet für {product_id}. Deal bleibt in Queue.")
             return False
         sent_ids.add(product_id)
-        # Deal-JSON nach sent/ verschieben — NUR wenn wirklich erfolgreich gepostet
-        dest = DEALS_SENT_DIR / full_path.name
-        full_path.rename(dest)
-        print(f"[DONE] ✅ Deal gepostet und nach sent/ verschoben: {product_id}")
+        if deal_id:
+            deals_repo.mark_sent(deal_id, detail="facebook")
+        log.info(f"[DONE] ✅ Deal gepostet und in DB als 'sent' markiert: {product_id}")
         return True
     except Exception as e:
-        print(f"[ERROR] Fehler bei {full_path.name}: {e}", file=sys.stderr)
+        log.error(f"[ERROR] Fehler bei {product_id}: {e}")
+        if deal_id:
+            try:
+                deals_repo.mark_failed(deal_id, str(e))
+            except Exception:
+                pass
         return False

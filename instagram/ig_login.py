@@ -16,6 +16,8 @@ import pathlib
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from core.logging import get_logger  # noqa: E402
+log = get_logger("ig_login")  # noqa: E402
 
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
@@ -42,27 +44,27 @@ except ImportError:
 
 def challenge_code_handler(username: str, choice) -> str:
     """Wird von instagrapi aufgerufen wenn ein Bestätigungscode nötig ist."""
-    print(f"\n📱 Instagram-Sicherheitsprüfung für @{username}")
-    print("   Instagram hat einen Code per Email oder SMS geschickt.")
+    log.info(f"\n📱 Instagram-Sicherheitsprüfung für @{username}")
+    log.info("   Instagram hat einen Code per Email oder SMS geschickt.")
     code = input("   Bitte Code eingeben: ").strip()
     return code
 
 
 def change_password_handler(username: str) -> str:
     """Wird aufgerufen wenn Instagram ein Passwort-Reset anfordert."""
-    print(f"\n⚠️  Instagram fordert Passwortänderung für @{username}")
-    print("   Bitte ändere dein Passwort manuell in der Instagram-App,")
-    print("   dann aktualisiere IG_PASSWORD in der .env-Datei.")
+    log.warning(f"\n⚠️  Instagram fordert Passwortänderung für @{username}")
+    log.info("   Bitte ändere dein Passwort manuell in der Instagram-App,")
+    log.info("   dann aktualisiere IG_PASSWORD in der .env-Datei.")
     return IG_PASSWORD
 
 
 def main():
-    print("=" * 50)
-    print("   📸 Instagram Einmal-Login")
-    print("=" * 50)
-    print(f"   Nutzer:  {IG_USERNAME}")
-    print(f"   Session: {IG_SESSION_FILE}")
-    print()
+    log.info("=" * 50)
+    log.info("   📸 Instagram Einmal-Login")
+    log.info("=" * 50)
+    log.info(f"   Nutzer:  {IG_USERNAME}")
+    log.info(f"   Session: {IG_SESSION_FILE}")
+    log.info("")
 
     IG_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -75,7 +77,7 @@ def main():
     cl.set_locale("de_DE")
     cl.set_timezone_offset(3600)  # UTC+1
 
-    print(f"🔐 Versuche Login als @{IG_USERNAME}...")
+    log.info(f"🔐 Versuche Login als @{IG_USERNAME}...")
     try:
         cl.login(IG_USERNAME, IG_PASSWORD)
 
@@ -83,12 +85,12 @@ def main():
         sys.exit("❌ Falsches Passwort. Bitte IG_PASSWORD in .env prüfen.")
 
     except TwoFactorRequired:
-        print("\n🔑 Zwei-Faktor-Authentifizierung aktiv.")
+        log.info("\n🔑 Zwei-Faktor-Authentifizierung aktiv.")
         code = input("   2FA-Code eingeben: ").strip()
         cl.login(IG_USERNAME, IG_PASSWORD, verification_code=code)
 
     except ChallengeRequired:
-        print("\n⚠️  Challenge erkannt – versuche automatische Auflösung...")
+        log.warning("\n⚠️  Challenge erkannt – versuche automatische Auflösung...")
         try:
             api_path = cl.last_json.get("challenge", {}).get("api_path", "")
             if api_path:
@@ -101,37 +103,37 @@ def main():
             sys.exit(f"❌ Challenge-Auflösung fehlgeschlagen: {e}")
 
     except SelectContactPointRecoveryForm as e:
-        print(f"\n⚠️  Kontaktpunkt-Auswahl nötig: {e}")
+        log.warning(f"\n⚠️  Kontaktpunkt-Auswahl nötig: {e}")
         sys.exit("❌ Bitte zuerst in der Instagram-App einloggen und den Account verifizieren.")
 
     except RecaptchaChallengeForm:
         sys.exit("❌ Instagram fordert reCAPTCHA – bitte zuerst über Browser/App einloggen.")
 
     except Exception as e:
-        print(f"\n❌ Login fehlgeschlagen: {e}")
-        print("\nAlternativ: Session-ID aus dem Browser nutzen.")
-        print("Öffne Instagram im Browser → F12 → Application → Cookies → sessionid")
+        log.error(f"\n❌ Login fehlgeschlagen: {e}")
+        log.info("\nAlternativ: Session-ID aus dem Browser nutzen.")
+        log.info("Öffne Instagram im Browser → F12 → Application → Cookies → sessionid")
         session_id = input("sessionid eingeben (oder Enter zum Abbrechen): ").strip()
         if not session_id:
             sys.exit("Abgebrochen.")
         try:
             cl.login_by_sessionid(session_id)
             # Session vollständig befüllen: User-Infos laden damit user_id gesetzt wird
-            print("⏳ Lade Account-Informationen...")
+            log.info("⏳ Lade Account-Informationen...")
             cl.get_timeline_feed()  # Triggert vollständige Cookie-Initialisierung
             info = cl.account_info()
-            print(f"   Username: {info.username}, ID: {info.pk}")
+            log.info(f"   Username: {info.username}, ID: {info.pk}")
             cl.dump_settings(IG_SESSION_FILE)
-            print("✅ Login per sessionid erfolgreich.")
+            log.info("✅ Login per sessionid erfolgreich.")
         except Exception as e2:
             sys.exit(f"❌ sessionid-Login fehlgeschlagen: {e2}")
 
     # Session speichern
     cl.dump_settings(IG_SESSION_FILE)
-    print(f"\n✅ Login erfolgreich! Session gespeichert: {IG_SESSION_FILE}")
-    print(f"   User-ID:  {cl.user_id}")
-    print(f"   Username: {cl.username}")
-    print(f"\n✅ Du kannst jetzt 'python -m instagram.ig_watcher' starten.")
+    log.info(f"\n✅ Login erfolgreich! Session gespeichert: {IG_SESSION_FILE}")
+    log.info(f"   User-ID:  {cl.user_id}")
+    log.info(f"   Username: {cl.username}")
+    log.info(f"\n✅ Du kannst jetzt 'python -m instagram.ig_watcher' starten.")
 
 
 def ensure_ig_session() -> bool:
@@ -152,10 +154,10 @@ def ensure_ig_session() -> bool:
             RecaptchaChallengeForm, BadPassword, TwoFactorRequired,
         )
     except ImportError:
-        print("[Instagram] ❌ instagrapi nicht installiert – übersprungen.")
+        log.error("[Instagram] ❌ instagrapi nicht installiert – übersprungen.")
         return False
 
-    print(f"\n[Instagram] Prüfe Session für @{IG_USERNAME}...")
+    log.info(f"\n[Instagram] Prüfe Session für @{IG_USERNAME}...")
     IG_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     # ── Schritt 1: Vorhandene Session aus Cache prüfen ──────────────────────
@@ -168,15 +170,15 @@ def ensure_ig_session() -> bool:
             cl.load_settings(IG_SESSION_FILE)
             cl.get_timeline_feed()          # stille Validierung
             cl.dump_settings(IG_SESSION_FILE)
-            print(f"[Instagram] ✅ Session gültig – @{cl.username} (ID: {cl.user_id})")
+            log.info(f"[Instagram] ✅ Session gültig – @{cl.username} (ID: {cl.user_id})")
             return True
         except Exception as e:
-            print(f"[Instagram] ⚠️  Session abgelaufen ({e}) – neuer Login nötig.")
+            log.warning(f"[Instagram] ⚠️  Session abgelaufen ({e}) – neuer Login nötig.")
 
     # ── Schritt 2: Interaktiver Login ────────────────────────────────────────
-    print(f"\n{'─'*50}")
-    print(f"   📸 Instagram Login – @{IG_USERNAME}")
-    print(f"{'─'*50}")
+    log.info(f"\n{'─'*50}")
+    log.info(f"   📸 Instagram Login – @{IG_USERNAME}")
+    log.info(f"{'─'*50}")
 
     cl = Client()
     cl.delay_range = [2, 5]
@@ -185,45 +187,45 @@ def ensure_ig_session() -> bool:
     cl.set_locale("de_DE")
     cl.set_timezone_offset(3600)
 
-    print(f"🔐 Login als @{IG_USERNAME}...")
+    log.info(f"🔐 Login als @{IG_USERNAME}...")
     try:
         cl.login(IG_USERNAME, IG_PASSWORD)
 
     except BadPassword:
-        print("❌ Falsches Passwort. Bitte IG_PASSWORD in .env prüfen.")
+        log.error("❌ Falsches Passwort. Bitte IG_PASSWORD in .env prüfen.")
         return False
 
     except TwoFactorRequired:
-        print("\n🔑 Zwei-Faktor-Authentifizierung aktiv.")
+        log.info("\n🔑 Zwei-Faktor-Authentifizierung aktiv.")
         code = input("   2FA-Code eingeben: ").strip()
         try:
             cl.login(IG_USERNAME, IG_PASSWORD, verification_code=code)
         except Exception as e:
-            print(f"❌ 2FA-Login fehlgeschlagen: {e}")
+            log.error(f"❌ 2FA-Login fehlgeschlagen: {e}")
             return False
 
     except ChallengeRequired:
-        print("\n⚠️  Challenge erkannt – automatische Auflösung...")
+        log.warning("\n⚠️  Challenge erkannt – automatische Auflösung...")
         try:
             cl.challenge_resolve(cl.last_json)
             # instagrapi ruft challenge_code_handler auf (fragt nach Code im Terminal)
         except Exception as e:
-            print(f"❌ Challenge-Auflösung fehlgeschlagen: {e}")
+            log.error(f"❌ Challenge-Auflösung fehlgeschlagen: {e}")
             return False
 
     except (SelectContactPointRecoveryForm, RecaptchaChallengeForm) as e:
-        print(f"❌ Instagram-Challenge nicht automatisch lösbar: {e}")
-        print("   Bitte einmalig in der Instagram-App/Browser einloggen und erneut versuchen.")
+        log.error(f"❌ Instagram-Challenge nicht automatisch lösbar: {e}")
+        log.info("   Bitte einmalig in der Instagram-App/Browser einloggen und erneut versuchen.")
         return False
 
     except Exception as e:
-        print(f"❌ Login fehlgeschlagen: {e}")
+        log.error(f"❌ Login fehlgeschlagen: {e}")
         return False
 
     # Session speichern
     cl.dump_settings(IG_SESSION_FILE)
-    print(f"\n✅ Instagram-Login erfolgreich! Session gespeichert: {IG_SESSION_FILE}")
-    print(f"   User-ID: {cl.user_id}  |  Username: @{cl.username}")
+    log.info(f"\n✅ Instagram-Login erfolgreich! Session gespeichert: {IG_SESSION_FILE}")
+    log.info(f"   User-ID: {cl.user_id}  |  Username: @{cl.username}")
     return True
 
 

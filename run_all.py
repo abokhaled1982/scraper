@@ -46,6 +46,8 @@ PY = sys.executable  # Aktuelles venv-Python
 # Projekt-Root in sys.path aufnehmen
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+from core.logging import get_logger  # noqa: E402
+log = get_logger("run_all")  # noqa: E402
 
 # ----------------------------------------------------------
 # .env laden
@@ -59,7 +61,7 @@ if MODE == "full":
     try:
         from telegram.login_once import LoginConfig, ensure_both_sessions_sequential
     except ImportError:
-        print("❌ Fehler: login_once.py konnte nicht gefunden werden.")
+        log.error("❌ Fehler: login_once.py konnte nicht gefunden werden.")
         sys.exit(1)
 
     API_ID           = int(os.getenv("API_ID", "0"))
@@ -86,35 +88,65 @@ def _ensure_dirs():
     (HERE / SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
 async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
-    print(f"[supervisor] spawn {name}: {' '.join(argv)}")
+    log.info(f"[supervisor] spawn {name}: {' '.join(argv)}")
+    # Stelle sicher, dass Worker-Subprozesse das Projekt-Root in PYTHONPATH haben,
+    # damit `from core.logging import get_logger` immer funktioniert –
+    # auch wenn der Worker direkt mit absolutem Pfad gestartet wird.
+    existing_pp = os.environ.get("PYTHONPATH", "")
+    pythonpath = str(HERE) + (os.pathsep + existing_pp if existing_pp else "")
     return await asyncio.create_subprocess_exec(
         *argv,
-        env={**os.environ, **(env or {})},
+        env={**os.environ, "PYTHONPATH": pythonpath, **(env or {})},
     )
 
 async def terminate(proc: asyncio.subprocess.Process | None, name: str, timeout: float = 5.0):
     if not proc or proc.returncode is not None:
         return
-    print(f"[supervisor] terminate {name}")
+    log.info(f"[supervisor] terminate {name}")
     try:
         proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            print(f"[supervisor] kill {name}")
+            log.info(f"[supervisor] kill {name}")
             proc.kill()
             await asyncio.wait_for(proc.wait(), timeout=timeout)
     except ProcessLookupError:
         pass
 
+
+# ----------------------------------------------------------
+# Core-Services (Logger + Dashboard + DB-Init)
+# ----------------------------------------------------------
+async def _start_core_services() -> List[Tuple[str, asyncio.subprocess.Process]]:
+    """
+    Startet zuerst Logger-Server, dann Dashboard. Initialisiert die DB.
+    Liefert die Liste der gestarteten Prozesse, damit der Supervisor sie
+    beim Shutdown ebenfalls beendet.
+    """
+    # DB einmalig initialisieren (Tabellen anlegen, falls noch nicht vorhanden)
+    try:
+        from core.db import init_db
+        init_db()
+        log.info("[supervisor] core.db initialized")
+    except Exception as e:
+        log.error(f"[supervisor] WARN: core.db init failed: {e}")
+
+    logger_proc = await spawn("logger", PY, "-m", "core.logging.server")
+    # kurz warten, damit der TCP-Port wirklich offen ist, bevor Worker starten
+    await asyncio.sleep(0.5)
+    dash_proc = await spawn("dashboard", PY, "-m", "core.dashboard")
+
+    return [("logger", logger_proc), ("dashboard", dash_proc)]
+
 # ----------------------------------------------------------
 # Sequentieller Telegram Login (nur full-Modus)
 # ----------------------------------------------------------
 def print_login_step(msg: str):
-    print(f"[Telegram Login] {msg}")
+    log.info(f"[Telegram Login] {msg}")
 
 async def do_telegram_login_check():
-    print("\n--- Starte sequentiellen Telegram-Login-Check (4 Sessions) ---")
+    log.info("\n--- Starte sequentiellen Telegram-Login-Check (4 Sessions) ---")
 
     router_cfg   = LoginConfig(API_ID, API_HASH, ROUTER_NAME,   SESSION_DIR, PHONE, PASSWORD)
     observer_cfg = LoginConfig(API_ID, API_HASH, OBSERVER_NAME, SESSION_DIR, PHONE, PASSWORD)
@@ -128,8 +160,8 @@ async def do_telegram_login_check():
     if not (ok1 and ok2 and ok3 and ok4):
         raise SystemExit("❌ Einer der 4 Telegram-Logins fehlgeschlagen. Abbruch.")
 
-    print("✅ Alle Telegram-Sessions (Router, Obs, Sender, Piraten) bereit.")
-    print("---------------------------------------------------\n")
+    log.info("✅ Alle Telegram-Sessions (Router, Obs, Sender, Piraten) bereit.")
+    log.info("---------------------------------------------------\n")
 
 # ----------------------------------------------------------
 # Main Supervisor
@@ -139,34 +171,42 @@ async def main():
     _ensure_dirs()
 
     if MODE == "parser":
-        print("[supervisor] Modus: parser — nur Amazon-Pipeline (kein Telegram, kein Facebook)")
+        log.info("[supervisor] Modus: parser — nur Amazon-Pipeline (kein Telegram, kein Facebook)")
         await _run_parser_only()
     else:
-        print("[supervisor] Modus: full — alle Services")
+        log.info("[supervisor] Modus: full — alle Services")
         await _run_full()
 
 
 async def _run_parser_only():
     """Startet nur den Amazon-Pipeline-Stack."""
+    # 0. Core: Logger + Dashboard (Foundation)
+    procs: List[Tuple[str, asyncio.subprocess.Process]] = []
+    procs += await _start_core_services()
+
     ws_server      = await spawn("ws_server",      PY, str(AMAZON / "ws_server.py"))
     deals_watcher  = await spawn("deals_watcher",  PY, str(AMAZON / "watcher.py"))
     product_opener = await spawn("product_opener", PY, str(AMAZON / "product_opener.py"))
     product_parser = await spawn("product_parser", PY, str(AMAZON / "product_parser.py"))
 
-    procs: List[Tuple[str, asyncio.subprocess.Process]] = [
+    procs += [
         ("ws_server",      ws_server),
         ("deals_watcher",  deals_watcher),
         ("product_opener", product_opener),
         ("product_parser", product_parser),
     ]
     for n, p in procs:
-        print(f"[supervisor] started {n} (pid={p.pid})")
+        log.info(f"[supervisor] started {n} (pid={p.pid})")
 
     await _wait_and_shutdown(procs)
 
 
 async def _run_full():
     """Startet alle Services inkl. Telegram-Login, Facebook und Telegram-Clients."""
+    # 0. Core: Logger + Dashboard (Foundation) – muss als erstes laufen
+    procs: List[Tuple[str, asyncio.subprocess.Process]] = []
+    procs += await _start_core_services()
+
     # 1. Telegram Login
     await do_telegram_login_check()
 
@@ -185,7 +225,7 @@ async def _run_full():
     tel_sender     = await spawn("telegram_sender",   PY, "-m", "telegram.telSender")
     tel_piraten    = await spawn("telegram_piraten",  PY, "-m", "telegram.telObserver_piraten")
 
-    procs: List[Tuple[str, asyncio.subprocess.Process]] = [
+    procs += [
         ("ws_server",          ws_server),
         ("deals_watcher",      deals_watcher),
         ("product_opener",     product_opener),
@@ -198,7 +238,7 @@ async def _run_full():
         ("telegram_piraten",   tel_piraten),
     ]
     for n, p in procs:
-        print(f"[supervisor] started {n} (pid={p.pid})")
+        log.info(f"[supervisor] started {n} (pid={p.pid})")
 
     await _wait_and_shutdown(procs)
 
@@ -224,19 +264,19 @@ async def _wait_and_shutdown(procs: List[Tuple[str, asyncio.subprocess.Process]]
     done, _ = await asyncio.wait({w_task, s_task}, return_when=asyncio.FIRST_COMPLETED)
     if w_task in done:
         name, code = await w_task
-        print(f"[supervisor] process {name} exited with code {code}; stopping others …")
+        log.info(f"[supervisor] process {name} exited with code {code}; stopping others …")
     else:
-        print("[supervisor] stop requested; shutting down …")
+        log.info("[supervisor] stop requested; shutting down …")
 
     for name, proc in reversed(procs):
         await terminate(proc, name)
-    print("[supervisor] all stopped")
+    log.info("[supervisor] all stopped")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        print(f"❌ Critical Error in main runner: {e}")
+        log.error(f"❌ Critical Error in main runner: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\n[supervisor] Abgebrochen durch Benutzer.")
+        log.info("\n[supervisor] Abgebrochen durch Benutzer.")

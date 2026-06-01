@@ -10,6 +10,8 @@ import sys
 
 # ----------------------------- ALLGEMEINE HILFSFUNKTIONEN (DATEI/REGISTRY) --------------------------------------
 
+from core.logging import get_logger  # noqa: E402
+log = get_logger("utils")  # noqa: E402
 def is_amazon_html(html_content: str) -> bool:
     """Entscheidet anhand von Amazon-spezifischen Merkmalen, ob es eine Produktseite ist."""
     if any(tag in html_content for tag in [
@@ -21,7 +23,7 @@ def is_amazon_html(html_content: str) -> bool:
 
 def _read_text(fp: Path) -> str:
     """Liest den Dateiinhalt als Text."""
-    print(f" 	-> Read HTML-File: {fp.resolve()}")
+    log.info(f" 	-> Read HTML-File: {fp.resolve()}")
     try:
         return fp.read_text(encoding="utf-8", errors="ignore")
     except Exception:
@@ -40,7 +42,7 @@ def move_to_failed(fp: Path, reason: str, FAILED_DIR: Path) -> None:
             f.write(f"Source: {fp.name}\nTimestamp: {time.time()}\nReason:\n{reason}")
         shutil.move(str(fp), str(FAILED_DIR / fp.name))
     except Exception as e:
-        print(f"WARNUNG: Konnte Datei {fp.name} nicht nach FAILED_DIR verschieben: {e}", file=sys.stderr)
+        log.error(f"WARNUNG: Konnte Datei {fp.name} nicht nach FAILED_DIR verschieben: {e}")
 
 def load_registry(REGISTRY_PATH: Path) -> Dict:
     """Lädt das Verarbeitungs-Registry."""
