@@ -173,6 +173,34 @@ class Produktinformation(BaseModel):
         )
     )
 
+    voiceover_text: str = Field(
+        description=(
+            "Gesprochener Werbespot-Text fuer ElevenLabs Text-to-Speech. "
+            "Das Video ist MAX. 10 SEKUNDEN lang - der Text darf MAXIMAL 20-25 WOERTER haben. "
+            "SPRACHE: IMMER AUF DEUTSCH. "
+            "\n\n"
+            "PFLICHT-INHALT (alle drei Elemente MUESSEN enthalten sein, in dieser Reihenfolge):\n"
+            "1. HOOK (3-5 Woerter): Reisserischer Einstieg. "
+            "   Beispiele: 'Krasses Angebot heute!', 'Heute nur fuer kurze Zeit:', 'Schnell sein lohnt sich!'\n"
+            "2. PRODUKT + PREISVORTEIL (10-14 Woerter): "
+            "   Nenne den Produktnamen (aus 'produkt_titel', gekuerzt auf Kernbegriff) "
+            "   UND den konkreten Preisvorteil - ENTWEDER Rabatt in Prozent (aus 'rabatt_prozent') "
+            "   ODER Rabatt in Euro (Differenz original_preis minus akt_preis) ODER beides. "
+            "   Falls Gutscheincode vorhanden ('gutschein_code' != 'N/A'): "
+            "   Nenne ihn direkt: '...mit Code [CODE]'. "
+            "   Beispiel: 'Das [Produkt] jetzt fuer nur [Preis] Euro - das sind [X] Prozent Rabatt!'\n"
+            "3. CTA (3-5 Woerter): Konkreter Schluss-Aufruf. "
+            "   Beispiele: 'Link in der Bio!', 'Jetzt zuschlagen!', 'Nur solange Vorrat reicht!'\n"
+            "\n"
+            "HARTE REGELN:\n"
+            "- MAXIMAL 25 WOERTER GESAMT - kein einziges Wort zu viel.\n"
+            "- Kein Emoji, kein Markdown, keine Klammern, keine Aufzaehlungszeichen.\n"
+            "- Reiner Fliestext wie ein echter Radio-Werbespot.\n"
+            "- Produktnamen maximal einmal nennen.\n"
+            "- akt_preis als gesprochene Zahl: '49 Euro 99' statt '49,99 EUR'.\n"
+            "- Gib NUR den fertigen Sprechtext zurueck, keine Erklaerung, keine Anfuehrungszeichen."
+        )
+    )
 
 # --- 2. LLM-FUNKTIONEN ---
 

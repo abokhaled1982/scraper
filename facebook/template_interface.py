@@ -141,6 +141,13 @@ def _build_reel_type_modifications(
         fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
     )
 
+    # VOICEOVER TEXT EXTRAHIEREN
+    voiceover_text = _first_present_str(
+        deal_data,
+        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
+        fallback="",
+    )
+
     caption_text = _extract_caption_text(deal_data, rabatt_text)
 
     modifications: dict[str, Any] = {
@@ -158,6 +165,10 @@ def _build_reel_type_modifications(
         "Rabatt-Text.text": rabatt_text,
         "Rabatt.text": rabatt_text,
     }
+
+    # VOICEOVER TEXT AN CREATOMATE ÜBERGEBEN
+    if voiceover_text:
+        modifications["Voiceover.text"] = voiceover_text
 
     # Expected layer naming in the current reel template:
     # Product Image 1..3, Product Offer 1..3
@@ -210,6 +221,13 @@ def _build_offer_type_modifications(
         fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
     )
 
+    # VOICEOVER TEXT EXTRAHIEREN
+    voiceover_text = _first_present_str(
+        deal_data,
+        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
+        fallback="",
+    )
+
     caption_text = _extract_caption_text(deal_data, rabatt_text)
 
     modifications = {
@@ -227,6 +245,11 @@ def _build_offer_type_modifications(
         "CTA.text": cta_text,
         "Website.text": website_text,
     }
+
+    # VOICEOVER TEXT AN CREATOMATE ÜBERGEBEN
+    if voiceover_text:
+        modifications["Voiceover.text"] = voiceover_text
+
     _apply_image_fit(modifications, "Product-Image", template_cfg)
     return modifications
 

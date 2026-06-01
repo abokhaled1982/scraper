@@ -128,6 +128,7 @@ TARGET_SCHEMA_TEMPLATE = {
     "units_sold": "N/A", "seller_name": "N/A", "availability": "N/A", "shipping_info": "N/A",
     "hashtags": [],  # <--- HIER HINZUFÜGEN
     "reel_titel": "N/A", "reel_beschreibung": "N/A", "reel_caption": "N/A",
+    "voiceover_text": "N/A",
     "type": "post",   # "reel" wenn Rabatt >= 30%, sonst "post"
 }
 
@@ -203,6 +204,7 @@ def map_ai_output_to_target_format(
     final_output['reel_titel'] = extracted.get('reel_titel', 'N/A')
     final_output['reel_beschreibung'] = extracted.get('reel_beschreibung', 'N/A')
     final_output['reel_caption'] = extracted.get('reel_caption', 'N/A')
+    final_output['voiceover_text'] = extracted.get('voiceover_text', 'N/A')
     
     # TEXT FELDER
     ai_features = extracted.get('features')
