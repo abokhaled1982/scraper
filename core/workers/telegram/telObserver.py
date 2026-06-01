@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Projektwurzel in sys.path aufnehmen (falls nötig)
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from core.logging import get_logger  # noqa: E402
@@ -31,7 +31,7 @@ except Exception as e:
 
 # Dein bestehender Login-Helper (falls vorhanden)
 try:
-    from telegram.login_once import LoginConfig, ensure_logged_in
+    from core.workers.telegram.login_once import LoginConfig, ensure_logged_in
 except Exception:
     # Fallback simple LoginConfig-Standin, falls login_once nicht vorhanden ist.
     class LoginConfig:
@@ -53,7 +53,7 @@ except Exception:
 # config.py (optional). Wenn nicht vorhanden: Fallback auf ENV
 LOCK_FILE = None
 try:
-    import config
+    from core import paths as config
     LOCK_FILE = Path(getattr(config, "LOCK_FILE", ".locks/product_list.lock"))
 except Exception:
     LOCK_FILE = Path(os.getenv("LOCK_FILE", ".locks/product_list.lock"))
@@ -222,16 +222,22 @@ async def handle_message(evt: events.NewMessage.Event):
 # Main
 # ------------------------
 async def _amain():
+    from core.db import workers_repo
+    _WORKER = "tel_observer"
+    workers_repo.register(_WORKER)
     client = await ensure_logged_in(OBS_CFG)
     async with client:
         entity = await _ensure_join_and_resolve(client, OBS_CHANNEL_REF)
         log.info(f"🔎 Observer aktiv – überwache: {OBS_CHANNEL_REF}")
+        workers_repo.set_task(_WORKER, f"watching {OBS_CHANNEL_REF}")
 
         @client.on(events.NewMessage(chats=entity))
         async def _on(evt):
             try:
                 await handle_message(evt)
+                workers_repo.set_task(_WORKER, "processed message")
             except Exception as e:
+                workers_repo.set_error(_WORKER, str(e)[:200])
                 log.error(f"❌ (Observer) Fehler in handle_message: {e}")
 
         await client.run_until_disconnected()

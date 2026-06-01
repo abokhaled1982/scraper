@@ -7,8 +7,11 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("watcher")  # noqa: E402
-from config import INBOX_DIR,WATCH_INTERVAL_SECS
-from parser_worker import parse_and_merge
+from core.paths import INBOX_DIR,WATCH_INTERVAL_SECS
+from core.workers.amazon.parser_worker import parse_and_merge
+from core.db import workers_repo
+
+_WORKER = "amazon_watcher"
 
 def _pick_oldest_html(inbox: Path) -> Path | None:
     files = [p for p in inbox.glob("*.html")]
@@ -18,14 +21,17 @@ def _pick_oldest_html(inbox: Path) -> Path | None:
     return files[0]
 
 def main():
+    workers_repo.register(_WORKER)
     log.info(f"[watcher] started. polling {INBOX_DIR} every {WATCH_INTERVAL_SECS}s")
     while True:
         try:
             fp = _pick_oldest_html(INBOX_DIR)
             if not fp:
+                workers_repo.set_idle(_WORKER)
                 time.sleep(WATCH_INTERVAL_SECS)
                 continue
 
+            workers_repo.set_task(_WORKER, f"parsing {fp.name}")
             log.info(f"[watcher] processing {fp.name}")
             try:
                 parse_and_merge(fp)

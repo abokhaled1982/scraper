@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Pfade & Module
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PY = sys.executable  # aktuelles venv-Python
 
 # Gemeinsame App-Creds
@@ -31,7 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("telRunner")  # noqa: E402
-from login_once import LoginConfig, ensure_both_sessions_sequential
+from core.workers.telegram.login_once import LoginConfig, ensure_both_sessions_sequential
 
 def info(msg: str): print(msg, flush=True)
 

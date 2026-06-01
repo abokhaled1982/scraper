@@ -14,7 +14,7 @@ import os
 import sys
 import pathlib
 
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 from core.logging import get_logger  # noqa: E402
 log = get_logger("ig_login")  # noqa: E402

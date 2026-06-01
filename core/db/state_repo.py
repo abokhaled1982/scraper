@@ -94,3 +94,20 @@ def update_dict(key: str, updates: dict) -> None:
             s.add(StateKV(key=key, value=current))
         else:
             row.value = current
+
+
+# ───────────────────────────────────────────────────────────────
+# Introspection (Dashboard)
+# ───────────────────────────────────────────────────────────────
+
+def list_keys() -> list[dict]:
+    """Liefert alle StateKV-Einträge als [{key, type, size}]."""
+    with session_scope() as s:
+        rows = s.execute(select(StateKV).order_by(StateKV.key)).scalars().all()
+        out = []
+        for r in rows:
+            v = r.value
+            t = type(v).__name__
+            size = len(v) if isinstance(v, (list, dict, str)) else 1
+            out.append({"key": r.key, "type": t, "size": size})
+        return out

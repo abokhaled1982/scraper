@@ -268,7 +268,7 @@ def download_video(render_result: dict, product_id: str) -> pathlib.Path | None:
     import sys
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-    from config import VIDEOS_QUEUE_DIR
+    from core.paths import VIDEOS_QUEUE_DIR
     VIDEOS_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     local_path = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
 

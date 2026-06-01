@@ -94,10 +94,10 @@ async def route_single_deal(deal: dict, sent_ids: set, fb_service) -> bool:
     deal_type = str(data.get("type") or "").strip().lower()
 
     if deal_type == "reel":
-        from facebook.reels_processor import process_single_deal as reel_process
+        from core.workers.facebook.reels_processor import process_single_deal as reel_process
         return await reel_process(deal, sent_ids)
     else:
-        from facebook.fb_processor import process_single_deal as post_process
+        from core.workers.facebook.fb_processor import process_single_deal as post_process
         return await post_process(deal, sent_ids, fb_service)
 
 
@@ -152,7 +152,7 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
 
 
 async def start_system():
-    import facebook.fb_service as fb_service
+    import core.workers.facebook.fb_service as fb_service
     log.info("========================================")
     log.info("   🚀 FACEBOOK DEAL BOT SYSTEM          ")
     log.info("========================================")

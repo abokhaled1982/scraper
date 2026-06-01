@@ -9,8 +9,8 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
-from facebook.reels_processor import process_single_deal
-from facebook import fb_service
+from core.workers.facebook.reels_processor import process_single_deal
+from core.workers.facebook import fb_service
 
 async def test_with_dummy_data():
     # Erstelle Dummy-Deal-Datei

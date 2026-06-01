@@ -40,7 +40,6 @@ MODE = ARGS.mode
 # Initial Setup & Pfade
 # ----------------------------------------------------------
 HERE = Path(__file__).parent.resolve()
-AMAZON = HERE / "amazon"
 PY = sys.executable  # Aktuelles venv-Python
 
 # Projekt-Root in sys.path aufnehmen
@@ -59,7 +58,7 @@ SESSION_DIR = os.getenv("SESSION_DIR", ".sessions")
 # Telegram-Konfiguration + Import nur im full-Modus
 if MODE == "full":
     try:
-        from telegram.login_once import LoginConfig, ensure_both_sessions_sequential
+        from core.workers.telegram.login_once import LoginConfig, ensure_both_sessions_sequential
     except ImportError:
         log.error("❌ Fehler: login_once.py konnte nicht gefunden werden.")
         sys.exit(1)
@@ -83,7 +82,7 @@ if MODE == "full":
 # Supervisor Utilities
 # ----------------------------------------------------------
 def _ensure_dirs():
-    from config import ensure_directories
+    from core.paths import ensure_directories
     ensure_directories()
     (HERE / SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -184,10 +183,10 @@ async def _run_parser_only():
     procs: List[Tuple[str, asyncio.subprocess.Process]] = []
     procs += await _start_core_services()
 
-    ws_server      = await spawn("ws_server",      PY, str(AMAZON / "ws_server.py"))
-    deals_watcher  = await spawn("deals_watcher",  PY, str(AMAZON / "watcher.py"))
-    product_opener = await spawn("product_opener", PY, str(AMAZON / "product_opener.py"))
-    product_parser = await spawn("product_parser", PY, str(AMAZON / "product_parser.py"))
+    ws_server      = await spawn("ws_server",      PY, "-m", "core.workers.amazon.ws_server")
+    deals_watcher  = await spawn("deals_watcher",  PY, "-m", "core.workers.amazon.watcher")
+    product_opener = await spawn("product_opener", PY, "-m", "core.workers.amazon.product_opener")
+    product_parser = await spawn("product_parser", PY, "-m", "core.workers.amazon.product_parser")
 
     procs += [
         ("ws_server",      ws_server),
@@ -214,16 +213,16 @@ async def _run_full():
     ig_session_ok = False  # Instagram ist deaktiviert
 
     # 3. Alle Services starten
-    ws_server      = await spawn("ws_server",      PY, str(AMAZON / "ws_server.py"))
-    deals_watcher  = await spawn("deals_watcher",  PY, str(AMAZON / "watcher.py"))
-    product_opener = await spawn("product_opener", PY, str(AMAZON / "product_opener.py"))
-    product_parser = await spawn("product_parser", PY, str(AMAZON / "product_parser.py"))
-    fb_watcher     = await spawn("fb_watcher",     PY, "-m", "facebook.fb_watcher")
+    ws_server      = await spawn("ws_server",      PY, "-m", "core.workers.amazon.ws_server")
+    deals_watcher  = await spawn("deals_watcher",  PY, "-m", "core.workers.amazon.watcher")
+    product_opener = await spawn("product_opener", PY, "-m", "core.workers.amazon.product_opener")
+    product_parser = await spawn("product_parser", PY, "-m", "core.workers.amazon.product_parser")
+    fb_watcher     = await spawn("fb_watcher",     PY, "-m", "core.workers.facebook.fb_watcher")
     ig_watcher     = None  # Instagram deaktiviert
-    tel_router     = await spawn("telegram_router",   PY, "-m", "telegram.telRouter")
-    tel_observer   = await spawn("telegram_observer", PY, "-m", "telegram.telObserver")
-    tel_sender     = await spawn("telegram_sender",   PY, "-m", "telegram.telSender")
-    tel_piraten    = await spawn("telegram_piraten",  PY, "-m", "telegram.telObserver_piraten")
+    tel_router     = await spawn("telegram_router",   PY, "-m", "core.workers.telegram.telRouter")
+    tel_observer   = await spawn("telegram_observer", PY, "-m", "core.workers.telegram.telObserver")
+    tel_sender     = await spawn("telegram_sender",   PY, "-m", "core.workers.telegram.telSender")
+    tel_piraten    = await spawn("telegram_piraten",  PY, "-m", "core.workers.telegram.telObserver_piraten")
 
     procs += [
         ("ws_server",          ws_server),

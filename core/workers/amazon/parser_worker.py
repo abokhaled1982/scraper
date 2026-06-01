@@ -6,8 +6,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Any, Tuple, List
 
-from config import LOCK_FILE
-from amazon.amzon_dealsList_parser import parse_deals_from_html  # <-- use the deals-page parser now
+from core.paths import LOCK_FILE
+from core.workers.amazon.amzon_dealsList_parser import parse_deals_from_html  # <-- use the deals-page parser now
 from core.db import state_repo
 
 _PRODUCT_LIST_KEY = "product_list"

@@ -16,14 +16,14 @@ from core.logging import get_logger  # noqa: E402
 log = get_logger("ws_server")  # noqa: E402
 
 # === zentrale Config & Pfade ===
-from config import (
+from core.paths import (
     WS_HOST as HOST,
     WS_PORT as PORT,
     INBOX_DIR,
     PRODUCKT_DIR,         # <- Sibling von inbox
     
 )
-from telegram.telSender import send_url_to_observer # WICHTIG!
+from core.workers.telegram.telSender import send_url_to_observer # WICHTIG!
 # websockets erst nach config importieren (reine Ordnungssache)
 import websockets
 
@@ -201,6 +201,9 @@ async def handle(ws):
 
 
 async def main():
+    from core.db import workers_repo
+    workers_repo.register("amazon_ws_server")
+    workers_repo.set_task("amazon_ws_server", f"listening on ws://{HOST}:{PORT}")
     async with websockets.serve(handle, HOST, PORT, max_size=None, ping_interval=30):
         log.info(f"[srv] listening on ws://{HOST}:{PORT} (single-save mode, url+id naming, product routing)")
         await asyncio.Future()  # run forever

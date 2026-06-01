@@ -60,7 +60,7 @@ async def run_batch_phase(sent_ids: set) -> None:
         log.info("[IG] ✅ Kein Rückstand.")
         return
 
-    from instagram.ig_processor import process_single_deal
+    from core.workers.instagram.ig_processor import process_single_deal
 
     total = len(candidates)
     log.info(f"[IG] Starte {total} Deals.")
@@ -79,7 +79,7 @@ async def run_batch_phase(sent_ids: set) -> None:
 
 async def run_watch_loop(sent_ids: set) -> None:
     log.info("\n[IG] 👁️ Live-Watcher aktiv...")
-    from instagram.ig_processor import process_single_deal
+    from core.workers.instagram.ig_processor import process_single_deal
 
     while True:
         try:
@@ -108,7 +108,7 @@ async def start_system():
     # Login prüfen beim Start
     log.info("[IG] Prüfe Instagram-Login...")
     try:
-        import instagram.ig_service as ig_service
+        import core.workers.instagram.ig_service as ig_service
         ig_service._get_client()
         log.info("[IG] ✅ Login OK.")
     except Exception as e:

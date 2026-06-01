@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import facebook.fb_service as fb_service
-from facebook.fb_message import create_facebook_message
+import core.workers.facebook.fb_service as fb_service
+from core.workers.facebook.fb_message import create_facebook_message
 
 # --- TEST-DEAL ---
 TEST_DEAL = {

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Projektwurzel in sys.path aufnehmen
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from core.logging import get_logger  # noqa: E402
@@ -33,7 +33,7 @@ except Exception as e:
 
 # Login Helper Import (falls vorhanden)
 try:
-    from telegram.login_once import LoginConfig, ensure_logged_in
+    from core.workers.telegram.login_once import LoginConfig, ensure_logged_in
 except Exception:
     # Fallback-Implementierung (einfacher)
     class LoginConfig:
@@ -56,7 +56,7 @@ except Exception:
 # ------------------------
 LOCK_FILE = None
 try:
-    import config
+    from core import paths as config
     LOCK_FILE = Path(getattr(config, "LOCK_FILE", ".locks/product_list.lock"))
 except Exception:
     LOCK_FILE = Path(os.getenv("LOCK_FILE", ".locks/product_list.lock"))
@@ -311,12 +311,16 @@ async def handle_message(evt: events.NewMessage.Event):
 CATCHUP_MESSAGES = int(os.getenv("PIRATEN_CATCHUP", "0"))  # 0 = nur zukünftige Nachrichten verarbeiten
 
 async def _amain():
+    from core.db import workers_repo
+    _WORKER = "tel_observer_piraten"
+    workers_repo.register(_WORKER)
     log.info(f"🏴‍☠️ Starte Piraten-Observer Session: {PIRATEN_SESSION_NAME}")
     client = await ensure_logged_in(PIRATEN_CFG)
     async with client:
         entity = await _ensure_join_and_resolve(client, PIRATEN_CHANNEL_REF)
         chat_name = getattr(entity, 'title', PIRATEN_CHANNEL_REF)
         log.info(f"🏴‍☠️ Überwache Kanal: {chat_name}")
+        workers_repo.set_task(_WORKER, f"watching {chat_name}")
 
         # ── Catch-Up: letzte N Nachrichten beim Start verarbeiten ──────────
         if CATCHUP_MESSAGES > 0:
@@ -334,7 +338,9 @@ async def _amain():
         async def _on(evt):
             try:
                 await handle_message(evt)
+                workers_repo.set_task(_WORKER, "processed message")
             except Exception as e:
+                workers_repo.set_error(_WORKER, str(e)[:200])
                 log.error(f"❌ Piraten-Error: {e}")
 
         log.info("🔴 Live-Listener aktiv – warte auf neue Nachrichten...")

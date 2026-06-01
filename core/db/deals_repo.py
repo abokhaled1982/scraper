@@ -253,3 +253,50 @@ def _to_dict(d: Deal) -> dict:
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
     }
+
+
+# ───────────────────────────────────────────────────────────────
+# Dashboard-Operationen
+# ───────────────────────────────────────────────────────────────
+
+def requeue(deal_id: int) -> bool:
+    """Setzt einen Deal (jeden Status) zurück in die Queue."""
+    with session_scope() as s:
+        d = s.get(Deal, deal_id)
+        if not d:
+            return False
+        d.status = DEAL_STATUS_QUEUE
+        d.locked_by = None
+        d.locked_at = None
+        d.error_message = None
+        s.add(DealEvent(deal=d, event="requeued", detail="dashboard"))
+        return True
+
+
+def delete(deal_id: int) -> bool:
+    """Entfernt einen Deal vollständig (inkl. Events via Cascade falls definiert)."""
+    with session_scope() as s:
+        d = s.get(Deal, deal_id)
+        if not d:
+            return False
+        s.delete(d)
+        return True
+
+
+def get_events(deal_id: int, limit: int = 50) -> list[dict]:
+    with session_scope() as s:
+        rows = s.execute(
+            select(DealEvent)
+            .where(DealEvent.deal_id == deal_id)
+            .order_by(DealEvent.created_at.desc())
+            .limit(limit)
+        ).scalars().all()
+        return [
+            {
+                "event": e.event,
+                "detail": e.detail,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in rows
+        ]
+

@@ -1,6 +1,6 @@
 # debug_parser.py
 from pathlib import Path
-from amazon.product_parser import (
+from core.workers.amazon.product_parser import (
     _extract_ldjson_blocks,
     _find_product_ldjson,
     _extract_image_from_ldjson_product,

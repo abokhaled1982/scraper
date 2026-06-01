@@ -19,22 +19,21 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("product_parser")  # noqa: E402
-from config import PRODUCKT_DIR, FAILED_DIR, INTERVAL_SECS, REGISTRY_PATH
+from core.paths import PRODUCKT_DIR, INTERVAL_SECS
 from core.db import deals_repo
 
 # Importiere die fachlich getrennten Module
-from utils import (
+from core.workers.amazon.utils import (
     _read_text,
     is_amazon_html,
-    load_registry, 
     pick_oldest_html, map_ai_output_to_target_format
 )
 
 # Importe für Amazon und AI-Pipeline
 
-from ai_parser.ai_extractor import extract_and_save_data 
+from core.workers.ai_parser.ai_extractor import extract_and_save_data 
 
-from amazon.amazon_parser import AmazonProductParser
+from core.workers.amazon.amazon_parser import AmazonProductParser
 
 
 load_dotenv() 
@@ -682,18 +681,23 @@ def daemon_loop(interval: int = INTERVAL_SECS) -> None:
     """
     Watch-Loop: zieht regelmäßig die älteste HTML-Datei und verarbeitet sie.
     """
+    from core.db import workers_repo
+    _WORKER = "amazon_parser"
+    workers_repo.register(_WORKER)
     log.info(f"[product-parser] watching {PRODUCKT_DIR} every {interval}s -> DB(deals)")
-    reg = load_registry(REGISTRY_PATH) 
     while True:
         try:
             fp = pick_oldest_html(PRODUCKT_DIR) 
             if not fp:
+                workers_repo.set_idle(_WORKER)
                 time.sleep(interval)
                 continue
+            workers_repo.set_task(_WORKER, f"parsing {fp.name}")
             ok, msg = process_one(fp, None)
             log.info(f"[product-parser] {msg}")
             time.sleep(1) 
         except Exception as e:
+            workers_repo.set_error(_WORKER, str(e)[:200])
             log.error(f"[product-parser] SCHWERWIEGENDER FEHLER IM DAEMON: {e}")
             time.sleep(interval)
 

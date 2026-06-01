@@ -7,14 +7,14 @@ import pathlib
 import re
 import sys
 import requests
-from facebook.reels_service import download_video, render_reel, render_typ3_audio
-from facebook.template_interface import (
+from core.workers.facebook.reels_service import download_video, render_reel, render_typ3_audio
+from core.workers.facebook.template_interface import (
     build_modifications_for_template,
     resolve_template_selection,
 )
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from config import IMAGES_DIR, VIDEOS_SENT_DIR, VIDEOS_QUEUE_DIR
+from core.paths import IMAGES_DIR, VIDEOS_SENT_DIR, VIDEOS_QUEUE_DIR
 from core.db import deals_repo
 from core.logging import get_logger  # noqa: E402
 log = get_logger("reels_processor")  # noqa: E402
@@ -139,15 +139,15 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
                 log.error(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
 
         # Sende an Facebook-Addon
-        from facebook import fb_service
+        from core.workers.facebook import fb_service
         sent = await fb_service.send_post(data, None, local_video)
         if sent:
             log.info(f"[FACEBOOK] ✅ Reel erfolgreich gepostet: {product_id}")
 
             # ── Instagram: gleiches Video posten ─────────────────────────────
             try:
-                import instagram.ig_service as ig_service
-                from instagram.ig_message import create_ig_caption
+                import core.workers.instagram.ig_service as ig_service
+                from core.workers.instagram.ig_message import create_ig_caption
                 ig_caption = create_ig_caption(data)
                 video_path = pathlib.Path(local_video) if local_video else None
                 if video_path and video_path.exists():

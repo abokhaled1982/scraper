@@ -11,7 +11,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("fb_processor")  # noqa: E402
-from config import IMAGES_DIR
+from core.paths import IMAGES_DIR
 from core.db import deals_repo
 
 HERE          = pathlib.Path(__file__).resolve().parent

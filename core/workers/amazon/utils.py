@@ -44,30 +44,6 @@ def move_to_failed(fp: Path, reason: str, FAILED_DIR: Path) -> None:
     except Exception as e:
         log.error(f"WARNUNG: Konnte Datei {fp.name} nicht nach FAILED_DIR verschieben: {e}")
 
-def load_registry(REGISTRY_PATH: Path) -> Dict:
-    """Lädt das Verarbeitungs-Registry."""
-    try:
-        if REGISTRY_PATH.exists():
-            with REGISTRY_PATH.open("r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {"hashes": {}, "asins": {}}
-
-def save_registry(reg: Dict, REGISTRY_PATH: Path) -> None:
-    """Speichert das Verarbeitungs-Registry (atomar)."""
-    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = REGISTRY_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(REGISTRY_PATH)
-
-def write_summary_append(data: Dict, SUMMARY_PATH: Path) -> None:
-    """Fügt ein Ergebnis dem Summary-Log hinzu."""
-    SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SUMMARY_PATH.open("a", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.write("\n")
-
 def pick_oldest_html(PRODUCKT_DIR: Path) -> Optional[Path]:
     """Wählt die älteste HTML-Datei aus dem PRODUCKT_DIR zur Verarbeitung."""
     files = sorted(PRODUCKT_DIR.glob('*.html'), key=os.path.getmtime)

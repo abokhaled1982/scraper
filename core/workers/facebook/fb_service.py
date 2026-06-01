@@ -233,7 +233,7 @@ def _build_comment_text(data: dict, offer_url: str) -> str:
 
 async def send_post(data: dict, local_image_path=None, local_video_path=None) -> bool:
     """Sendet einen Facebook-Post oder Reel."""
-    from facebook.fb_message import create_facebook_message
+    from core.workers.facebook.fb_message import create_facebook_message
 
     fb_text   = create_facebook_message(data)
     offer_url = str(data.get("affiliate_url") or data.get("url") or "").strip()

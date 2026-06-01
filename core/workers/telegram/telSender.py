@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 # Projektwurzel in sys.path aufnehmen
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from core.logging import get_logger  # noqa: E402
@@ -18,7 +18,7 @@ from telethon.errors import UserAlreadyParticipantError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 # Dein bestehender Login-Helper
-from telegram.login_once import LoginConfig, ensure_logged_in
+from core.workers.telegram.login_once import LoginConfig, ensure_logged_in
 
 load_dotenv()
 
@@ -118,11 +118,15 @@ async def send_url_to_observer(url: str):
 
 # Optional: Main-Loop für den Fall, dass es über run_all.py ohne Argumente gestartet wird
 async def _amain():
+    from core.db import workers_repo
+    workers_repo.register("tel_sender")
+    workers_repo.set_idle("tel_sender")
     log.info("[Sender] Starte im Standby-Modus (verbindet nur bei Bedarf).")
     # Es ist kein run_until_disconnected notwendig, da der Client nur sendet.
     # Der Prozess bleibt am Leben, bis er beendet wird.
     while True:
-        await asyncio.sleep(3600)
+        workers_repo.set_idle("tel_sender")
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     try:

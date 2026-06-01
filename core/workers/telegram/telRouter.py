@@ -14,18 +14,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Projektwurzel für config.py
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from core.logging import get_logger  # noqa: E402
 log = get_logger("telRouter")  # noqa: E402
 
-import config
+from core import paths as config
 from core.db import deals_repo, state_repo, workers_repo
-from telegram.login_once import LoginConfig, ensure_logged_in
-from telegram.offer_message import build_caption_html, pick_image_source, build_inline_keyboard
+from core.workers.telegram.login_once import LoginConfig, ensure_logged_in
+from core.workers.telegram.offer_message import build_caption_html, pick_image_source, build_inline_keyboard
 # NEU: Import der Bildverarbeitungs-Logik
-from telegram.image_processor import get_best_image_url, download_and_convert_to_jpg ,url_needs_local_processing
+from core.workers.telegram.image_processor import get_best_image_url, download_and_convert_to_jpg ,url_needs_local_processing
 
 # Settings
 INVITE_RE     = re.compile(r"(?:t\.me\/\+|joinchat\/)([A-Za-z0-9_-]+)")

@@ -32,17 +32,17 @@ import time
 HERE        = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import config as _cfg
+from core import paths as _cfg
 VIDEOS_DIR  = _cfg.VIDEOS_SENT_DIR    # data/media/videos/sent/
 DATA_DIR    = _cfg.DEALS_QUEUE_DIR    # data/deals/queue/
 SENT_FILE   = _cfg.SENT_IDS_PATH      # data/state/sent_ids.json
 
-from facebook import fb_service
-from facebook.fb_service import _build_comment_text
-from facebook.fb_message import create_facebook_message
-from facebook.fb_watcher import get_sent_ids, save_sent_ids
-from facebook.template_interface import build_modifications_for_template, resolve_template_selection
-from facebook.reels_service import render_reel, download_video
+from core.workers.facebook import fb_service
+from core.workers.facebook.fb_service import _build_comment_text
+from core.workers.facebook.fb_message import create_facebook_message
+from core.workers.facebook.fb_watcher import get_sent_ids, save_sent_ids
+from core.workers.facebook.template_interface import build_modifications_for_template, resolve_template_selection
+from core.workers.facebook.reels_service import render_reel, download_video
 
 
 def load_deal(product_id: str) -> dict:

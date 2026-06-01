@@ -174,13 +174,16 @@ def update_opened(opened: dict, asin: str, url: str, meta: dict) -> None:
 
 def main():
     # Load configuration from environment/defaults
-    # Annahme: POLL_SECONDS, PAUSE_SECONDS, DRY_RUN, SKIP_TTL_SECONDS sind global definiert
+    from core.db import workers_repo
+    _WORKER = "amazon_opener"
+    workers_repo.register(_WORKER)
     POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "10")) 
 
     while True:
         # 1. Wait for items (blocking until items are present)
-        # Angenommen, wait_until_has_items existiert
+        workers_repo.set_idle(_WORKER)
         products = wait_until_has_items(poll_seconds=POLL_SECONDS)
+        workers_repo.set_task(_WORKER, f"opening {len(products)} candidates")
 
         # State laden/sicherstellen (DB)
         opened = state_repo.get_dict(_OPENED_KEY)

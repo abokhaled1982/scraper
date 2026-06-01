@@ -12,7 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("ig_processor")  # noqa: E402
-from config import IMAGES_DIR
+from core.paths import IMAGES_DIR
 from core.db import deals_repo
 
 IMAGES_FOLDER = IMAGES_DIR
@@ -83,8 +83,8 @@ def ensure_jpeg(path: pathlib.Path) -> pathlib.Path:
 
 async def process_single_deal(deal: dict, sent_ids: set) -> bool:
     """Verarbeitet einen Deal-Datensatz und postet auf Instagram."""
-    import instagram.ig_service as ig_service
-    from instagram.ig_message import create_ig_caption
+    import core.workers.instagram.ig_service as ig_service
+    from core.workers.instagram.ig_message import create_ig_caption
 
     product_id = deal.get("product_id")
     deal_id = deal.get("id")
@@ -121,7 +121,7 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
 
         if deal_type == "reel":
             # Reel-Video posten
-            from config import VIDEOS_QUEUE_DIR
+            from core.paths import VIDEOS_QUEUE_DIR
             video_candidates = list(VIDEOS_QUEUE_DIR.glob(f"{product_id}.*"))
             if video_candidates:
                 video_path = video_candidates[0]
