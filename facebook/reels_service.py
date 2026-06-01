@@ -123,90 +123,118 @@ def _fmt_price(field_val) -> str:
         return f"{val} {hint}" if val else "N/A"
     return str(field_val) if field_val else "N/A"
 
+# ─── typ3_audio Konstanten (1:1 wie creatomate.py) ──────────────────────────
+TYP3_AUDIO_TEMPLATE_ID = "65d0c5db-a2a1-40b6-8240-0d1b68c0a706"
+TYP3_AUDIO_API_KEY     = "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f"
+
+
 def build_typ3_audio_modifications(data: dict) -> dict:
     """
     Erstellt das Modifications-Dict für das typ3_audio-Template aus einem Deal-Dict.
+    Exakt dieselbe Struktur wie in creatomate.py (BASE_MODIFICATIONS + Voiceover-SHX.source).
     """
     images: list = data.get("images") or []
-    product_image_url: str = images[0] if images else ""
+    product_image_url: str = (
+        (images[0] if images else "")
+        or str(data.get("image_url") or "").strip()
+    )
 
     normal_price     = _fmt_price(data.get("original_price"))
     discounted_price = _fmt_price(data.get("price"))
 
-    caption = data.get("reel_caption") or data.get("rabatt_text") or "N/A"
+    caption = (
+        data.get("reel_caption")
+        or data.get("rabatt_text")
+        or "🔥 Discount Alert"
+    )
 
-    voiceover = data.get("voiceover_text") or "N/A"
-    if voiceover == "N/A":
-        title = data.get("title", "Dieses Produkt") or "Dieses Produkt"
-        price = data.get("price", "N/A")
-        price_str = _fmt_price(price) if isinstance(price, dict) else str(price)
+    product_name        = str(data.get("title") or "N/A").strip() or "N/A"
+    product_description = str(data.get("reel_beschreibung") or data.get("description") or "N/A").strip() or "N/A"
+    website             = str(data.get("affiliate_url") or data.get("url") or "www.dealsboss.de").strip()
+
+    voiceover = str(data.get("voiceover_text") or "").strip()
+    if not voiceover:
+        title = product_name if product_name != "N/A" else "Dieses Produkt"
         discount = str(data.get("discount_percent") or "").replace("N/A", "").strip()
         if discount:
             voiceover = (
-                f"Krasses Angebot heute! {title} jetzt {discount} günstiger — "
-                f"nur {price_str}. Jetzt zuschlagen!"
+                f"Krasses Angebot heute! {title} jetzt {discount} günstiger – "
+                f"nur {discounted_price}. Jetzt schnell zuschlagen, Link in der Bio!"
             )
         else:
             voiceover = (
-                f"Schnell sein lohnt sich! {title} jetzt für nur {price_str}. "
+                f"Schnell sein lohnt sich! {title} jetzt für nur {discounted_price}. "
                 f"Link in der Bio!"
             )
 
+    # EXAKT dieselbe Reihenfolge/Keys wie creatomate.py
     return {
         "Product-Image.source":     product_image_url,
-        "Product-Name.text":        data.get("title", "N/A"),
-        "Product-Description.text": data.get("reel_beschreibung", "N/A"),
+        "Product-Name.text":        product_name,
+        "Product-Description.text": product_description,
         "Normal-Price.text":        normal_price,
         "Discounted-Price.text":    discounted_price,
         "Caption.text":             caption,
         "CTA.text":                 "Folgt uns für mehr Rabatte!",
-        "Website.text":             data.get("affiliate_url", "N/A"),
-        
-        # HIER IST DER FIX: .text Suffix hinzugefügt!
-        "Voiceover-WZ7.text":       voiceover,
+        "Website.text":             website,
+        "Voiceover-SHX.source":     voiceover,
     }
 
 
 def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
     """
-    Rendert das typ3_audio-Template für ein gegebenes Deal-Dict.
+    Rendert das typ3_audio-Template – exakt wie creatomate.py.
 
-    Liest template_id bevorzugt aus:
-      1. dem übergebenen `template_id`-Parameter
-      2. dem Deal-Dict (data["template_id"])
-      3. der Template-Registry (template_type "typ3_audio")
-
-    Gibt das fertige Creatomate-Render-Result-Dict zurück.
+    Verwendet die hardcoded TEMPLATE_ID + API_KEY (gleiche Werte wie creatomate.py),
+    damit sich Verhalten in der App und im Test-Script identisch verhalten.
+    Der `template_id`-Parameter wird nur genutzt, wenn er explizit überschrieben wird.
     """
-    # Priorität: expliziter Parameter → deal-dict → registry
-    resolved_id = (
-        template_id
-        or str(data.get("template_id") or "").strip()
-        or _get_api_key_from_registry("typ3_audio")   # gibt hier template_id, nicht key
-    )
-
-    if not resolved_id:
-        # Letzter Fallback: direkt aus Registry lesen
-        import json as _json
-        templates_dir = pathlib.Path(__file__).resolve().parent / "templates"
-        for fp in templates_dir.glob("*.json"):
-            try:
-                cfg = _json.loads(fp.read_text(encoding="utf-8"))
-                if cfg.get("template_type") == "typ3_audio":
-                    resolved_id = str(cfg.get("template_id") or "").strip()
-                    break
-            except Exception:
-                pass
-
-    if not resolved_id:
-        raise ValueError(
-            "Kein template_id für typ3_audio gefunden. "
-            "Bitte in facebook/templates/typ3_audio.json eintragen."
-        )
+    resolved_id = (template_id or "").strip() or TYP3_AUDIO_TEMPLATE_ID
 
     modifications = build_typ3_audio_modifications(data)
-    print(f"[typ3_audio] Starte Render mit template_id={resolved_id} ...")
-    return render_template(resolved_id, modifications)
+
+    # 1:1 wie creatomate.py: direkter POST mit hardcoded API-Key & Polling
+    payload = {
+        "template_id": resolved_id,
+        "modifications": modifications,
+    }
+    headers = {
+        "Content-Type":  "application/json",
+        "Authorization": f"Bearer {TYP3_AUDIO_API_KEY}",
+    }
+
+    print(f"[typ3_audio] 🚀 Starte Creatomate Render (template_id={resolved_id})")
+    print(f"[typ3_audio]    Modifications: {list(modifications.keys())}")
+
+    response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+    if response.status_code >= 400:
+        raise Exception(
+            f"Creatomate API-Fehler ({response.status_code}): {response.text[:600]}"
+        )
+    renders = response.json()
+    render_data = renders[0] if isinstance(renders, list) else renders
+    render_id = render_data.get("id")
+    if not render_id:
+        raise ValueError(f"Keine Render-ID in Antwort: {render_data}")
+
+    print(f"[typ3_audio] ⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
+
+    status_url = f"{API_URL}/{render_id}"
+    start = time.time()
+    while True:
+        if time.time() - start > 300:
+            raise TimeoutError(f"Render-Timeout nach 300s (ID: {render_id})")
+        status_response = requests.get(status_url, headers=headers, timeout=15)
+        status_response.raise_for_status()
+        status_data = status_response.json()
+        status = status_data.get("status")
+        print(f"[typ3_audio]    Status: {status}")
+        if status == "succeeded":
+            print(f"[typ3_audio] ✅ Render fertig. URL: {status_data.get('url')}")
+            return status_data
+        if status in ("failed", "error"):
+            raise ValueError(f"Render fehlgeschlagen: {status_data.get('error', status_data)}")
+        time.sleep(5)
 
 
 def _get_api_key_from_registry(template_type: str) -> str:

@@ -89,7 +89,9 @@ def build_modifications_for_template(
     template_cfg = TEMPLATE_REGISTRY.get(template_type, {})
     template_kind = str(template_cfg.get("kind") or "").strip().lower()
 
-    if template_type.startswith("reel") or template_kind == "reel" or template_type == "custom":
+    if template_type == "typ3_audio":
+        mods = _build_typ3_audio_modifications(deal_data, template_cfg)
+    elif template_type.startswith("reel") or template_kind == "reel" or template_type == "custom":
         mods = _build_reel_type_modifications(deal_data, discount_value, template_cfg)
     elif template_type.startswith("offer") or template_kind == "offer":
         mods = _build_offer_type_modifications(deal_data, discount_value, template_cfg)
@@ -185,6 +187,71 @@ def _build_reel_type_modifications(
             _apply_image_fit(modifications, f"Product Image {i}", template_cfg)
 
     return modifications
+
+
+def _build_typ3_audio_modifications(
+    deal_data: dict[str, Any],
+    template_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Erstellt Modifications für das typ3_audio-Template (ElevenLabs-Voiceover).
+
+    Nutzt den Layer-Key 'Voiceover-WZ7.text', der für dieses Template korrekt ist.
+    """
+    images = deal_data.get("template_images") or deal_data.get("images") or []
+    product_image_url = next(
+        (img for img in images if isinstance(img, str) and img.strip()), ""
+    ) or str(deal_data.get("image_url") or "").strip()
+
+    product_name, product_description = _extract_product_texts(deal_data)
+    normal_price, discounted_price = _extract_prices(deal_data)
+    discount_text = _extract_discount_text(deal_data, 0.0)
+    discount_amount_text = _extract_discount_amount_text(deal_data, normal_price, discounted_price)
+    rabatt_text = _extract_rabatt_text(deal_data, discount_text, discount_amount_text)
+    caption_text = _extract_caption_text(deal_data, rabatt_text)
+
+    cta_text = _first_present_str(
+        deal_data,
+        ["cta_text", "cta", "call_to_action"],
+        fallback=str(template_cfg.get("default_cta") or "Folgt uns für mehr Rabatte!"),
+    )
+    website_text = _first_present_str(
+        deal_data,
+        ["website_text", "website", "domain"],
+        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
+    )
+
+    # Voiceover-Text erzeugen (aus Deal-Daten oder als Fallback)
+    voiceover_text = _first_present_str(
+        deal_data,
+        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
+        fallback="",
+    )
+    if not voiceover_text:
+        title = str(deal_data.get("title") or "Dieses Produkt").strip()
+        discount_raw = str(deal_data.get("discount_percent") or "").replace("N/A", "").strip()
+        if discount_raw:
+            voiceover_text = (
+                f"Krasses Angebot heute! {title} jetzt {discount_raw} günstiger – "
+                f"nur {discounted_price}. Jetzt schnell zuschlagen, Link in der Bio!"
+            )
+        else:
+            voiceover_text = (
+                f"Schnell sein lohnt sich! {title} jetzt für nur {discounted_price}. "
+                f"Link in der Bio!"
+            )
+
+    return {
+        "Product-Image.source":     product_image_url,
+        "Product-Name.text":        product_name,
+        "Product-Description.text": product_description,
+        "Normal-Price.text":        normal_price,
+        "Discounted-Price.text":    discounted_price,
+        "Caption.text":             caption_text,
+        "CTA.text":                 cta_text,
+        "Website.text":             website_text,
+        # Korrekter Layer-Key für das typ3_audio-Template (ElevenLabs TTS via .source)
+        "Voiceover-SHX.source":     voiceover_text,
+    }
 
 
 def _build_offer_type_modifications(

@@ -7,7 +7,7 @@ import pathlib
 import re
 import sys
 import requests
-from facebook.reels_service import download_video, render_reel
+from facebook.reels_service import download_video, render_reel, render_typ3_audio
 from facebook.template_interface import (
     build_modifications_for_template,
     resolve_template_selection,
@@ -102,21 +102,30 @@ async def process_single_deal(full_path: pathlib.Path, sent_ids: set) -> bool:
             print(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
             local_video = existing_video
         else:
-            template_type, template_id = resolve_template_selection(data, default_template_type="offer_type2")
-            modifications = build_modifications_for_template(
-                data,
-                template_type=template_type,
-                discount_value=validation["discount"],
-            )
+            template_type, template_id = resolve_template_selection(data, default_template_type="typ3_audio")
 
             print(f"[TEMPLATE] type={template_type} id={template_id}")
 
-            render_result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                render_reel,
-                modifications,
-                template_id,
-            )
+            if template_type == "typ3_audio":
+                # Audio-Reel: ElevenLabs-Voiceover via Creatomate
+                render_result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    render_typ3_audio,
+                    data,
+                    template_id,
+                )
+            else:
+                modifications = build_modifications_for_template(
+                    data,
+                    template_type=template_type,
+                    discount_value=validation["discount"],
+                )
+                render_result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    render_reel,
+                    modifications,
+                    template_id,
+                )
             print(f"[DONE] ✅ Reel erfolgreich gerendert: {product_id}, URL: {render_result.get('url')}")
 
             # Video herunterladen

@@ -11,7 +11,7 @@ import requests
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 API_KEY     = "cca743b75b9c46e0bf5e2325a31cbc2ba1081a03bd7863bb50aa678c1b8671559c1e333a97b6d4f6a49d4089252dc49f"
-TEMPLATE_ID = "45645112-5bb4-4e25-94ed-cd008d42a9c3"
+TEMPLATE_ID = "65d0c5db-a2a1-40b6-8240-0d1b68c0a706"
 API_URL     = "https://api.creatomate.com/v2/renders"
 
 HEADERS = {
@@ -39,18 +39,8 @@ VOICEOVER_TEXT = (
 # Verschiedene Varianten die wir testen
 VARIANTS = [
     {
-        "name":    'Variante A — "Voiceover-WZ7" (ohne .source)',
-        "key":     "Voiceover-WZ7",
-        "value":   VOICEOVER_TEXT,
-    },
-    {
-        "name":    'Variante B — "Voiceover-WZ7.source" (mit .source)',
-        "key":     "Voiceover-WZ7.source",
-        "value":   VOICEOVER_TEXT,
-    },
-    {
-        "name":    'Variante C — "Voiceover-WZ7.text" (mit .text)',
-        "key":     "Voiceover-WZ7.text",
+        "name":    'Voiceover-SHX.source (korrekter Key für dieses Template)',
+        "key":     "Voiceover-SHX.source",
         "value":   VOICEOVER_TEXT,
     },
 ]
@@ -156,9 +146,7 @@ def main():
 
     results = []
 
-    # Nur Variante A testen (laut Docs korrekt) — alle aktivieren falls nötig
-    # Für schnellen Test nur Variante A:
-    for variant in VARIANTS[:1]:   # ← auf VARIANTS[:3] ändern um alle zu testen
+    for variant in VARIANTS:
         result = run_variant(variant)
         results.append(result)
         time.sleep(2)  # kurze Pause zwischen Renders
