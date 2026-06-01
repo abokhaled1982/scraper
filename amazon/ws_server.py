@@ -71,11 +71,7 @@ _AFFILIATE_URL_RE = re.compile(r'^https?://[^\s"<>]+$', re.IGNORECASE)
 
 
 def inject_affiliate_link_meta(html: str, affiliate_link: str) -> str:
-    """Injiziert den Affiliate-Link als <meta name="x-affiliate-link"> in den <head>.
-
-    Validiert das Schema, escaped geänderte Zeichen und fügt das Tag entweder
-    direkt vor </head> oder – falls kein <head> existiert – am Dokumentanfang ein.
-    """
+    """Injiziert den Affiliate-Link als <meta name=\"x-affiliate-link\"> in den <head>."""
     if not affiliate_link or not _AFFILIATE_URL_RE.match(affiliate_link.strip()):
         return html
     escaped = (
@@ -136,13 +132,7 @@ async def handle(ws):
                 doc_type = msg.get("docType")
                 prev = assemblies.get(_id)
                 chunks = prev["chunks"] if prev and "chunks" in prev else {}
-                assemblies[_id] = {
-                    "total": total,
-                    "chunks": chunks,
-                    "url": url,
-                    "docType": doc_type,
-                    "affiliateLink": msg.get("affiliateLink"),
-                }
+                assemblies[_id] = {"total": total, "chunks": chunks, "url": url, "docType": doc_type, "affiliateLink": msg.get("affiliateLink")}
                 print(f"[srv] begin id={_id} total={total} url={url} docType={doc_type} affiliate={'yes' if msg.get('affiliateLink') else 'no'}")
                 await ws.send(json.dumps({"ok": True, "type": "begin_ack", "id": _id}))
                 continue

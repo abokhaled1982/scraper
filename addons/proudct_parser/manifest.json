@@ -3,7 +3,7 @@
   "name": "Amazon Scraper",
   "version": "0.1.0",
   "description": "Parst die aktuelle Seite, entfernt Scripts/Styles/Kommentare/unnÃ¶tige Elemente â€“ modular.",
-  "permissions": ["storage", "activeTab", "scripting", "downloads", "clipboardRead"],
+  "permissions": ["storage", "activeTab", "scripting", "downloads", "clipboardRead", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",

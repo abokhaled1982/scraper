@@ -789,19 +789,15 @@ class AmazonProductParser:
         )
 
     def extract_shortlink(self, data: ProductData) -> None:
-        """Extrahiert Amazon-Shortlink (z. B. amzn.to).
-
-        Quellen-Reihenfolge:
-        1. Injiziertes <meta name="x-affiliate-link"> (neuer Clipboard-Flow)
-        2. Altes Textarea-Element (Fallback für ältere HTML-Dumps)
-        """
+        """Extrahiert Amazon-Shortlink (z. B. amzn.to), falls vorhanden."""
+        # Neu: vom ws_server injiziertes Meta-Tag (Clipboard-Flow)
         meta = self.soup.select_one('meta[name="x-affiliate-link"]')
         if meta:
             shortlink = norm_space(meta.get("content") or "")
             if shortlink:
                 data.product_info["shortlink"] = shortlink
                 return
-
+        # Alt: Textarea-Element (für ältere HTML-Dumps)
         el = self.soup.select_one("#amzn-ss-text-shortlink-textarea.amzn-ss-text-shortlink-textarea")
         if el:
             shortlink = norm_space(el.get_text() or el.get("value") or "")

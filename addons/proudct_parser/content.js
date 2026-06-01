@@ -11,37 +11,8 @@
   const TRIGGER_PARAM = "ext_trigger";
   const TRIGGER_VALUE = "send_html";
   const MIN_RUN_INTERVAL_MS = 60_000; // Max. alle 60s pro URL
-  const STRIPE_BUTTON_SEL = [
-    "#amzn-ss-copy-affiliate-link-btn-announce",
-    "#amzn-ss-copy-affiliate-link-btn",
-    "button[id*='copy-affiliate-link']",
-    "#amzn-ss-get-link-button",
-    ".amzn-ss-get-link-button",
-  ].join(", ");
-  const AFFILIATE_LINK_SEL = "#amzn-ss-text-shortlink-textarea, .amzn-ss-get-shortlink-text";
-  const AFFILIATE_RX = /(amzn\.to|amazon\.[a-z.]+\/.+(?:tag=|ref=as_li))/i;
-
-  // --- Page-World Clipboard-Hook injizieren ---
-  // Fängt navigator.clipboard.writeText ab, sobald Amazons Button den Affiliate-Link kopiert.
-  let capturedClipboardValue = null;
-  let capturedClipboardAt = 0;
-  window.addEventListener("__amzn_clipboard_capture__", (ev) => {
-    const v = (ev?.detail?.value || "").trim();
-    if (v && AFFILIATE_RX.test(v)) {
-      capturedClipboardValue = v;
-      capturedClipboardAt = Date.now();
-      console.log("[clip] captured affiliate link:", v);
-    }
-  });
-  try {
-    const s = document.createElement("script");
-    s.src = chrome.runtime.getURL("inject_clipboard_hook.js");
-    s.async = false;
-    (document.head || document.documentElement).appendChild(s);
-    s.onload = () => s.remove();
-  } catch (e) {
-    console.warn("[clip] inject failed:", e);
-  }
+  const STRIPE_BUTTON_SEL = "#amzn-ss-get-link-button, .amzn-ss-get-link-button";
+  const COPY_BTN_SEL = "#amzn-ss-copy-affiliate-link-btn-announce";
 
   // --- Zustandsvariablen ---
   let autoScrollInterval = null;
@@ -49,7 +20,12 @@
   let lastRunUrl = "";
   const triggerConsumedForUrl = new Set();
   const clickedOnceForUrl = new Set();
-  const linkReadyForUrl = new Map(); // urlKey → affiliate-link string
+  const linkReadyForUrl = new Map(); // urlKey → affiliateLink-String
+  let lastDeliveredLink = null;       // letzter erfolgreich gelieferter Link (zur Stale-Erkennung)
+  let lastDeliveredUrlKey = null;     // urlKey, zu dem lastDeliveredLink gehört
+  // Sentinel, mit dem das Clipboard vor dem Copy-Klick überschrieben wird,
+  // um stale Inhalte sicher zu erkennen.
+  const CLIPBOARD_SENTINEL = "__amzn_ss_pending__";
 
   // --- Dienstprogramme (Utils) ---
 
@@ -136,82 +112,183 @@
     return null;
   }
 
-  /** Extrahiert den Linkwert aus einem Element. */
-  function extractAffiliateValue(el) {
-    return (el?.value || el?.textContent || "").trim();
-  }
-
   /**
-   * Wartet auf den Affiliate-Link – primär aus der Zwischenablage (neuer Amazon-Flow),
-   * sekundär aus dem (alten) DOM-Textarea-Element als Fallback.
+   * Versucht den Shortlink direkt aus dem SiteStripe-Popover-DOM zu lesen.
+   * Sucht in allen <input>/<textarea>/<a>-Elementen nach einem amzn.to- bzw.
+   * Amazon-Affiliate-Link. Wesentlich verlässlicher als das Clipboard, weil
+   * der Wert immer zum aktuellen Produkt gehört.
    */
-  async function waitForAffiliateLink(timeoutMs = 15_000, intervalMs = 250, sinceTs = 0) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      // 1) Clipboard-Hook (per Page-World injiziert)
-      if (capturedClipboardValue && capturedClipboardAt >= sinceTs) {
-        return { el: null, val: capturedClipboardValue, source: "clipboard_hook" };
+  function readShortlinkFromDOM() {
+    const candidates = [];
+    // Bekannte / wahrscheinliche Container
+    const scopes = [
+      document,
+      ...document.querySelectorAll(
+        "#amzn-ss-text-shortlink-textarea, [id^='amzn-ss-text-shortlink'], [id*='shortlink'], [class*='shortlink'], #amzn-ss-text-shortlink-textarea-container, .amzn-ss-text-link-container"
+      ),
+    ];
+    for (const scope of scopes) {
+      if (!scope) continue;
+      // 1) input/textarea-Werte
+      const fields = scope.querySelectorAll
+        ? scope.querySelectorAll("input, textarea")
+        : [];
+      for (const f of fields) {
+        const v = (f.value || f.textContent || "").trim();
+        if (v) candidates.push(v);
       }
-      // 2) Fallback: Clipboard direkt lesen (falls Hook nicht griff)
-      try {
-        if (document.hasFocus()) {
-          const val = (await navigator.clipboard.readText()).trim();
-          if (val && AFFILIATE_RX.test(val)) {
-            return { el: null, val, source: "clipboard_read" };
-          }
-        }
-      } catch (_) {
-        // ignorieren (Permission/Focus)
+      // 2) Anchor-Hrefs (manche neuen Varianten zeigen den Link als <a>)
+      const anchors = scope.querySelectorAll
+        ? scope.querySelectorAll("a[href]")
+        : [];
+      for (const a of anchors) {
+        const v = (a.getAttribute("href") || "").trim();
+        if (v) candidates.push(v);
       }
-      // 3) Fallback: altes DOM-Element
-      const el = findElementInDocAndIframes(document, AFFILIATE_LINK_SEL);
-      if (el && isVisible(el)) {
-        const val = extractAffiliateValue(el);
-        if (val && AFFILIATE_RX.test(val)) {
-          return { el, val, source: "dom" };
-        }
+      // 3) sichtbarer Text des Scopes selbst
+      if (scope !== document) {
+        const t = (scope.textContent || "").trim();
+        if (t) candidates.push(t);
       }
-      await sleep(intervalMs);
+    }
+    // Erstes plausibles Vorkommen extrahieren
+    const rx = /https?:\/\/(?:amzn\.to\/[A-Za-z0-9]+|(?:www\.)?amazon\.[a-z.]+\/[^\s"'<>]*(?:tag=|linkCode=)[^\s"'<>]*)/i;
+    for (const c of candidates) {
+      const m = c.match(rx);
+      if (m) return m[0];
     }
     return null;
   }
 
+  /** Validiert einen Affiliate-Link grob. */
+  function isPlausibleAffiliateLink(link) {
+    if (!link || typeof link !== "string") return false;
+    if (!/^https?:\/\//i.test(link)) return false;
+    if (link === CLIPBOARD_SENTINEL) return false;
+    // amzn.to-Shortlink oder Amazon-URL mit Affiliate-Parametern
+    if (/^https?:\/\/amzn\.to\/[A-Za-z0-9]+/i.test(link)) return true;
+    if (/amazon\.[a-z.]+\/.*(?:tag=|linkCode=)/i.test(link)) return true;
+    return false;
+  }
+
   /**
-   * Klickt den "Affiliate-Link kopieren"-Button und wartet, bis der Link
-   * im Clipboard landet. Rückgabe: Link-String oder null.
+   * Öffnet das SiteStripe-Popover, klickt "Affiliate-Link kopieren" und
+   * liefert den aktuellen Affiliate-Link. Strategie:
+   *   1) DOM zuerst (Popover-Input/Anchor) – immer korrekt für das aktuelle Produkt.
+   *   2) Clipboard als Fallback, aber vorher mit Sentinel überschrieben und
+   *      anschließend gepollt, bis sich der Inhalt ändert.
+   *   3) Stale-Detection: identischer Link für eine *andere* URL → verworfen.
+   * @returns {Promise<string|null>}
    */
   async function ensureStripeLinkReadyForCurrentProduct() {
-    // Diese Funktion wird NUR aufgerufen, wenn isAmazonProductPath() == true
     const urlKey = location.href.split("#")[0];
-
     if (linkReadyForUrl.has(urlKey)) return linkReadyForUrl.get(urlKey);
 
-    // Button einmalig klicken (löst Amazon's clipboard.writeText aus)
-    const clickTs = Date.now();
+    // Schritt 1: SiteStripe-Popover öffnen
     if (!clickedOnceForUrl.has(urlKey)) {
       const btn = await waitForStripeButton();
-      if (btn) {
-        console.log("[Stripe] click button:", btn.id || btn.className);
-        // Capture-State zurücksetzen, damit nur Werte NACH dem Klick zählen
-        capturedClipboardValue = null;
-        capturedClipboardAt = 0;
-        btn.click();
-        clickedOnceForUrl.add(urlKey);
-      } else {
+      if (!btn) {
         console.warn("[Stripe] button not found (timeout)");
+        return null;
+      }
+      console.log("[Stripe] click stripe button to open popover");
+      btn.click();
+      clickedOnceForUrl.add(urlKey);
+    }
+
+    // Schritt 2: Versuche zuerst, den Link direkt aus dem geöffneten Popover
+    // zu lesen – das ist deterministisch und vermeidet Clipboard-Probleme.
+    {
+      const domStart = Date.now();
+      while (Date.now() - domStart < 8_000) {
+        const fromDom = readShortlinkFromDOM();
+        if (isPlausibleAffiliateLink(fromDom)) {
+          console.log("[Stripe] affiliate link from DOM:", fromDom);
+          linkReadyForUrl.set(urlKey, fromDom);
+          lastDeliveredLink = fromDom;
+          lastDeliveredUrlKey = urlKey;
+          return fromDom;
+        }
+        await sleep(300);
       }
     }
 
-    // Warten auf Affiliate-Link (Clipboard-Hook primär, DOM sekundär)
-    const link = await waitForAffiliateLink(15_000, 250, clickTs);
-    if (link) {
-      console.log(`[Stripe] link ready (${link.source}):`, link.val);
-      linkReadyForUrl.set(urlKey, link.val);
-      return link.val;
+    // Schritt 3: Clipboard vor dem Copy-Klick mit Sentinel überschreiben,
+    // damit wir stale Inhalte sicher erkennen können.
+    let clipboardWritable = true;
+    try {
+      await navigator.clipboard.writeText(CLIPBOARD_SENTINEL);
+    } catch (e) {
+      clipboardWritable = false;
+      console.warn("[Stripe] clipboard write (sentinel) failed:", e);
     }
 
-    console.warn("[Stripe] link not ready -> skip sending this round");
-    return null; // Wichtig: NICHT senden
+    // Schritt 4: "Affiliate-Link kopieren"-Button im Dialog abwarten und klicken
+    const start = Date.now();
+    let copyBtn = null;
+    while (Date.now() - start < 10_000) {
+      copyBtn = document.querySelector(COPY_BTN_SEL);
+      if (copyBtn) break;
+      await sleep(300);
+    }
+    if (!copyBtn) {
+      console.warn("[Stripe] copy button not found in dialog");
+      return null;
+    }
+    console.log("[Stripe] clicking copy button");
+    copyBtn.click();
+
+    // Schritt 5: Clipboard pollen, bis sich der Inhalt vom Sentinel
+    // unterscheidet bzw. ein plausibler Link erscheint (max. 10 s).
+    const pollStart = Date.now();
+    let link = null;
+    while (Date.now() - pollStart < 10_000) {
+      try {
+        const current = (await navigator.clipboard.readText()) || "";
+        if (
+          isPlausibleAffiliateLink(current) &&
+          (clipboardWritable ? current !== CLIPBOARD_SENTINEL : true)
+        ) {
+          link = current.trim();
+          break;
+        }
+      } catch (e) {
+        // readText kann ohne Fokus scheitern – weiter versuchen
+      }
+      // parallel weiter DOM probieren – falls Amazon den Link nachreicht
+      const fromDom = readShortlinkFromDOM();
+      if (isPlausibleAffiliateLink(fromDom)) {
+        link = fromDom;
+        break;
+      }
+      await sleep(500);
+    }
+
+    if (!link) {
+      console.warn("[Stripe] no valid affiliate link found (clipboard+DOM)");
+      return null;
+    }
+
+    // Schritt 6: Stale-Detection – wenn derselbe Link wie für eine andere
+    // URL geliefert wird, ist das mit hoher Wahrscheinlichkeit Müll.
+    if (
+      lastDeliveredLink &&
+      link === lastDeliveredLink &&
+      lastDeliveredUrlKey &&
+      lastDeliveredUrlKey !== urlKey
+    ) {
+      console.warn(
+        "[Stripe] discarding stale link (identical to previous product):",
+        link
+      );
+      return null;
+    }
+
+    console.log("[Stripe] affiliate link resolved:", link);
+    linkReadyForUrl.set(urlKey, link);
+    lastDeliveredLink = link;
+    lastDeliveredUrlKey = urlKey;
+    return link;
   }
 
   // --- Pipeline (Module-Ausführung) ---
@@ -306,13 +383,12 @@
           let affiliateLinkOpener = null;
           if (isAmazonProductPath()) {
             affiliateLinkOpener = await ensureStripeLinkReadyForCurrentProduct();
-             // Wenn der Link nicht bereit ist, breche den Sendevorgang ab.
             if (!affiliateLinkOpener) {
               console.warn("[Opener-Trigger] Link not ready, skipping send.");
-              return; 
+              return;
             }
           }
-          
+
           await runPipeline();
           sendHtml("PRODUCT_HTML", href, document.documentElement.outerHTML, affiliateLinkOpener);
           triggerConsumedForUrl.add(key);
@@ -331,9 +407,8 @@
           // Link nicht bereit -> NICHT senden – nächste Runde abwarten
           return;
         }
-        // Warten erfolgreich -> mit Schritt 3/4 fortfahren und PRODUCT_HTML senden
       }
-      
+
       // Deals-Seiten (isAmazonDealsPath()) umgehen die Wartezeit und senden direkt.
 
       // 3. Modul-Pipeline ausführen (z.B. für Stats/Normalisierung)
