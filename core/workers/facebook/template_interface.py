@@ -91,6 +91,8 @@ def build_modifications_for_template(
 
     if template_type == "typ3_audio":
         mods = _build_typ3_audio_modifications(deal_data, template_cfg)
+    elif template_type == "typ5_sneaker_purple" or template_type.startswith("typ5"):
+        mods = _build_typ5_modifications(deal_data, discount_value, template_cfg)
     elif template_type.startswith("reel") or template_kind == "reel" or template_type == "custom":
         mods = _build_reel_type_modifications(deal_data, discount_value, template_cfg)
     elif template_type.startswith("offer") or template_kind == "offer":
@@ -189,6 +191,71 @@ def _build_reel_type_modifications(
     return modifications
 
 
+def _build_typ5_modifications(
+    deal_data: dict[str, Any],
+    discount_value: float,
+    template_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Modifications fuer typ5_sneaker_purple (Schuhe/Schmuck/Uhren).
+
+    Layer-Keys laut Template: Background-Media.source, Product-Name.text,
+    Subtitle.text, Discount-Badge.text, Price-Badge.text, Image-LNW.source,
+    CTA.text, Website.text (CTA/Website liegen in der Outro-Composition).
+    """
+    images = deal_data.get("template_images") or deal_data.get("images") or []
+    product_image_url = next(
+        (img for img in images if isinstance(img, str) and img.strip()), ""
+    ) or str(deal_data.get("image_url") or "").strip()
+
+    background_url = str(
+        deal_data.get("background_media")
+        or deal_data.get("background_video")
+        or deal_data.get("background_url")
+        or ""
+    ).strip()
+
+    product_name, product_description = _extract_product_texts(deal_data)
+    _, discounted_price = _extract_prices(deal_data)
+    discount_text = _extract_discount_text(deal_data, discount_value)
+
+    # Discount-Badge: "35%\nRABATT"
+    discount_clean = discount_text.lstrip("-").strip() or "DEAL"
+    discount_badge_text = f"{discount_clean}\nRABATT"
+
+    # Price-Badge: "NUR\n€89"
+    price_for_badge = discounted_price if discounted_price and discounted_price != "N/A" else ""
+    price_badge_text = f"NUR\n{price_for_badge}" if price_for_badge else "TOP\nPREIS"
+
+    cta_text = _first_present_str(
+        deal_data,
+        ["cta_text", "cta", "call_to_action"],
+        fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
+    )
+    website_text = _first_present_str(
+        deal_data,
+        ["website_text", "website", "domain", "affiliate_url"],
+        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
+    )
+
+    modifications: dict[str, Any] = {
+        "Product-Name.text": product_name,
+        "Subtitle.text": product_description,
+        "Discount-Badge.text": discount_badge_text,
+        "Price-Badge.text": price_badge_text,
+        "CTA.text": cta_text,
+        "Website.text": website_text,
+    }
+
+    if product_image_url:
+        modifications["Image-LNW.source"] = product_image_url
+        _apply_image_fit(modifications, "Image-LNW", template_cfg)
+
+    if background_url:
+        modifications["Background-Media.source"] = background_url
+
+    return modifications
+
+
 def _build_typ3_audio_modifications(
     deal_data: dict[str, Any],
     template_cfg: dict[str, Any],
@@ -250,7 +317,7 @@ def _build_typ3_audio_modifications(
         "CTA.text":                 cta_text,
         "Website.text":             website_text,
         # Korrekter Layer-Key für das typ3_audio-Template (ElevenLabs TTS via .source)
-        "Voiceover-SHX.source":     voiceover_text,
+        "Voiceover-C9N.source":     voiceover_text,
     }
 
 

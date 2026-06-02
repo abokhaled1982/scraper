@@ -1,0 +1,28 @@
+{
+  "template_type": "typ6_fashion",
+  "template_id": "450ecc01-ad66-4666-b751-df8271966aef",
+  "kind": "offer",
+  "api_key": "fab3e42c6d284fda8666a4777f5700734715fbcc89a7ca8ab3644e3919f7082ad4704da24009a574e7011202f8a5b51d",
+  "description": "Fashion-Reel-Template (9:16, 9s) mit grossem Lifestyle-Hintergrundbild, animiertem Rabatt-Badge sowie einfliegendem Brand-Panel mit DEALSBOSS-Logo und Website-URL. Geeignet fuer Mode, Kleidung, Bekleidung, Outfits, T-Shirts, Hoodies, Hosen, Jacken, Kleider, Roecke, Unterwaesche, Bademode, Sportbekleidung und aehnliche Fashion-Artikel mit Lifestyle- oder Model-Fotos.",
+  "ai_extractor_hints": {
+    "recommended_categories": [
+      "mode", "kleider", "kleidung", "bekleidung", "fashion", "outfits",
+      "t-shirts", "hoodies", "hosen", "jacken", "roecke", "unterwaesche",
+      "bademode", "sportbekleidung", "kinderkleidung"
+    ],
+    "preferred_image_type": "Lifestyle-Foto / Model-Foto"
+  },
+  "default_cta": "Folgt uns fuer mehr Rabattaktionen!",
+  "default_website": "www.dealsboss.de",
+  "default_logo_source": "https://creatomate.com/files/assets/09ebe5ac-cfa2-44b6-8c2a-d4cbfb8cf74e",
+  "image_fit": "cover",
+  "layer_mapping": {
+    "Background-Image.source": "images[0] / image_url (Lifestyle-Foto)",
+    "Logo.source":             "default_logo_source (DEALSBOSS-Logo \u2013 nicht ueberschreiben)",
+    "Website.text":            "affiliate_url / domain (Default: www.dealsboss.de)",
+    "Discount.text":           "discount_percent (z.B. '-30%')",
+    "Title.text":              "reel_titel / title (z.B. 'Spring Sale')",
+    "Caption.text":            "reel_beschreibung / caption (z.B. '3 days left')",
+    "Voiceover-C9N.source":     "voiceover_text (ElevenLabs TTS – Matilda)"
+  }
+}

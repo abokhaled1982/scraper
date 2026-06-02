@@ -1,0 +1,26 @@
+{
+  "template_type": "typ5_sneaker_purple",
+  "template_id": "7266b7f6-2a13-4d67-9d00-e8a7a9d3a06b",
+  "kind": "offer",
+  "api_key": "fab3e42c6d284fda8666a4777f5700734715fbcc89a7ca8ab3644e3919f7082ad4704da24009a574e7011202f8a5b51d",
+  "description": "Stylisches 9:16 Offer-Template (lila/purple) mit freigestelltem Produktbild, animiertem Rabatt- und Preis-Badge sowie Outro-Logo-Screen. Geeignet fuer Angebote im Bereich Schuhe, Sneaker, Schmuck, Uhren, Accessoires, Taschen, Sonnenbrillen und aehnliche Modeartikel mit freigestelltem (transparentem) Produktbild.",
+  "ai_extractor_hints": {
+    "recommended_categories": ["schuhe", "sneaker", "schmuck", "uhren", "accessoires", "taschen", "sonnenbrillen"],
+    "requires_transparent_product_image": true,
+    "preferred_image_type": "freigestelltes PNG mit transparentem Hintergrund"
+  },
+  "default_cta": "Folgt uns fuer mehr Rabattaktionen!",
+  "default_website": "www.dealsboss.de",
+  "image_fit": "contain",
+  "layer_mapping": {
+    "Background-Media.source": "background_video oder default Loop",
+    "Product-Name.text":       "reel_titel / title (kurz, 2 Zeilen, z.B. 'WALK IN\\nCONFIDENCE')",
+    "Subtitle.text":           "reel_beschreibung / subtitle",
+    "Discount-Badge.text":     "discount_percent + 'RABATT' (z.B. '35%\\nRABATT')",
+    "Price-Badge.text":        "'NUR\\n' + discounted_price (z.B. 'NUR\\n€89')",
+    "Image-LNW.source":        "freigestelltes Produktbild (PNG, transparenter Hintergrund)",
+    "CTA.text":                "default_cta",
+    "Website.text":            "affiliate_url / domain",
+    "Voiceover-C9N.source":     "voiceover_text (ElevenLabs TTS – Matilda)"
+  }
+}
