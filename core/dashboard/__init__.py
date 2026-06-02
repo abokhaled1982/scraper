@@ -71,6 +71,12 @@ def api_deal_requeue(deal_id: int) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/timeline")
+def api_timeline(limit: int = 300, hours: int = 72) -> list[dict]:
+    """Chronologischer Verlauf aller Pipeline-Events (link-erfasst → ai → sent / failed)."""
+    return deals_repo.list_recent_events(limit=limit, hours=hours)
+
+
 @app.delete("/api/deals/{deal_id}")
 def api_deal_delete(deal_id: int) -> dict:
     ok = deals_repo.delete(deal_id)
@@ -272,6 +278,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
   <span class="tag" id="refreshTag">– offline –</span>
   <nav>
     <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="timeline">Verlauf</button>
     <button data-tab="deals">Deals</button>
     <button data-tab="workers">Workers</button>
     <button data-tab="logs">Logs</button>
@@ -280,6 +287,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
 </header>
 <main>
   <section id="tab-overview"></section>
+  <section id="tab-timeline" hidden></section>
   <section id="tab-deals" hidden></section>
   <section id="tab-workers" hidden></section>
   <section id="tab-logs" hidden></section>
@@ -337,6 +345,87 @@ async function renderOverview() {
         <table><thead><tr>
             <th>Name</th><th>Status</th><th>Aufgabe</th><th>PID</th><th>Heartbeat</th>
         </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ── Verlauf / Timeline ────────────────────────────────────
+let timelineHours = 24;
+let timelineFilter = "";
+const EVENT_BADGE = {
+  created:       {label: "🆕 erfasst",       css: "background:#1e293b;color:#7dd3fc;"},
+  updated:       {label: "✏️ aktualisiert",   css: "background:#1e293b;color:#fde68a;"},
+  claimed:       {label: "🔒 claimed",        css: "background:#082f49;color:#7dd3fc;"},
+  requeued:      {label: "↻ requeued",       css: "background:#451a03;color:#fdba74;"},
+  retry:         {label: "⟳ retry",          css: "background:#451a03;color:#fdba74;"},
+  failed:        {label: "❌ failed",         css: "background:#450a0a;color:#fca5a5;"},
+  sent:          {label: "✅ sent",           css: "background:#052e16;color:#86efac;"},
+  lock_released: {label: "🔓 lock_released",  css: "background:#1f2937;color:#9ca3af;"},
+};
+function badgeFor(evName) {
+  const b = EVENT_BADGE[evName] || {label: evName, css: "background:#334155;color:#cbd5e1;"};
+  return `<span class="badge" style="${b.css}">${esc(b.label)}</span>`;
+}
+function channelChips(detail) {
+  if (!detail) return "";
+  return detail.split(/[+,\s]+/).filter(Boolean).map(c => {
+    const k = c.toLowerCase();
+    let icon;
+    if      (k.includes("face"))  icon = "📘 FB";
+    else if (k.includes("insta")) icon = "📷 IG";
+    else if (k.includes("tele"))  icon = "✈️ TG";
+    else if (k.includes("whats")) icon = "💬 WA";
+    else                          icon = esc(c);
+    return `<span class="badge" style="background:#0b1220;color:#7dd3fc;border:1px solid #1e293b;">${icon}</span>`;
+  }).join(" ");
+}
+async function renderTimeline() {
+  const sec = $("#tab-timeline");
+  const ev = await api(`/api/timeline?hours=${timelineHours}&limit=400`);
+  const filt = timelineFilter.trim().toLowerCase();
+  const visible = filt
+    ? ev.filter(e =>
+        (e.product_id||"").toLowerCase().includes(filt) ||
+        (e.title||"").toLowerCase().includes(filt) ||
+        (e.event||"").toLowerCase().includes(filt) ||
+        (e.detail||"").toLowerCase().includes(filt) ||
+        (e.market||"").toLowerCase().includes(filt))
+    : ev;
+  const rows = visible.length ? visible.map(e => {
+    const dt = (e.created_at||"").replace("T"," ").slice(0, 19);
+    const channels = e.event === "sent" ? channelChips(e.detail) : "";
+    const detail = e.event === "sent" ? "" : esc(e.detail || "");
+    const post = e.post_type === "reel" ? "🎬 reel" : "📄 offer";
+    return `
+      <tr>
+        <td><small>${esc(dt)}</small></td>
+        <td>${badgeFor(e.event)}</td>
+        <td><span class="tag">${esc(e.product_id)}</span><br>
+            <small>${esc(e.market)} · ${post} · status=${esc(e.status)}</small></td>
+        <td>${esc((e.title||"").slice(0,90))}</td>
+        <td>${channels}${detail ? `<small>${detail}</small>` : ""}</td>
+        <td class="row-actions">
+          <button class="act" onclick="showDealDetail(${e.deal_id})">🔍</button>
+          <button class="act" onclick="requeueDeal(${e.deal_id})">↻</button>
+        </td>
+      </tr>`;
+  }).join("") : `<tr><td colspan="6"><small>keine Events in den letzten ${timelineHours} h</small></td></tr>`;
+
+  sec.innerHTML = `
+    <p><small>Kompletter Pipeline-Verlauf: Link erfasst → AI-Extraktion → Post/Reel → Versand pro Kanal.
+              Spalte <b>Kanal/Detail</b> zeigt bei <code>sent</code>-Events die Plattformen.</small></p>
+    <div class="toolbar">
+      <label>Zeitraum:</label>
+      <select id="tlHours">
+        ${[1,6,24,72,168].map(h => `<option value="${h}" ${h===timelineHours?"selected":""}>${h<24?h+" h":(h/24)+" d"}</option>`).join("")}
+      </select>
+      <input id="tlFilter" placeholder="Filter (ProduktID / Titel / Event / Markt)…" value="${esc(timelineFilter)}" style="min-width:340px;">
+      <button class="act" onclick="renderTimeline()">↻ Refresh</button>
+    </div>
+    <table><thead><tr>
+      <th>Zeit (UTC)</th><th>Event</th><th>Produkt</th><th>Titel</th>
+      <th>Kanal / Detail</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  $("#tlHours").onchange = e => { timelineHours  = parseInt(e.target.value,10); renderTimeline(); };
+  $("#tlFilter").oninput = e => { timelineFilter = e.target.value; renderTimeline(); };
 }
 
 // ── Deals ─────────────────────────────────────────────────
@@ -593,6 +682,7 @@ async function deleteState(k) {
 async function render() {
     try {
         if (activeTab === "overview") await renderOverview();
+        else if (activeTab === "timeline") await renderTimeline();
         else if (activeTab === "deals") await renderDeals();
         else if (activeTab === "workers") await renderWorkers();
         else if (activeTab === "logs") await renderLogs();
@@ -604,7 +694,7 @@ async function render() {
 }
 render();
 setInterval(() => {
-    if (["overview","workers","deals"].includes(activeTab)) render();
+    if (["overview","workers","deals","timeline"].includes(activeTab)) render();
 }, 3000);
 </script>
 </body>

@@ -300,3 +300,37 @@ def get_events(deal_id: int, limit: int = 50) -> list[dict]:
             for e in rows
         ]
 
+
+def list_recent_events(limit: int = 200, hours: int = 72) -> list[dict]:
+    """Chronologische Liste aller Events der letzten N Stunden, mit Deal-Infos verjoint.
+
+    Returns: [{event, detail, created_at, deal_id, product_id, market, status, title,
+               post_type}]  (post_type = 'reel' | 'offer' aus payload.type, falls vorhanden)
+    """
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(hours=max(1, hours))
+    with session_scope() as s:
+        rows = s.execute(
+            select(DealEvent, Deal)
+            .join(Deal, Deal.id == DealEvent.deal_id)
+            .where(DealEvent.created_at >= cutoff)
+            .order_by(DealEvent.created_at.desc())
+            .limit(limit)
+        ).all()
+        out: list[dict] = []
+        for ev, d in rows:
+            payload = d.payload or {}
+            post_type = str(payload.get("type") or payload.get("kind") or "offer")
+            out.append({
+                "event":      ev.event,
+                "detail":     ev.detail,
+                "created_at": ev.created_at.isoformat() if ev.created_at else None,
+                "deal_id":    d.id,
+                "product_id": d.product_id,
+                "market":     d.market,
+                "status":     d.status,
+                "title":      d.title,
+                "post_type":  post_type,
+            })
+        return out
+
