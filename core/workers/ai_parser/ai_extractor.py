@@ -11,6 +11,9 @@ from google.api_core import exceptions as google_exceptions
 from dotenv import load_dotenv
 
 from core.logging import get_logger  # noqa: E402
+from core.workers.facebook.template_interface import (  # noqa: E402
+    build_template_catalog_prompt_snippet,
+)
 log = get_logger("ai_extractor")  # noqa: E402
 load_dotenv()
 
@@ -204,6 +207,29 @@ class Produktinformation(BaseModel):
         )
     )
 
+    produkt_kategorie: str = Field(
+        description=(
+            "Die Produktkategorie als kurzer, normalisierter Schluessel (lowercase, deutsch). "
+            "WICHTIG: Verwende AUSSCHLIESSLICH eine Kategorie aus der Liste, die im "
+            "User-Prompt unter 'VERFUEGBARE VIDEO-TEMPLATES' steht (Feld 'Kategorien='). "
+            "Beispiele: 'sneaker', 'schuhe', 'mode', 'kleidung', 'elektronik', 'haushalt', "
+            "'kueche', 'werkzeug', 'spielzeug', 'beauty', 'sport', 'sonstiges'. "
+            "Wenn nichts klar passt: 'sonstiges'."
+        )
+    )
+
+    template_type: str = Field(
+        description=(
+            "Der gewaehlte Video-Template-Typ. "
+            "WICHTIG: MUSS EXAKT einer der 'template_type' Werte aus der Liste "
+            "'VERFUEGBARE VIDEO-TEMPLATES' im User-Prompt sein. "
+            "Waehle das Template, dessen Kategorien-Liste am besten zu 'produkt_kategorie' "
+            "passt. Beachte zusaetzlich 'Bildtyp' (z.B. 'freigestelltes PNG' nur waehlen, "
+            "wenn solche Bilder vorhanden sind). Wenn unsicher: das als FALLBACK markierte "
+            "Template verwenden."
+        )
+    )
+
 # --- 2. LLM-FUNKTIONEN ---
 
 SYSTEM_PROMPT = (
@@ -259,6 +285,7 @@ def extrahiere_produktsignale(
 
     user_prompt = (
         "Extrahiere die Produktinformationen aus dem folgenden Text.\n\n"
+        f"{build_template_catalog_prompt_snippet()}\n\n"
         "BILD-KANDIDATEN:\n"
         "---\n"
         f"{bild_kandidaten_str}\n"

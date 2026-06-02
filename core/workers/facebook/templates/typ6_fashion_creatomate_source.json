@@ -21,8 +21,7 @@
     "Logo.source":             "default_logo_source (DEALSBOSS-Logo \u2013 nicht ueberschreiben)",
     "Website.text":            "affiliate_url / domain (Default: www.dealsboss.de)",
     "Discount.text":           "discount_percent (z.B. '-30%')",
-    "Title.text":              "reel_titel / title (z.B. 'Spring Sale')",
-    "Caption.text":            "reel_beschreibung / caption (z.B. '3 days left')",
+    "Title.text":              "reel_titel / title (z.B. 'Spring Sale')",   
     "Voiceover-C9N.source":     "voiceover_text (ElevenLabs TTS – Matilda)"
   }
 }

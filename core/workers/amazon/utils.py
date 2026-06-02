@@ -107,6 +107,8 @@ TARGET_SCHEMA_TEMPLATE = {
     "hashtags": [],  # <--- HIER HINZUFÜGEN
     "reel_titel": "N/A", "reel_beschreibung": "N/A", "reel_caption": "N/A",
     "voiceover_text": "N/A",
+    "produkt_kategorie": "N/A",
+    "template_type": "",
     "type": "post",   # "reel" wenn Rabatt >= 30%, sonst "post"
 }
 
@@ -183,6 +185,11 @@ def map_ai_output_to_target_format(
     final_output['reel_beschreibung'] = extracted.get('reel_beschreibung', 'N/A')
     final_output['reel_caption'] = extracted.get('reel_caption', 'N/A')
     final_output['voiceover_text'] = extracted.get('voiceover_text', 'N/A')
+
+    # TEMPLATE-AUSWAHL (datengetrieben aus AI): produkt_kategorie + template_type
+    # werden von template_interface.resolve_template_selection() ausgewertet.
+    final_output['produkt_kategorie'] = extracted.get('produkt_kategorie', 'N/A')
+    final_output['template_type'] = extracted.get('template_type', '')
     
     # TEXT FELDER
     ai_features = extracted.get('features')

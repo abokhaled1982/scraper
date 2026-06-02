@@ -126,9 +126,8 @@ def _fmt_price(field_val) -> str:
         return f"{val} {hint}" if val else "N/A"
     return str(field_val) if field_val else "N/A"
 
-# ─── typ3_audio Konstanten (1:1 wie creatomate.py) ──────────────────────────
-TYP3_AUDIO_TEMPLATE_ID = "d2c8b591-36d1-44d7-a0f5-7a8c8d5ec39f"
-TYP3_AUDIO_API_KEY     = "6e5cd9da3b904ca888a7173b676a22b040fbf7dc206139fa0b6996788e4b8bcea1f3509a350f8294412d30ea7741e4bb"
+# ─── typ3_audio Konstanten (Legacy-Fallbacks; primaer wird die Registry verwendet) ────
+TYP3_AUDIO_TEMPLATE_ID = "d8285bc5-5ee4-4394-bb95-9d3333742d9d"
 
 
 def build_typ3_audio_modifications(data: dict) -> dict:
@@ -196,14 +195,18 @@ def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
 
     modifications = build_typ3_audio_modifications(data)
 
-    # 1:1 wie creatomate.py: direkter POST mit hardcoded API-Key & Polling
+    # API-Key dynamisch aus der Registry (typ3_audio.json -> api_key)
+    api_key = _get_api_key(resolved_id) or _DEFAULT_API_KEY
+    if not api_key:
+        raise ValueError("Kein Creatomate API-Key gefunden (Registry leer und CREATOMATE_API_KEY nicht gesetzt).")
+
     payload = {
         "template_id": resolved_id,
         "modifications": modifications,
     }
     headers = {
         "Content-Type":  "application/json",
-        "Authorization": f"Bearer {TYP3_AUDIO_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
     }
 
     log.info(f"[typ3_audio] 🚀 Starte Creatomate Render (template_id={resolved_id})")

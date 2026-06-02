@@ -45,6 +45,104 @@ def _load_template_registry() -> dict[str, dict[str, Any]]:
 TEMPLATE_REGISTRY: dict[str, dict[str, Any]] = _load_template_registry()
 
 
+# ---------------------------------------------------------------------------
+# Dynamische Kategorie-/Template-Auflösung (datengetrieben aus Registry)
+# ---------------------------------------------------------------------------
+
+def _normalize_category(value: Any) -> str:
+    """Normalisiert einen Kategorie-String (lowercase, ohne Sonderzeichen)."""
+    if not value:
+        return ""
+    s = str(value).strip().lower()
+    # Umlaute & gängige Trennzeichen normalisieren
+    repl = {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "-": "", "_": "", " ": ""}
+    for k, v in repl.items():
+        s = s.replace(k, v)
+    return s
+
+
+def get_template_catalog() -> list[dict[str, Any]]:
+    """Gibt eine kompakte Beschreibung aller registrierten Templates zurueck.
+
+    Wird vom AI-Extraktor genutzt, um dem LLM zu zeigen, welche Templates
+    verfuegbar sind und welche Produktkategorien sie jeweils abdecken.
+    """
+    catalog: list[dict[str, Any]] = []
+    for template_type, cfg in TEMPLATE_REGISTRY.items():
+        hints = cfg.get("ai_extractor_hints") or {}
+        catalog.append(
+            {
+                "template_type": template_type,
+                "description": str(cfg.get("description") or "").strip(),
+                "categories": list(hints.get("recommended_categories") or []),
+                "is_fallback": bool(hints.get("is_fallback_template")),
+                "requires_transparent_product_image": bool(
+                    hints.get("requires_transparent_product_image")
+                ),
+                "preferred_image_type": str(hints.get("preferred_image_type") or "").strip(),
+            }
+        )
+    return catalog
+
+
+def build_template_catalog_prompt_snippet() -> str:
+    """Generiert ein Prompt-Snippet (Deutsch) mit allen verfuegbaren Templates.
+
+    Wird in den AI-Extraktor-Prompt eingefuegt, damit das LLM weiss,
+    welchen template_type es waehlen soll (basierend auf der Kategorie).
+    """
+    lines: list[str] = ["VERFUEGBARE VIDEO-TEMPLATES:"]
+    for entry in get_template_catalog():
+        cats = ", ".join(entry["categories"]) or "—"
+        marker = " (FALLBACK)" if entry["is_fallback"] else ""
+        img = entry["preferred_image_type"] or "beliebig"
+        desc = entry["description"] or ""
+        lines.append(
+            f"- {entry['template_type']}{marker}: "
+            f"Kategorien=[{cats}] | Bildtyp={img}. {desc}"
+        )
+    lines.append(
+        "WAEHLE den template_type, dessen Kategorien-Liste am besten zur "
+        "extrahierten produkt_kategorie passt. Wenn nichts klar passt: "
+        "FALLBACK-Template verwenden."
+    )
+    return "\n".join(lines)
+
+
+def select_template_type_by_category(category: str) -> str | None:
+    """Mappt eine Produktkategorie auf einen template_type aus der Registry.
+
+    Iteriert die Registry, vergleicht normalisierte Kategorie-Strings.
+    Gibt None zurueck, wenn kein Match gefunden wird (Caller soll dann
+    Fallback-Template waehlen).
+    """
+    target = _normalize_category(category)
+    if not target:
+        return None
+    for template_type, cfg in TEMPLATE_REGISTRY.items():
+        hints = cfg.get("ai_extractor_hints") or {}
+        for cat in hints.get("recommended_categories") or []:
+            if _normalize_category(cat) == target:
+                return template_type
+    # Zweite Runde: Teil-Match (z.B. "kinderkleidung" matcht "kleidung")
+    for template_type, cfg in TEMPLATE_REGISTRY.items():
+        hints = cfg.get("ai_extractor_hints") or {}
+        for cat in hints.get("recommended_categories") or []:
+            norm = _normalize_category(cat)
+            if norm and (norm in target or target in norm):
+                return template_type
+    return None
+
+
+def _find_fallback_template_type() -> str | None:
+    """Sucht das als is_fallback_template markierte Template in der Registry."""
+    for template_type, cfg in TEMPLATE_REGISTRY.items():
+        hints = cfg.get("ai_extractor_hints") or {}
+        if hints.get("is_fallback_template"):
+            return template_type
+    return None
+
+
 def resolve_template_selection(
     deal_data: dict[str, Any],
     default_template_type: str = "offer_type1",
@@ -54,7 +152,10 @@ def resolve_template_selection(
     Priority:
     1) explicit template_id in deal JSON
     2) template_type in deal JSON -> lookup in TEMPLATE_REGISTRY
-    3) default_template_type
+    3) produkt_kategorie / category in deal JSON -> Registry-Lookup
+       (ai_extractor_hints.recommended_categories)
+    4) is_fallback_template aus Registry
+    5) default_template_type
     """
     explicit_template_id = str(deal_data.get("template_id") or "").strip()
     template_type = str(deal_data.get("template_type") or "").strip()
@@ -63,8 +164,20 @@ def resolve_template_selection(
         effective_type = template_type or "custom"
         return effective_type, explicit_template_id
 
+    # NEU: Kategorie-basierte Auswahl, wenn kein template_type explizit gesetzt ist.
     if not template_type:
-        template_type = default_template_type
+        category = (
+            deal_data.get("produkt_kategorie")
+            or deal_data.get("kategorie")
+            or deal_data.get("category")
+            or ""
+        )
+        matched = select_template_type_by_category(category)
+        if matched:
+            template_type = matched
+
+    if not template_type:
+        template_type = _find_fallback_template_type() or default_template_type
 
     template_cfg = TEMPLATE_REGISTRY.get(template_type)
     if not template_cfg:
@@ -93,6 +206,8 @@ def build_modifications_for_template(
         mods = _build_typ3_audio_modifications(deal_data, template_cfg)
     elif template_type == "typ5_sneaker_purple" or template_type.startswith("typ5"):
         mods = _build_typ5_modifications(deal_data, discount_value, template_cfg)
+    elif template_type == "typ6_fashion" or template_type.startswith("typ6"):
+        mods = _build_typ6_modifications(deal_data, discount_value, template_cfg)
     elif template_type.startswith("reel") or template_kind == "reel" or template_type == "custom":
         mods = _build_reel_type_modifications(deal_data, discount_value, template_cfg)
     elif template_type.startswith("offer") or template_kind == "offer":
@@ -139,11 +254,7 @@ def _build_reel_type_modifications(
         ["cta_text", "cta", "call_to_action"],
         fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
-    website_text = _first_present_str(
-        deal_data,
-        ["website_text", "website", "domain"],
-        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
-    )
+    website_text = _extract_website_text(deal_data, template_cfg)
 
     # VOICEOVER TEXT EXTRAHIEREN
     voiceover_text = _first_present_str(
@@ -231,11 +342,7 @@ def _build_typ5_modifications(
         ["cta_text", "cta", "call_to_action"],
         fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
-    website_text = _first_present_str(
-        deal_data,
-        ["website_text", "website", "domain", "affiliate_url"],
-        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
-    )
+    website_text = _extract_website_text(deal_data, template_cfg)
 
     modifications: dict[str, Any] = {
         "Product-Name.text": product_name,
@@ -252,6 +359,68 @@ def _build_typ5_modifications(
 
     if background_url:
         modifications["Background-Media.source"] = background_url
+
+    return modifications
+
+
+def _build_typ6_modifications(
+    deal_data: dict[str, Any],
+    discount_value: float,
+    template_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Modifications fuer typ6_fashion (Mode/Kleidung, Lifestyle-Foto).
+
+    Layer-Keys laut Template:
+      - Background-Image.source : Lifestyle-/Modelfoto (images[0] oder image_url)
+      - Logo.source             : DEALSBOSS-Logo (default_logo_source aus Registry,
+                                  NICHT ueberschreiben sofern nichts explizit gesetzt)
+      - Website.text            : affiliate_url / domain
+      - Discount.text           : Rabatt in Prozent (z.B. '-30%')
+      - Title.text              : reel_titel / title
+      - Voiceover-C9N.source    : ElevenLabs TTS
+    """
+    images = deal_data.get("template_images") or deal_data.get("images") or []
+    background_image_url = next(
+        (img for img in images if isinstance(img, str) and img.strip()), ""
+    ) or str(deal_data.get("image_url") or "").strip()
+
+    product_name, _ = _extract_product_texts(deal_data)
+    discount_text = _extract_discount_text(deal_data, discount_value)
+
+    cta_text = _first_present_str(
+        deal_data,
+        ["cta_text", "cta", "call_to_action"],
+        fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
+    )
+    website_text = _extract_website_text(deal_data, template_cfg)
+    voiceover_text = _first_present_str(
+        deal_data,
+        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
+        fallback="",
+    )
+
+    # Logo: nur ueberschreiben, wenn explizit ein logo_url im Deal steht;
+    # sonst kommt das Default-Logo direkt aus dem Template selbst.
+    explicit_logo = str(
+        deal_data.get("logo_url") or deal_data.get("brand_logo") or ""
+    ).strip()
+
+    modifications: dict[str, Any] = {
+        "Title.text": product_name,
+        "Discount.text": discount_text,
+        "Website.text": website_text,
+        "CTA.text": cta_text,
+    }
+
+    if background_image_url:
+        modifications["Background-Image.source"] = background_image_url
+        _apply_image_fit(modifications, "Background-Image", template_cfg)
+
+    if explicit_logo:
+        modifications["Logo.source"] = explicit_logo
+
+    if voiceover_text:
+        modifications["Voiceover-C9N.source"] = voiceover_text
 
     return modifications
 
@@ -281,11 +450,7 @@ def _build_typ3_audio_modifications(
         ["cta_text", "cta", "call_to_action"],
         fallback=str(template_cfg.get("default_cta") or "Folgt uns für mehr Rabatte!"),
     )
-    website_text = _first_present_str(
-        deal_data,
-        ["website_text", "website", "domain"],
-        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
-    )
+    website_text = _extract_website_text(deal_data, template_cfg)
 
     # Voiceover-Text erzeugen (aus Deal-Daten oder als Fallback)
     voiceover_text = _first_present_str(
@@ -349,11 +514,7 @@ def _build_offer_type_modifications(
         ["cta_text", "cta", "call_to_action"],
         fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
-    website_text = _first_present_str(
-        deal_data,
-        ["website_text", "website", "domain"],
-        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
-    )
+    website_text = _extract_website_text(deal_data, template_cfg)
 
     # VOICEOVER TEXT EXTRAHIEREN
     voiceover_text = _first_present_str(
@@ -594,3 +755,18 @@ def _first_present_str(
         if text and text.upper() not in {"N/A", "NONE", "NULL"}:
             return text
     return fallback
+
+
+def _extract_website_text(
+    deal_data: dict[str, Any],
+    template_cfg: dict[str, Any],
+) -> str:
+    """Einheitliche Website-Aufloesung fuer alle Template-Builder.
+
+    Reihenfolge: explizit gesetzt -> affiliate_url (AI-Output-Feld) -> Default.
+    """
+    return _first_present_str(
+        deal_data,
+        ["website_text", "website", "domain", "affiliate_url", "url"],
+        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
+    )
