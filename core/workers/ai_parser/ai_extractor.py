@@ -1,8 +1,12 @@
 # ai_extractor.py — VERTEX AI VERSION
 
 import json
+import os
+import random
 import sys
 import time
+import uuid
+from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
 import vertexai
@@ -180,30 +184,69 @@ class Produktinformation(BaseModel):
 
     voiceover_text: str = Field(
         description=(
-            "Gesprochener Werbespot-Text fuer ElevenLabs Text-to-Speech. "
-            "Das Video ist MAX. 10 SEKUNDEN lang - der Text darf MAXIMAL 20-25 WOERTER haben. "
-            "SPRACHE: IMMER AUF DEUTSCH. "
-            "\n\n"
-            "PFLICHT-INHALT (alle drei Elemente MUESSEN enthalten sein, in dieser Reihenfolge):\n"
-            "1. HOOK (3-5 Woerter): Reisserischer Einstieg. "
-            "   Beispiele: 'Krasses Angebot heute!', 'Heute nur fuer kurze Zeit:', 'Schnell sein lohnt sich!'\n"
-            "2. PRODUKT + PREISVORTEIL (10-14 Woerter): "
-            "   Nenne den Produktnamen (aus 'produkt_titel', gekuerzt auf Kernbegriff) "
-            "   UND den konkreten Preisvorteil - ENTWEDER Rabatt in Prozent (aus 'rabatt_prozent') "
-            "   ODER Rabatt in Euro (Differenz original_preis minus akt_preis) ODER beides. "
-            "   Falls Gutscheincode vorhanden ('gutschein_code' != 'N/A'): "
-            "   Nenne ihn direkt: '...mit Code [CODE]'. "
-            "   Beispiel: 'Das [Produkt] jetzt fuer nur [Preis] Euro - das sind [X] Prozent Rabatt!'\n"
-            "3. CTA (3-5 Woerter): Konkreter Schluss-Aufruf. "
-            "   Beispiele: 'Link in der Bio!', 'Jetzt zuschlagen!', 'Nur solange Vorrat reicht!'\n"
-            "\n"
-            "HARTE REGELN:\n"
-            "- MAXIMAL 25 WOERTER GESAMT - kein einziges Wort zu viel.\n"
-            "- Kein Emoji, kein Markdown, keine Klammern, keine Aufzaehlungszeichen.\n"
-            "- Reiner Fliestext wie ein echter Radio-Werbespot.\n"
-            "- Produktnamen maximal einmal nennen.\n"
-            "- akt_preis als gesprochene Zahl: '49 Euro 99' statt '49,99 EUR'.\n"
-            "- Gib NUR den fertigen Sprechtext zurueck, keine Erklaerung, keine Anfuehrungszeichen."
+            "Du bist ein preisgekroenter deutschsprachiger Werbetexter & Voice-Over-Profi "
+            "(20 Jahre Erfahrung, Radio + Reels). Schreibe einen DEUTSCHEN Sprechtext fuer "
+            "einen 10-15-sekuendigen ElevenLabs-TTS-Werbespot zu diesem Angebot.\n\n"
+
+            "=== ZIEL ===\n"
+            "Der Zuhoerer soll in unter 3 Sekunden emotional gepackt werden und am Ende "
+            "den Kaufimpuls verspueren. Klinge wie ein begeisterter Mensch, NICHT wie "
+            "ein generischer Schnaeppchen-Bot.\n\n"
+
+            "=== HARTE LIMITS ===\n"
+            "- 18 bis 32 Woerter gesamt. Lieber kurz und kraftvoll.\n"
+            "- Sprache: IMMER DEUTSCH. Markennamen englisch erlaubt.\n"
+            "- Keine Emojis, kein Markdown, keine Klammern, keine Aufzaehlungen, keine Anfuehrungszeichen.\n"
+            "- Reiner Fliestext wie ein gesprochener Radiospot.\n"
+            "- Preise als gesprochene Zahl: '49 Euro 99' statt '49,99 EUR'.\n"
+            "- Rabatt als gesprochene Zahl: '40 Prozent' statt '40%'.\n"
+            "- Produktname maximal einmal nennen, gerne als verkuerzte Marke+Typ.\n\n"
+
+            "=== VARIANZ-PFLICHT (EXTREM WICHTIG) ===\n"
+            "Jeder Spot muss sich SPUERBAR von vorherigen unterscheiden. "
+            "WAEHLE pro Spot ZUFAELLIG (siehe Session-Seed im User-Prompt) genau EINEN Hook-Stil "
+            "aus der Liste unten und EINEN passenden CTA-Stil. Wechsle Satzlaenge und Rhythmus.\n\n"
+
+            "ABSOLUT VERBOTENE Phrasen (werden sofort abgelehnt):\n"
+            "- 'Krasses Angebot heute'\n"
+            "- 'Schnell sein lohnt sich'\n"
+            "- 'Heute nur fuer kurze Zeit'\n"
+            "- 'Mega Deal' / 'Top Deal' / 'Hammer Deal'\n"
+            "- 'Jetzt zuschlagen' am Anfang\n\n"
+
+            "=== HOOK-STILE (waehle EINEN, abh. von Session-Seed/Kategorie/Marke) ===\n"
+            "1. FRAGE: 'Schon mal so leise gelaufen?' / 'Wer braucht eigentlich noch volle UVP?'\n"
+            "2. MINI-STORY: 'Erinnerst du dich an deinen ersten Sneaker? Genau dieses Gefuehl ...'\n"
+            "3. VERGLEICH: 'Drei Kaffees weniger \u2013 ein Paar Premium-Sneaker mehr.'\n"
+            "4. SINNES-BILD: 'Weiches Leder, perfekter Halt, jeder Schritt federt.'\n"
+            "5. ZAHL-SCHOCK: 'Fuenfzig Prozent weg. Einfach so.'\n"
+            "6. PROBLEM-LOESUNG: 'Schmerzende Fuesse abends? Diese Sohle aendert das.'\n"
+            "7. GEHEIMTIPP: 'Insider wissen Bescheid \u2013 die ZX-Serie laeuft selten guenstiger.'\n"
+            "8. SOCIAL PROOF: 'Tausende Sneakerheads schon im Warenkorb. Du auch?'\n"
+            "9. PERSONA-ANREDE: 'Liebe Trail-Runner, hier kommt euer naechstes Lieblingspaar.'\n"
+           "10. KONTRAST: 'Frueher 159 Euro. Heute deutlich weniger.'\n"
+           "11. EXKLUSIVITAET: 'Nur fuer Mitglieder mit Adler-Augen \u2013 dieser Drop ist klein.'\n"
+           "12. BENEFIT-PUR: 'Mehr Komfort, weniger Geld, null Kompromisse.'\n"
+           "13. ZEIT/SAISON: passend zu Monat/Tageszeit (Wochenende, Sommer, Schulstart, Weihnachten ...).\n"
+           "14. MYTHOS-BUSTER: 'Marken-Sneaker unter 90 Euro? Heute ja.'\n"
+           "15. HUMORVOLL: 'Dein Schuhschrank ruft an. Er will Nachschub.'\n\n"
+
+            "=== CTA-STILE (waehle EINEN, anders als der Hook) ===\n"
+            "- 'Tipp auf den Link und sicher dir dein Paar.'\n"
+            "- 'Greif zu, bevor die Groessen weg sind.'\n"
+            "- 'Im Profil findest du den Direktlink.'\n"
+            "- 'Ein Klick \u2013 schon ist es deins.'\n"
+            "- 'Heute bestellt, bald an deinen Fuessen.'\n"
+            "- 'Swipe hoch und nimm das Angebot mit.'\n\n"
+
+            "=== INHALTSPFLICHT ===\n"
+            "Im Mittelteil MUSS vorkommen:\n"
+            "- Kurzer Produkthinweis (Marke + Typ aus 'produkt_titel', maximal 4 Woerter).\n"
+            "- Konkreter Preisvorteil: ENTWEDER 'rabatt_prozent' ODER Euro-Ersparnis (orig - akt) ODER beides.\n"
+            "- Falls 'gutschein_code' nicht 'N/A': den Code natuerlich einbauen ('mit dem Code XYZ').\n"
+            "- Beziehe wenn moeglich Marke/Kategorie/Saison/Tageszeit aus dem User-Prompt mit ein.\n\n"
+
+            "Gib NUR den fertigen Sprechtext zurueck. Keine Erklaerung, keine Anfuehrungszeichen."
         )
     )
 
@@ -270,8 +313,59 @@ def baue_pattern_pack() -> dict:
     config = GenerationConfig(
         response_mime_type="application/json",
         response_schema=schema_dict,
+        # Hohe Kreativitaet fuer Voiceover-Varianz; Schema sorgt fuer Validitaet.
+        temperature=1.0,
+        top_p=0.95,
     )
     return {"model": model, "config": config}
+
+
+def _build_session_seed_block() -> str:
+    """Erzeugt einen Varianz-Block (Datum, Tageszeit, Saison, Zufalls-Seed).
+
+    Wird dem User-Prompt vorangestellt, damit das LLM bei jedem Aufruf
+    einen anderen Kontext bekommt und der voiceover_text variiert.
+    """
+    now = datetime.now()
+    monat_de = [
+        "Januar", "Februar", "Maerz", "April", "Mai", "Juni",
+        "Juli", "August", "September", "Oktober", "November", "Dezember",
+    ][now.month - 1]
+    wochentag_de = [
+        "Montag", "Dienstag", "Mittwoch", "Donnerstag",
+        "Freitag", "Samstag", "Sonntag",
+    ][now.weekday()]
+    h = now.hour
+    if h < 6:        tageszeit = "frueher Morgen"
+    elif h < 11:     tageszeit = "Vormittag"
+    elif h < 14:     tageszeit = "Mittag"
+    elif h < 18:     tageszeit = "Nachmittag"
+    elif h < 22:     tageszeit = "Abend"
+    else:            tageszeit = "spaeter Abend"
+    if now.month in (12, 1, 2):    saison = "Winter"
+    elif now.month in (3, 4, 5):   saison = "Fruehling"
+    elif now.month in (6, 7, 8):   saison = "Sommer"
+    else:                          saison = "Herbst"
+
+    # Zufalls-Seeds (Hook + CTA Index, Tone) damit Gemini einen klaren
+    # Anker zur Auswahl bekommt und nicht immer die wahrscheinlichste Phrase nimmt.
+    rng = random.Random(uuid.uuid4().int)
+    hook_idx = rng.randint(1, 15)
+    cta_idx  = rng.randint(1, 6)
+    tones = ["emotional", "sachlich-cool", "witzig-locker", "dringlich", "exklusiv-fluestern", "begeistert-laut"]
+    tone  = rng.choice(tones)
+    nonce = uuid.uuid4().hex[:8]
+
+    return (
+        "SESSION-KONTEXT (nutze ihn aktiv im voiceover_text):\n"
+        f"- Datum:      {wochentag_de}, {now.day}. {monat_de} {now.year}\n"
+        f"- Tageszeit:  {tageszeit}\n"
+        f"- Saison:     {saison}\n"
+        f"- Spot-Tone:  {tone}\n"
+        f"- Hook-Stil:  Nr. {hook_idx} (siehe Liste im System-Prompt)\n"
+        f"- CTA-Stil:   Nr. {cta_idx} (siehe Liste im System-Prompt)\n"
+        f"- Spot-ID:    {nonce}  (jeder Spot ist einzigartig \u2013 keine Wiederholungen frueherer Phrasen)\n"
+    )
 
 
 def extrahiere_produktsignale(
@@ -279,11 +373,12 @@ def extrahiere_produktsignale(
     bild_kandidaten_str: str,
     pack: dict,
 ) -> dict:
-    """Führt die LLM-basierte Extraktion durch."""
+    """Fuehrt die LLM-basierte Extraktion durch."""
     model: GenerativeModel = pack["model"]
     config: GenerationConfig = pack["config"]
 
     user_prompt = (
+        f"{_build_session_seed_block()}\n"
         "Extrahiere die Produktinformationen aus dem folgenden Text.\n\n"
         f"{build_template_catalog_prompt_snippet()}\n\n"
         "BILD-KANDIDATEN:\n"
