@@ -182,6 +182,10 @@ class TelegramOfferRouter:
             payload = deal.get("payload")
             if not isinstance(payload, dict):
                 continue
+            # Reels haben eigene Pipeline (tel_video_sender) — hier überspringen,
+            # damit kein doppelter Foto-Post entsteht während das Video rendert.
+            if payload.get("type") == "reel":
+                continue
             ktype, kval = _extract_identity(payload)
             if kval in reg.get(ktype, []):
                 continue

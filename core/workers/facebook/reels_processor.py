@@ -138,6 +138,20 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
             else:
                 log.error(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
 
+        # ── Telegram: Video SOFORT senden (vor Facebook), wie ein normaler Post ──
+        # Facebook bleibt mit eigenem Timer; Telegram darf nicht warten.
+        if local_video and pathlib.Path(local_video).exists():
+            try:
+                from core.workers.telegram.tel_video_sender import send_reel_video
+                tg_ok = await send_reel_video(pathlib.Path(local_video), data)
+                if tg_ok:
+                    log.info(f"[TELEGRAM] ✅ Reel sofort an Telegram gesendet: {product_id}")
+                else:
+                    log.warning(f"[TELEGRAM] ⚠️ Telegram-Versand fehlgeschlagen – FB-Flow läuft weiter.")
+            except Exception as tg_e:
+                log.error(f"[TELEGRAM] ⚠️ Fehler beim Telegram-Video-Versand: {tg_e}")
+        # ─────────────────────────────────────────────────────────────────────────
+
         # Sende an Facebook-Addon
         from core.workers.facebook import fb_service
         sent = await fb_service.send_post(data, None, local_video)
