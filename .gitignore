@@ -17,6 +17,19 @@ data/
 *.log
 *.tmp
 .DS_Store
+
+# Core DB (SQLite) + Backups / Journals / WAL / SHM
 core_data.db
+core_data.db.*
+core_data.db-journal
+core_data.db-wal
+core_data.db-shm
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 .log/
 data/_archive_migration/
