@@ -241,6 +241,29 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
            font-size:12px; color:#cbd5e1; max-height:60vh; }
 .row-actions { white-space: nowrap; }
 .tag { font-family: monospace; font-size:11px; color:#94a3b8; }
+
+/* ── Modal ── */
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:50;
+    display:flex; align-items:flex-start; justify-content:center; padding:40px 20px;
+    overflow-y:auto; }
+.modal { background:#0b1220; border:1px solid #334155; border-radius:12px;
+    width:min(960px, 100%); padding:22px 26px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.modal h2 { margin:0 0 4px; font-size:18px; color:#7dd3fc; }
+.modal h3 { margin:18px 0 6px; font-size:12px; color:#94a3b8;
+    text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid #1e293b; padding-bottom:4px; }
+.modal .close { float:right; background:transparent; border:none; color:#94a3b8;
+    font-size:22px; cursor:pointer; line-height:1; }
+.modal .close:hover { color:#f87171; }
+.kv { display:grid; grid-template-columns:180px 1fr; gap:6px 14px; font-size:12.5px;
+    background:#020617; border-radius:8px; padding:12px 14px; }
+.kv .k { color:#94a3b8; font-weight:600; }
+.kv .v { color:#e2e8f0; word-break:break-word; }
+.kv .v a { color:#7dd3fc; }
+.kv .v img { max-width:140px; max-height:140px; border-radius:6px;
+    border:1px solid #334155; display:block; margin-top:4px; }
+.kv .v .imgs { display:flex; gap:6px; flex-wrap:wrap; }
+.badge { display:inline-block; background:#082f49; color:#7dd3fc;
+    padding:2px 8px; border-radius:6px; font-size:11px; margin-right:4px; }
 </style>
 </head>
 <body>
@@ -262,6 +285,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
   <section id="tab-logs" hidden></section>
   <section id="tab-state" hidden></section>
 </main>
+<div id="modalRoot"></div>
 <script>
 const $ = sel => document.querySelector(sel);
 const esc = s => (s ?? "").toString()
@@ -335,6 +359,7 @@ async function renderDeals() {
           <td>${esc(d.retry_count||0)}</td>
           <td><small>${esc(d.created_at||"")}</small></td>
           <td class="row-actions">
+            <button class="act" onclick="showDealDetail(${d.id})">🔍 Details</button>
             <button class="act" onclick="requeueDeal(${d.id})">↻ Requeue</button>
             <button class="act danger" onclick="deleteDeal(${d.id})">🗑 Delete</button>
           </td>
@@ -356,6 +381,92 @@ async function deleteDeal(id) {
     await api(`/api/deals/${id}`, { method: "DELETE" });
     renderDeals();
 }
+
+// ── Deal-Detail Modal (zeigt die von der KI gemappten Produktdaten) ──
+const PRODUCT_FIELD_GROUPS = [
+    ["Kerndaten",      ["product_id","market","title","affiliate_url"]],
+    ["KI-Klassifikation", ["produkt_kategorie","template_type","template_id"]],
+    ["Preis",          ["normal_price","discounted_price","discount_percent","savings","currency"]],
+    ["Beschreibung",   ["product_name","product_description","caption","cta","voiceover_text","website_text","website"]],
+    ["Medien",         ["image_url","images","video_url"]],
+];
+
+function renderKV(payload, keys) {
+    const rows = keys
+        .filter(k => payload[k] !== undefined && payload[k] !== null && payload[k] !== "")
+        .map(k => {
+            const v = payload[k];
+            let cell;
+            if (k === "images" && Array.isArray(v)) {
+                cell = `<div class="imgs">` +
+                    v.slice(0,8).map(u => `<img src="${esc(u)}" loading="lazy">`).join("") +
+                    `</div>`;
+            } else if (k === "image_url" && typeof v === "string") {
+                cell = `<img src="${esc(v)}" loading="lazy"><br><a href="${esc(v)}" target="_blank">${esc(v)}</a>`;
+            } else if (typeof v === "string" && /^https?:\/\//i.test(v)) {
+                cell = `<a href="${esc(v)}" target="_blank">${esc(v)}</a>`;
+            } else if (typeof v === "object") {
+                cell = `<pre class="json" style="margin:0;max-height:200px;">${esc(JSON.stringify(v,null,2))}</pre>`;
+            } else {
+                cell = esc(v);
+            }
+            return `<div class="k">${esc(k)}</div><div class="v">${cell}</div>`;
+        }).join("");
+    return rows ? `<div class="kv">${rows}</div>` : "";
+}
+
+async function showDealDetail(id) {
+    let d;
+    try { d = await api(`/api/deals/${id}`); }
+    catch (e) { alert(e.message); return; }
+    const payload = d.payload || {};
+    // Top-Level Deal-Spalten zusaetzlich in payload mergen fuer einheitliche Anzeige
+    const merged = Object.assign({
+        product_id: d.product_id, market: d.market, title: d.title,
+        affiliate_url: d.affiliate_url,
+    }, payload);
+
+    let groups = "";
+    const usedKeys = new Set();
+    for (const [label, keys] of PRODUCT_FIELD_GROUPS) {
+        const html = renderKV(merged, keys);
+        if (html) {
+            groups += `<h3>${esc(label)}</h3>${html}`;
+            keys.forEach(k => usedKeys.add(k));
+        }
+    }
+    // Restliche Felder (die KI kann variabel weitere Felder liefern)
+    const restKeys = Object.keys(merged).filter(k => !usedKeys.has(k));
+    const restHtml = renderKV(merged, restKeys);
+    if (restHtml) groups += `<h3>Weitere KI-Felder</h3>` + restHtml;
+
+    const events = (d.events || []).map(e =>
+        `<tr><td><span class="badge">${esc(e.event)}</span></td>` +
+        `<td><small>${esc(e.created_at||"")}</small></td>` +
+        `<td>${esc(e.detail||"")}</td></tr>`
+    ).join("") || `<tr><td colspan="3"><small>keine Events</small></td></tr>`;
+
+    const rawJson = esc(JSON.stringify(payload, null, 2));
+
+    $("#modalRoot").innerHTML = `
+      <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+        <div class="modal">
+          <button class="close" onclick="closeModal()">✕</button>
+          <h2>Deal #${d.id} — <span class="tag">${esc(d.product_id)}</span></h2>
+          <div><span class="badge">${esc(d.status)}</span>
+               <span class="badge">${esc(d.market)}</span>
+               <small>created ${esc(d.created_at||"")}</small></div>
+          ${groups || "<p><small>Kein Payload vorhanden</small></p>"}
+          <h3>Roh-Payload (JSON)</h3>
+          <pre class="json">${rawJson}</pre>
+          <h3>Events</h3>
+          <table><thead><tr><th>Event</th><th>Zeit</th><th>Detail</th></tr></thead>
+            <tbody>${events}</tbody></table>
+        </div>
+      </div>`;
+}
+function closeModal() { $("#modalRoot").innerHTML = ""; }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
 // ── Workers ───────────────────────────────────────────────
 async function renderWorkers() {
