@@ -790,10 +790,8 @@ def _extract_website_text(
 ) -> str:
     """Einheitliche Website-Aufloesung fuer alle Template-Builder.
 
-    Reihenfolge: explizit gesetzt -> affiliate_url (AI-Output-Feld) -> Default.
+    Im Video wird IMMER der `default_website` aus dem Template-JSON angezeigt
+    (z.B. www.dealsboss.de). Die Affiliate-URL wandert ausschliesslich in
+    Kommentare / Inline-Buttons, NIEMALS in den Reel selbst.
     """
-    return _first_present_str(
-        deal_data,
-        ["website_text", "website", "domain", "affiliate_url", "url"],
-        fallback=str(template_cfg.get("default_website") or "www.dealsboss.de"),
-    )
+    return str(template_cfg.get("default_website") or "www.dealsboss.de")
