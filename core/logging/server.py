@@ -12,7 +12,9 @@ Start als Modul:
 from __future__ import annotations
 import logging
 import logging.handlers
+import os
 import pickle
+import re
 import socketserver
 import struct
 import sys
@@ -23,6 +25,39 @@ from typing import Dict
 from colorlog import ColoredFormatter
 
 from core.config import LOG_HOST, LOG_PORT, LOG_DIR
+
+
+# ───────────────────────────────────────────────────────────────
+# Konsolen-Rauschfilter
+# ───────────────────────────────────────────────────────────────
+# Diese Patterns werden NICHT auf der Konsole angezeigt (nur in der Datei).
+# Heartbeat-/Idle-Meldungen, die sonst die Konsole zumüllen.
+# Deaktivierbar mit:  CORE_LOG_CONSOLE_QUIET=0
+_CONSOLE_QUIET = os.getenv("CORE_LOG_CONSOLE_QUIET", "1") not in ("0", "false", "no", "")
+_CONSOLE_MUTE_PATTERNS = [
+    re.compile(r"Cycle complete", re.I),
+    re.compile(r"Nichts Neues gefunden", re.I),
+    re.compile(r"\[INFO\]\s+Considering\s+\d+\s+items", re.I),
+    re.compile(r"\[DONE\]\s+opened=\d+", re.I),
+    re.compile(r"Waiting\s+\d+s\s+for next check", re.I),
+]
+
+
+def _is_console_noise(record: logging.LogRecord) -> bool:
+    """True wenn der Record auf der Konsole unterdrückt werden soll."""
+    if not _CONSOLE_QUIET:
+        return False
+    # WARN/ERROR/CRITICAL niemals filtern — die müssen sichtbar bleiben.
+    if record.levelno >= logging.ERROR:
+        return False
+    try:
+        msg = record.getMessage()
+    except Exception:
+        return False
+    for pat in _CONSOLE_MUTE_PATTERNS:
+        if pat.search(msg):
+            return True
+    return False
 
 
 # ───────────────────────────────────────────────────────────────
@@ -102,9 +137,10 @@ class _Dispatcher:
         return h
 
     def dispatch(self, record: logging.LogRecord) -> None:
-        # Konsole: immer
-        self._console_handler.handle(record)
-        # Datei: pro Worker (record.name == worker-name)
+        # Konsole: nur wenn nicht als Rauschen klassifiziert
+        if not _is_console_noise(record):
+            self._console_handler.handle(record)
+        # Datei: pro Worker (record.name == worker-name) — IMMER alles
         worker = (record.name or "unknown").replace("/", "_")
         try:
             self._file_handler_for(worker).handle(record)
@@ -151,7 +187,8 @@ def main() -> None:
     server = _LogServer((LOG_HOST, LOG_PORT))
     boot_msg = (
         f"\033[36m[logger-server] listening on {LOG_HOST}:{LOG_PORT} "
-        f"→ files: {LOG_DIR}/<DATE>/<worker>.log\033[0m"
+        f"→ files: {LOG_DIR}/<DATE>/<worker>.log "
+        f"| console_quiet={'on' if _CONSOLE_QUIET else 'off'}\033[0m"
     )
     print(boot_msg, flush=True)
     try:

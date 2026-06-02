@@ -11,8 +11,11 @@ facebook/templates/*.json
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("template_interface")
 
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -223,6 +226,15 @@ def build_modifications_for_template(
     if isinstance(custom_overrides, dict):
         mods.update(custom_overrides)
 
+    # Debug-Log: zeigt welche Voiceover-Quelle gewaehlt wurde
+    vo_keys = [k for k in mods.keys() if "voiceover" in k.lower()]
+    if vo_keys:
+        for k in vo_keys:
+            v = str(mods[k])
+            log.info(f"[VOICEOVER] {template_type} -> {k}: {v[:120]}{'...' if len(v) > 120 else ''}")
+    else:
+        log.warning(f"[VOICEOVER] {template_type}: KEINE Voiceover-Modifikation gesetzt!")
+
     return mods
 
 
@@ -343,6 +355,7 @@ def _build_typ5_modifications(
         fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
     website_text = _extract_website_text(deal_data, template_cfg)
+    voiceover_text = _extract_voiceover_text(deal_data)
 
     modifications: dict[str, Any] = {
         "Product-Name.text": product_name,
@@ -359,6 +372,10 @@ def _build_typ5_modifications(
 
     if background_url:
         modifications["Background-Media.source"] = background_url
+
+    if voiceover_text:
+        # Audio-Layer 'Voiceover-9ST' im Template; ElevenLabs-TTS via 'source'.
+        modifications["Voiceover-9ST.source"] = voiceover_text
 
     return modifications
 
@@ -393,11 +410,7 @@ def _build_typ6_modifications(
         fallback=str(template_cfg.get("default_cta") or "Folgt uns fuer mehr Rabattaktionen!"),
     )
     website_text = _extract_website_text(deal_data, template_cfg)
-    voiceover_text = _first_present_str(
-        deal_data,
-        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
-        fallback="",
-    )
+    voiceover_text = _extract_voiceover_text(deal_data)
 
     # Logo: nur ueberschreiben, wenn explizit ein logo_url im Deal steht;
     # sonst kommt das Default-Logo direkt aus dem Template selbst.
@@ -452,25 +465,8 @@ def _build_typ3_audio_modifications(
     )
     website_text = _extract_website_text(deal_data, template_cfg)
 
-    # Voiceover-Text erzeugen (aus Deal-Daten oder als Fallback)
-    voiceover_text = _first_present_str(
-        deal_data,
-        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
-        fallback="",
-    )
-    if not voiceover_text:
-        title = str(deal_data.get("title") or "Dieses Produkt").strip()
-        discount_raw = str(deal_data.get("discount_percent") or "").replace("N/A", "").strip()
-        if discount_raw:
-            voiceover_text = (
-                f"Krasses Angebot heute! {title} jetzt {discount_raw} günstiger – "
-                f"nur {discounted_price}. Jetzt schnell zuschlagen, Link in der Bio!"
-            )
-        else:
-            voiceover_text = (
-                f"Schnell sein lohnt sich! {title} jetzt für nur {discounted_price}. "
-                f"Link in der Bio!"
-            )
+    # Voiceover-Text (mit Fallback, falls AI nichts geliefert hat)
+    voiceover_text = _extract_voiceover_text(deal_data)
 
     return {
         "Product-Image.source":     product_image_url,
@@ -730,6 +726,37 @@ def _parse_price_to_float(text: str) -> float | None:
 
 def _format_eur(value: float) -> str:
     return f"{value:.2f}".replace(".", ",") + " €"
+
+
+def _extract_voiceover_text(deal_data: dict[str, Any]) -> str:
+    """Liefert den TTS-Text fuer ElevenLabs.
+
+    Reihenfolge: AI-Felder -> Fallback aus Titel + Rabatt/Preis.
+    Liefert garantiert einen nicht-leeren String, damit Creatomate nicht den
+    Template-Default ('This text is read aloud...') verwendet.
+    """
+    voiceover_text = _first_present_str(
+        deal_data,
+        ["voiceover", "voiceover_text", "tts_text", "reel_voiceover"],
+        fallback="",
+    )
+    if voiceover_text:
+        return voiceover_text
+
+    # Fallback aus vorhandenen Deal-Daten konstruieren
+    title = str(deal_data.get("title") or deal_data.get("product_name") or "Dieses Produkt").strip()
+    discount_raw = str(deal_data.get("discount_percent") or "").replace("N/A", "").strip()
+    _, discounted_price = _extract_prices(deal_data)
+    price_part = discounted_price if discounted_price and discounted_price != "N/A" else ""
+
+    if discount_raw and price_part:
+        return (
+            f"Krasses Angebot heute! {title} jetzt {discount_raw} guenstiger – "
+            f"nur {price_part}. Jetzt schnell zuschlagen, Link in der Bio!"
+        )
+    if price_part:
+        return f"Schnell sein lohnt sich! {title} jetzt fuer nur {price_part}. Link in der Bio!"
+    return f"Schnell sein lohnt sich! {title} jetzt im Angebot. Link in der Bio!"
 
 
 def _first_present_str(
