@@ -33,8 +33,14 @@ _arg_parser.add_argument(
     default="full",
     help="'full' startet alles; 'parser' startet nur den Amazon-Pipeline-Stack.",
 )
+_arg_parser.add_argument(
+    "--tui",
+    action="store_true",
+    help="Zeigt eine kompakte Live-Konsole (statisches Layout) statt scrollender Logs.",
+)
 ARGS = _arg_parser.parse_args()
 MODE = ARGS.mode
+USE_TUI = ARGS.tui
 
 # ----------------------------------------------------------
 # Initial Setup & Pfade
@@ -131,7 +137,8 @@ async def _start_core_services() -> List[Tuple[str, asyncio.subprocess.Process]]
     except Exception as e:
         log.error(f"[supervisor] WARN: core.db init failed: {e}")
 
-    logger_proc = await spawn("logger", PY, "-m", "core.logging.server")
+    logger_module = "core.logging.tui_server" if USE_TUI else "core.logging.server"
+    logger_proc = await spawn("logger", PY, "-m", logger_module)
     # kurz warten, damit der TCP-Port wirklich offen ist, bevor Worker starten
     await asyncio.sleep(0.5)
     dash_proc = await spawn("dashboard", PY, "-m", "core.dashboard")
