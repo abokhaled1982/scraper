@@ -5,7 +5,7 @@ DB-Schicht — zentraler Zugriff auf SQLite (später Postgres).
     from core.db import deals_repo, state_repo, workers_repo, init_db
 """
 from .engine import init_db, session_scope, ENGINE
-from . import deals_repo, state_repo, workers_repo
+from . import deals_repo, state_repo, workers_repo, config_repo
 
 __all__ = [
     "init_db",
@@ -14,4 +14,5 @@ __all__ = [
     "deals_repo",
     "state_repo",
     "workers_repo",
+    "config_repo",
 ]

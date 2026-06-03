@@ -96,6 +96,17 @@ async def send_url_to_observer(url: str):
     Öffentliche Schnittstelle, die in ws_server.py verwendet wird.
     Verbindet, sendet, trennt.
     """
+    # Dashboard-Kill-Switch
+    try:
+        from core.db import config_repo as _cfg
+        if not _cfg.is_enabled("telegram"):
+            log.info(f"[Sender] ⏸️  Telegram deaktiviert (Dashboard) — übersprungen: {url}")
+            return False
+        if _cfg.is_dry_run("telegram"):
+            log.info(f"[Sender] 🧪 Telegram DRY-RUN — würde senden: {url}")
+            return True
+    except Exception:
+        pass
     try:
         sender_client, entity = await _get_client_and_entity() 
         

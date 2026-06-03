@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("fb_watcher")  # noqa: E402
-from core.db import deals_repo, state_repo, workers_repo
+from core.db import deals_repo, state_repo, workers_repo, config_repo as cfg
 
 _SENT_KEY = "sent_ids:facebook"
 _WORKER = "fb_watcher"
@@ -54,10 +54,23 @@ def print_status_block(current: int, total: int, context: str = "BATCH"):
 
 
 async def safety_wait():
-    wait      = random.randint(MIN_WAIT_SECS, MAX_WAIT_SECS)
+    # Vom Dashboard auslösbar: skip-wait-Token überspringen die Pause komplett.
+    if cfg.consume_skip_wait_token("facebook"):
+        log.info("⏭️  [SAFETY] Wait-Token konsumiert — überspringe Pause")
+        return
+    # Min/Max-Wartezeit aus Dashboard-Config (fallback auf Modul-Defaults)
+    min_w = int(cfg.get("facebook.min_wait_secs", MIN_WAIT_SECS) or MIN_WAIT_SECS)
+    max_w = int(cfg.get("facebook.max_wait_secs", MAX_WAIT_SECS) or MAX_WAIT_SECS)
+    if max_w < min_w:
+        max_w = min_w
+    wait      = random.randint(min_w, max_w)
     start_str = time.strftime("%H:%M:%S")
     remaining = wait
     while remaining > 0:
+        # Falls Dashboard mittlerweile Token gesetzt hat → sofort raus
+        if cfg.consume_skip_wait_token("facebook"):
+            log.info("⏭️  [SAFETY] Pause durch Dashboard abgebrochen")
+            return
         m, s = divmod(remaining, 60)
         log.info(f"⏳ Letzter Deal: {start_str} Uhr | Nächster Start in: [ {m:02d}:{s:02d} ] ")
         await asyncio.sleep(1)
@@ -90,10 +103,17 @@ async def run_init_phase(fb_service) -> None:
 
 async def route_single_deal(deal: dict, sent_ids: set, fb_service) -> bool:
     """Leitet einen Deal-Datensatz an Post- oder Reel-Processor weiter."""
+    # Hard-Toggle: Facebook komplett aus
+    if not cfg.is_enabled("facebook"):
+        log.info("⏸️  [FACEBOOK] deaktiviert (Dashboard) — überspringe Deal")
+        return False
     data = deal.get("payload") or {}
     deal_type = str(data.get("type") or "").strip().lower()
 
     if deal_type == "reel":
+        if not cfg.get("facebook.post_reels", True):
+            log.info("⏸️  [FACEBOOK] Reels deaktiviert (Dashboard) — überspringe")
+            return False
         from core.workers.facebook.reels_processor import process_single_deal as reel_process
         return await reel_process(deal, sent_ids)
     else:
@@ -134,6 +154,18 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
     while True:
         try:
             workers_repo.set_idle(_WORKER)
+            # Worker-Pause respektieren (vom Dashboard gesetzt)
+            if cfg.is_worker_paused(_WORKER) or not cfg.is_enabled("facebook"):
+                await asyncio.sleep(CHECK_INTERVAL_SECS)
+                continue
+            # Dashboard-Resend-Sync: sent_ids aus der DB neu laden, damit
+            # vom Dashboard entfernte product_ids auch im laufenden Worker
+            # sofort wieder als Kandidat erkannt werden.
+            db_sent = get_sent_ids()
+            removed = sent_ids - db_sent
+            if removed:
+                sent_ids.difference_update(removed)
+                log.info(f"♻️  [SYNC] {len(removed)} sent_ids vom Dashboard entfernt → erneut verarbeitbar")
             candidates = get_candidates(sent_ids)
             if candidates:
                 total = len(candidates)

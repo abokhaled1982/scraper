@@ -66,6 +66,7 @@ def enqueue(product_id: str, payload: dict) -> int:
 def claim_next(worker: str, market: Optional[str] = None) -> Optional[dict]:
     """
     Liefert den nächsten Deal aus der Queue und lockt ihn auf 'processing'.
+    Sortiert: priority DESC, created_at ASC (höchste Prio zuerst, sonst FIFO).
     Atomic-ish: in SQLite reicht ein einfacher Update-by-id im Scope.
     Returns: ein dict {id, product_id, payload, ...} oder None.
     """
@@ -73,7 +74,7 @@ def claim_next(worker: str, market: Optional[str] = None) -> Optional[dict]:
         q = (
             select(Deal)
             .where(Deal.status == DEAL_STATUS_QUEUE)
-            .order_by(Deal.created_at.asc())
+            .order_by(Deal.priority.desc(), Deal.created_at.asc())
             .limit(1)
         )
         if market:
@@ -176,12 +177,12 @@ def list_by_status(status: str, limit: int = 100) -> list[dict]:
 
 
 def list_queue(limit: int = 500) -> list[dict]:
-    """Liefert alle Deals im Status 'queue' inkl. payload, sortiert ältester zuerst."""
+    """Liefert alle Deals im Status 'queue' inkl. payload, sortiert nach Prio + FIFO."""
     with session_scope() as s:
         rows = s.execute(
             select(Deal)
             .where(Deal.status == DEAL_STATUS_QUEUE)
-            .order_by(Deal.created_at.asc())
+            .order_by(Deal.priority.desc(), Deal.created_at.asc())
             .limit(limit)
         ).scalars().all()
         return [_to_dict(d) for d in rows]
@@ -250,6 +251,8 @@ def _to_dict(d: Deal) -> dict:
         "payload": d.payload,
         "locked_by": d.locked_by,
         "retry_count": d.retry_count,
+        "priority": getattr(d, "priority", 0) or 0,
+        "error_message": d.error_message,
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
     }
@@ -446,3 +449,224 @@ def list_recent_events(limit: int = 200, hours: int = 72) -> list[dict]:
             })
         return out
 
+
+
+# ───────────────────────────────────────────────────────────────
+# Dashboard-Cockpit: Edit / Bulk / Priority / Filter / Cleanup
+# ───────────────────────────────────────────────────────────────
+
+# Felder, die per Dashboard direkt editierbar sind. Alles andere bleibt unverändert.
+_EDITABLE_TOP = {"title", "affiliate_url", "market"}
+# Felder, die in payload editierbar sind (häufig benötigte AI-Felder)
+_EDITABLE_PAYLOAD = {
+    "title", "product_name", "product_description", "caption", "cta",
+    "voiceover_text", "website", "website_text",
+    "image_url", "video_url",
+    "normal_price", "discounted_price", "discount_percent", "savings", "currency",
+    "produkt_kategorie", "template_type", "template_id",
+}
+
+
+def update_fields(deal_id: int, patch: dict) -> bool:
+    """Editiert einzelne Felder eines Deals (Top-Level und/oder payload.*).
+
+    patch kann z.B. so aussehen:
+        {"title": "neu", "payload": {"discounted_price": "9,99"}}
+    """
+    if not isinstance(patch, dict):
+        return False
+    with session_scope() as s:
+        d = s.get(Deal, deal_id)
+        if not d:
+            return False
+        changed: list[str] = []
+        for k, v in patch.items():
+            if k == "payload" and isinstance(v, dict):
+                new_payload = dict(d.payload or {})
+                for pk, pv in v.items():
+                    if pk in _EDITABLE_PAYLOAD:
+                        new_payload[pk] = pv
+                        changed.append(f"payload.{pk}")
+                d.payload = new_payload
+                # Spiegele Top-Level title aus payload, falls neu
+                if "title" in v and "title" not in patch and isinstance(v.get("title"), str):
+                    d.title = v["title"]
+            elif k in _EDITABLE_TOP:
+                setattr(d, k, v)
+                changed.append(k)
+        if changed:
+            d.updated_at = datetime.utcnow()
+            s.add(DealEvent(deal=d, event="edited", detail=", ".join(changed)[:300]))
+            return True
+        return False
+
+
+def set_priority(deal_id: int, priority: int) -> bool:
+    with session_scope() as s:
+        d = s.get(Deal, deal_id)
+        if not d:
+            return False
+        d.priority = int(priority)
+        d.updated_at = datetime.utcnow()
+        s.add(DealEvent(deal=d, event="priority_changed", detail=str(priority)))
+        return True
+
+
+def bulk_requeue(ids: Iterable[int], priority: int | None = None) -> int:
+    ids = list({int(i) for i in ids})
+    if not ids:
+        return 0
+    n = 0
+    with session_scope() as s:
+        for did in ids:
+            d = s.get(Deal, did)
+            if not d:
+                continue
+            d.status = DEAL_STATUS_QUEUE
+            d.locked_by = None
+            d.locked_at = None
+            d.error_message = None
+            if priority is not None:
+                d.priority = int(priority)
+            s.add(DealEvent(deal=d, event="requeued", detail=f"bulk(prio={priority})"))
+            n += 1
+    return n
+
+
+def bulk_delete(ids: Iterable[int]) -> int:
+    ids = list({int(i) for i in ids})
+    if not ids:
+        return 0
+    n = 0
+    with session_scope() as s:
+        for did in ids:
+            d = s.get(Deal, did)
+            if not d:
+                continue
+            s.delete(d)
+            n += 1
+    return n
+
+
+def bulk_set_status(ids: Iterable[int], status: str) -> int:
+    """Setzt Status hart (z.B. für 'als gesendet markieren'). Nutze mit Vorsicht."""
+    ids = list({int(i) for i in ids})
+    if status not in (DEAL_STATUS_QUEUE, DEAL_STATUS_PROCESSING,
+                      DEAL_STATUS_SENT, DEAL_STATUS_FAILED):
+        raise ValueError(f"unknown status: {status}")
+    n = 0
+    with session_scope() as s:
+        for did in ids:
+            d = s.get(Deal, did)
+            if not d:
+                continue
+            d.status = status
+            if status in (DEAL_STATUS_QUEUE, DEAL_STATUS_SENT):
+                d.locked_by = None
+                d.locked_at = None
+            s.add(DealEvent(deal=d, event="status_set", detail=f"dashboard→{status}"))
+            n += 1
+    return n
+
+
+def list_filtered(
+    status: str | None = None,
+    market: str | None = None,
+    q: str | None = None,
+    only_no_image: bool = False,
+    only_no_price: bool = False,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Flexible Deal-Suche fürs Dashboard.
+
+    q: Volltext-Substring-Suche auf product_id/title/affiliate_url
+    only_no_image: Deals, deren payload weder image_url noch images enthält
+    only_no_price: Deals ohne discounted_price/normal_price oder mit "N/A"
+    min/max_price: filtert auf discounted_price (parser-best-effort)
+    """
+    from sqlalchemy import or_
+    with session_scope() as s:
+        stmt = select(Deal)
+        if status:
+            stmt = stmt.where(Deal.status == status)
+        if market:
+            stmt = stmt.where(Deal.market == market.upper())
+        if q:
+            like = f"%{q.strip().lower()}%"
+            stmt = stmt.where(or_(
+                func.lower(Deal.product_id).like(like),
+                func.lower(Deal.title).like(like),
+                func.lower(Deal.affiliate_url).like(like),
+            ))
+        stmt = stmt.order_by(Deal.priority.desc(), Deal.created_at.desc()).limit(max(1, min(limit, 1000)))
+        rows = s.execute(stmt).scalars().all()
+
+        out: list[dict] = []
+        for d in rows:
+            payload = d.payload or {}
+            if only_no_image:
+                has = bool(payload.get("image_url") or payload.get("images"))
+                if has:
+                    continue
+            price_raw = (payload.get("discounted_price")
+                         or payload.get("normal_price") or "")
+            price_val = _try_parse_price(price_raw)
+            if only_no_price and (not price_raw or str(price_raw).strip().upper() == "N/A"
+                                  or price_val is None):
+                pass  # Match
+            elif only_no_price:
+                continue
+            if min_price is not None and (price_val is None or price_val < min_price):
+                continue
+            if max_price is not None and (price_val is None or price_val > max_price):
+                continue
+            out.append(_to_dict(d))
+        return out
+
+
+def _try_parse_price(raw) -> float | None:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.upper() == "N/A":
+        return None
+    # 1.299,99 → 1299.99 ; 9,99 → 9.99 ; 9.99 → 9.99
+    s = s.replace("€", "").replace("EUR", "").strip()
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float("".join(c for c in s if c.isdigit() or c == "."))
+    except Exception:
+        return None
+
+
+def cleanup(
+    status: str,
+    older_than_days: int,
+    dry_run: bool = False,
+) -> dict:
+    """Löscht Deals eines Status, deren updated_at älter ist als N Tage."""
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(days=max(0, older_than_days))
+    n = 0
+    ids: list[int] = []
+    with session_scope() as s:
+        rows = s.execute(
+            select(Deal).where(Deal.status == status).where(Deal.updated_at < cutoff)
+        ).scalars().all()
+        for d in rows:
+            ids.append(d.id)
+            if not dry_run:
+                s.delete(d)
+            n += 1
+    return {"deleted": 0 if dry_run else n, "candidates": n, "ids": ids[:50], "dry_run": dry_run}
+
+
+def markets() -> list[str]:
+    with session_scope() as s:
+        rows = s.execute(select(Deal.market).distinct()).all()
+        return sorted({(r[0] or "UNKNOWN") for r in rows})

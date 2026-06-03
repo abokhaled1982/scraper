@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import os 
 import re 
-import sys
 
 # ----------------------------- ALLGEMEINE HILFSFUNKTIONEN (DATEI/REGISTRY) --------------------------------------
 

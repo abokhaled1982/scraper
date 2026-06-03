@@ -35,9 +35,38 @@ SessionLocal = sessionmaker(bind=ENGINE, expire_on_commit=False, future=True)
 
 
 def init_db() -> None:
-    """Erzeugt alle Tabellen, falls noch nicht vorhanden."""
+    """Erzeugt alle Tabellen, falls noch nicht vorhanden, und führt
+    leichte Inplace-Migrations für SQLite (neue Spalten) aus."""
     from .models import Base  # late import um zirkuläre Imports zu vermeiden
     Base.metadata.create_all(ENGINE)
+    _ensure_columns_sqlite()
+
+
+def _ensure_columns_sqlite() -> None:
+    """SQLite kann mit ALTER TABLE ADD COLUMN; create_all() ergänzt keine
+    fehlenden Spalten an existierenden Tabellen. Hier idempotent nachziehen."""
+    if not DB_URL.startswith("sqlite"):
+        return
+    # Liste der erwarteten Zusatz-Spalten (Tabelle → [(name, DDL)])
+    expected: dict[str, list[tuple[str, str]]] = {
+        "deals": [
+            ("priority", "INTEGER NOT NULL DEFAULT 0"),
+        ],
+    }
+    with ENGINE.begin() as conn:
+        from sqlalchemy import text
+        for table, cols in expected.items():
+            try:
+                rows = conn.execute(text(f"PRAGMA table_info({table})")).all()
+            except Exception:
+                continue
+            have = {r[1] for r in rows}
+            for name, ddl in cols:
+                if name not in have:
+                    try:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                    except Exception:
+                        pass
 
 
 @contextmanager

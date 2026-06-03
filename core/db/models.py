@@ -55,6 +55,10 @@ class Deal(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Priorität (höher = wird zuerst aus der Queue gezogen). Standard 0.
+    # Manuelle Sofort-Resends aus dem Dashboard setzen z.B. 1000.
+    priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -128,3 +132,32 @@ class Worker(Base):
 
     # Frei nutzbare Stats (z.B. {"processed": 42, "failed": 3})
     stats: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+# ───────────────────────────────────────────────────────────────
+# RuntimeConfig — vom Dashboard live editierbare Settings
+# (Channel-Toggles, Rate-Limits, Worker-Pause, Filter-Schwellen …)
+# Key-Konventionen (Punkt-Namespaces):
+#   facebook.enabled        bool
+#   facebook.post_reels     bool
+#   facebook.dry_run        bool
+#   facebook.min_wait_secs  int
+#   facebook.max_wait_secs  int
+#   facebook.skip_wait_count int   (>0 = nächste N Posts ohne Timer)
+#   telegram.enabled        bool
+#   instagram.enabled       bool
+#   ai.enabled              bool
+#   worker.<name>.paused    bool
+#   filter.min_discount_pct float
+# ───────────────────────────────────────────────────────────────
+class RuntimeConfig(Base):
+    __tablename__ = "runtime_config"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(
+        JSON, default=None
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

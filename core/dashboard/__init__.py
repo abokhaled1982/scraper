@@ -18,12 +18,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 import uvicorn
 
 from core.config import DASHBOARD_HOST, DASHBOARD_PORT, LOG_DIR
-from core.db import workers_repo, deals_repo, state_repo, init_db
+from core.db import workers_repo, deals_repo, state_repo, config_repo, init_db
 
 app = FastAPI(title="Scraper Dashboard")
 
@@ -47,11 +47,94 @@ def api_status() -> dict[str, Any]:
 
 # ──────────────────────────────────────────────────────────────
 # Deals
+# WICHTIG: Statische Pfade (search/markets/bulk/cleanup/submit_url) MÜSSEN
+# vor den dynamischen ({deal_id}) Routen registriert werden – sonst frisst
+# die int-Validierung von {deal_id} die Strings.
 # ──────────────────────────────────────────────────────────────
 
 @app.get("/api/deals")
 def api_deals(status: str = Query("queue"), limit: int = 200) -> list[dict]:
     return deals_repo.list_by_status(status, limit=limit)
+
+
+@app.get("/api/deals/search")
+def api_deals_search(
+    status: str | None = Query(None),
+    market: str | None = Query(None),
+    q: str | None = Query(None),
+    only_no_image: bool = Query(False),
+    only_no_price: bool = Query(False),
+    min_price: float | None = Query(None),
+    max_price: float | None = Query(None),
+    limit: int = Query(200),
+) -> list[dict]:
+    return deals_repo.list_filtered(
+        status=status, market=market, q=q,
+        only_no_image=only_no_image, only_no_price=only_no_price,
+        min_price=min_price, max_price=max_price, limit=limit,
+    )
+
+
+@app.get("/api/deals/markets")
+def api_deals_markets() -> list[str]:
+    return deals_repo.markets()
+
+
+@app.post("/api/deals/bulk")
+def api_deals_bulk(body: dict = Body(...)) -> dict:
+    """Bulk-Aktionen.
+
+    body = {"ids": [1,2,3], "action": "requeue"|"delete"|"mark_sent"|"set_priority", "priority": 100}
+    """
+    ids = body.get("ids") or []
+    action = (body.get("action") or "").lower()
+    if not ids or not isinstance(ids, list):
+        raise HTTPException(400, "ids required")
+    if action == "requeue":
+        n = deals_repo.bulk_requeue(ids, priority=body.get("priority"))
+    elif action == "delete":
+        n = deals_repo.bulk_delete(ids)
+    elif action == "mark_sent":
+        n = deals_repo.bulk_set_status(ids, "sent")
+    elif action == "mark_failed":
+        n = deals_repo.bulk_set_status(ids, "failed")
+    elif action == "set_priority":
+        prio = int(body.get("priority", 0))
+        n = sum(1 for i in ids if deals_repo.set_priority(int(i), prio))
+    else:
+        raise HTTPException(400, f"unknown action: {action}")
+    return {"ok": True, "affected": n, "action": action}
+
+
+@app.post("/api/deals/cleanup")
+def api_deals_cleanup(body: dict = Body(...)) -> dict:
+    """Löscht Deals eines Status, deren updated_at älter als N Tage ist."""
+    status = body.get("status") or "failed"
+    days = int(body.get("days", 30))
+    dry = bool(body.get("dry_run", False))
+    return deals_repo.cleanup(status=status, older_than_days=days, dry_run=dry)
+
+
+@app.post("/api/deals/submit_url")
+def api_deals_submit_url(body: dict = Body(...)) -> dict:
+    """Manueller URL-Wurf in product_list (wie wenn der Observer einen Link
+    sehen würde). product_opener pickt sie auf."""
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "invalid url")
+    try:
+        current = state_repo.get("product_list", []) or []
+        if isinstance(current, dict):
+            current = list(current.values())
+        if not isinstance(current, list):
+            current = []
+        if url not in current:
+            current.append(url)
+            state_repo.put("product_list", current)
+            return {"ok": True, "added": True, "size": len(current)}
+        return {"ok": True, "added": False, "size": len(current)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/api/deals/{deal_id}")
@@ -80,10 +163,49 @@ def api_deal_requeue(deal_id: int) -> dict:
     return {"ok": True}
 
 
-@app.get("/api/timeline")
-def api_timeline(limit: int = 300, hours: int = 72) -> list[dict]:
-    """Chronologischer Verlauf aller Pipeline-Events (link-erfasst → ai → sent / failed)."""
-    return deals_repo.list_recent_events(limit=limit, hours=hours)
+@app.patch("/api/deals/{deal_id}")
+def api_deal_patch(deal_id: int, patch: dict = Body(...)) -> dict:
+    ok = deals_repo.update_fields(deal_id, patch or {})
+    if not ok:
+        raise HTTPException(404, "deal not found or no editable fields in patch")
+    return {"ok": True}
+
+
+@app.post("/api/deals/{deal_id}/priority")
+def api_deal_priority(deal_id: int, body: dict = Body(...)) -> dict:
+    prio = int(body.get("priority", 0))
+    if not deals_repo.set_priority(deal_id, prio):
+        raise HTTPException(404, "deal not found")
+    return {"ok": True, "priority": prio}
+
+
+@app.post("/api/deals/{deal_id}/resend")
+def api_deal_resend(deal_id: int, body: dict = Body(default={})) -> dict:
+    """Manuelles erneutes Posten:
+        - setzt Deal zurück in queue mit hoher Priorität (1000)
+        - 'instant=True' konsumiert zusätzlich ein skip-wait-Token, damit
+          fb_watcher die Pause überspringt
+    """
+    d = deals_repo.get(deal_id)
+    if not d:
+        raise HTTPException(404, "deal not found")
+    # Entfernt aus sent_ids:facebook, sonst springt der fb_watcher nicht an
+    try:
+        sent = state_repo.get_set("sent_ids:facebook")
+        if d.get("product_id") in sent:
+            sent.discard(d["product_id"])
+            state_repo.put("sent_ids:facebook", sorted(sent))
+    except Exception:
+        pass
+    deals_repo.requeue(deal_id)
+    deals_repo.set_priority(deal_id, 1000)
+    instant = bool(body.get("instant", True))
+    if instant:
+        # FB-Timer beim nächsten Schritt überspringen
+        cur = int(config_repo.get("facebook.skip_wait_count", 0) or 0)
+        config_repo.set("facebook.skip_wait_count", cur + 1,
+                        description="Anzahl ausstehender Pause-Überspringer")
+    return {"ok": True, "instant": instant, "priority": 1000}
 
 
 @app.delete("/api/deals/{deal_id}")
@@ -92,6 +214,35 @@ def api_deal_delete(deal_id: int) -> dict:
     if not ok:
         raise HTTPException(404, "deal not found")
     return {"ok": True}
+
+
+@app.get("/api/timeline")
+def api_timeline(limit: int = 300, hours: int = 72) -> list[dict]:
+    """Chronologischer Verlauf aller Pipeline-Events (link-erfasst → ai → sent / failed)."""
+    return deals_repo.list_recent_events(limit=limit, hours=hours)
+
+
+# ──────────────────────────────────────────────────────────────
+# Runtime-Config (Settings-Tab)
+# ──────────────────────────────────────────────────────────────
+
+@app.get("/api/config")
+def api_config_list() -> list[dict]:
+    return config_repo.list_all()
+
+
+@app.put("/api/config/{key:path}")
+def api_config_set(key: str, body: dict = Body(...)) -> dict:
+    if "value" not in body:
+        raise HTTPException(400, "body must contain 'value'")
+    config_repo.set(key, body["value"], description=body.get("description"))
+    return {"ok": True, "key": key, "value": body["value"]}
+
+
+@app.delete("/api/config/{key:path}")
+def api_config_delete(key: str) -> dict:
+    config_repo.delete(key)
+    return {"ok": True, "key": key}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -124,6 +275,67 @@ def api_worker_stop(name: str) -> dict:
 @app.post("/api/workers/{name}/kill")
 def api_worker_kill(name: str) -> dict:
     return _signal_worker(name, signal.SIGKILL)
+
+
+@app.post("/api/workers/{name}/pause")
+def api_worker_pause(name: str) -> dict:
+    config_repo.set(f"worker.{name}.paused", True,
+                    description=f"Pause-Flag für {name} (dashboard)")
+    return {"ok": True, "paused": True}
+
+
+@app.post("/api/workers/{name}/resume")
+def api_worker_resume(name: str) -> dict:
+    config_repo.set(f"worker.{name}.paused", False,
+                    description=f"Pause-Flag für {name} (dashboard)")
+    return {"ok": True, "paused": False}
+
+
+# ──────────────────────────────────────────────────────────────
+# WebSocket Live-Logs (Phase 3)
+# ──────────────────────────────────────────────────────────────
+
+@app.websocket("/ws/logs/{worker}")
+async def ws_logs(websocket: WebSocket, worker: str):
+    """Streamt die Log-Datei eines Workers Live (tail -f Stil)."""
+    import asyncio
+    await websocket.accept()
+    safe = "".join(c for c in worker if c.isalnum() or c in ("_", "-"))
+    path = Path(LOG_DIR) / date.today().isoformat() / f"{safe}.log"
+    try:
+        # warte ggf. bis Datei existiert
+        for _ in range(20):
+            if path.exists():
+                break
+            await asyncio.sleep(0.5)
+        if not path.exists():
+            await websocket.send_text(f"# kein Log unter {path}")
+            await websocket.close()
+            return
+        # initial: letzte 100 Zeilen
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                tail = f.readlines()[-100:]
+            await websocket.send_text("".join(tail))
+        except Exception:
+            pass
+        # tail
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            f.seek(0, 2)  # ans Ende
+            while True:
+                line = f.readline()
+                if not line:
+                    await asyncio.sleep(0.4)
+                    continue
+                await websocket.send_text(line)
+    except WebSocketDisconnect:
+        return
+    except Exception as e:
+        try:
+            await websocket.send_text(f"# stream error: {e}")
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ──────────────────────────────────────────────────────────────
@@ -325,6 +537,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
     <button data-tab="workers">Workers</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="state">State</button>
+    <button data-tab="settings">⚙ Settings</button>
   </nav>
 </header>
 <main>
@@ -334,6 +547,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
   <section id="tab-workers" hidden></section>
   <section id="tab-logs" hidden></section>
   <section id="tab-state" hidden></section>
+  <section id="tab-settings" hidden></section>
 </main>
 <div id="modalRoot"></div>
 <script>
@@ -470,38 +684,216 @@ async function renderTimeline() {
   $("#tlFilter").oninput = e => { timelineFilter = e.target.value; renderTimeline(); };
 }
 
-// ── Deals ─────────────────────────────────────────────────
+// ── Deals (Cockpit: Filter + Bulk + Resend + Edit) ────────
 let dealsStatus = "queue";
+let dealsFilter = { q: "", market: "", only_no_image: false, only_no_price: false,
+                    min_price: "", max_price: "" };
+let dealsSelected = new Set();
 async function renderDeals() {
     const sec = $("#tab-deals");
     const counts = (await api("/api/status")).deals;
     const tabs = ["queue","processing","sent","failed"].map(s =>
-        `<button class="act ${s===dealsStatus?'':''}"
+        `<button class="act"
                  style="${s===dealsStatus?'background:#0369a1':''}"
-                 onclick="dealsStatus='${s}';renderDeals()">${s} (${counts[s]??0})</button>`
+                 onclick="dealsStatus='${s}';dealsSelected.clear();renderDeals()">${s} (${counts[s]??0})</button>`
     ).join("");
-    const deals = await api(`/api/deals?status=${dealsStatus}&limit=200`);
-    const rows = deals.length ? deals.map(d => `
+
+    let markets = [];
+    try { markets = await api("/api/deals/markets"); } catch(e) {}
+
+    const params = new URLSearchParams({ status: dealsStatus, limit: 300 });
+    if (dealsFilter.q) params.set("q", dealsFilter.q);
+    if (dealsFilter.market) params.set("market", dealsFilter.market);
+    if (dealsFilter.only_no_image) params.set("only_no_image", "true");
+    if (dealsFilter.only_no_price) params.set("only_no_price", "true");
+    if (dealsFilter.min_price) params.set("min_price", dealsFilter.min_price);
+    if (dealsFilter.max_price) params.set("max_price", dealsFilter.max_price);
+    const deals = await api(`/api/deals/search?${params}`);
+
+    const rows = deals.length ? deals.map(d => {
+      const checked = dealsSelected.has(d.id) ? "checked" : "";
+      const prio = d.priority || 0;
+      const prioColor = prio > 100 ? "color:#facc15;font-weight:600" : "color:#64748b";
+      return `
         <tr>
+          <td><input type="checkbox" ${checked}
+                     onchange="toggleSelect(${d.id}, this.checked)"></td>
           <td>${d.id}</td>
           <td><span class="tag">${esc(d.product_id)}</span></td>
           <td>${esc(d.market)}</td>
           <td>${esc((d.title||"").slice(0,80))}</td>
+          <td style="${prioColor}">${prio}</td>
           <td>${esc(d.retry_count||0)}</td>
           <td><small>${esc(d.created_at||"")}</small></td>
           <td class="row-actions">
-            <button class="act" onclick="showDealDetail(${d.id})">🔍 Details</button>
-            <button class="act" onclick="requeueDeal(${d.id})">↻ Requeue</button>
-            <button class="act danger" onclick="deleteDeal(${d.id})">🗑 Delete</button>
+            <button class="act" onclick="showDealDetail(${d.id})">🔍</button>
+            <button class="act" onclick="resendDeal(${d.id})" title="Sofort erneut posten">🚀</button>
+            <button class="act" onclick="editDeal(${d.id})" title="Bearbeiten">✏️</button>
+            <button class="act" onclick="setPrio(${d.id})" title="Priorität">⭐</button>
+            <button class="act" onclick="requeueDeal(${d.id})">↻</button>
+            <button class="act danger" onclick="deleteDeal(${d.id})">🗑</button>
           </td>
-        </tr>`).join("")
-        : `<tr><td colspan="7"><small>keine Einträge</small></td></tr>`;
+        </tr>`;
+    }).join("")
+    : `<tr><td colspan="9"><small>keine Einträge</small></td></tr>`;
+
+    const selCount = dealsSelected.size;
+    const marketOpts = `<option value="">(alle Märkte)</option>` +
+      markets.map(m => `<option ${m===dealsFilter.market?"selected":""}>${esc(m)}</option>`).join("");
+
     sec.innerHTML = `
         <div class="toolbar">${tabs}</div>
+        <div class="toolbar" style="flex-wrap:wrap;">
+          <input id="dF_q" placeholder="Suche (ID/Titel/URL)…" value="${esc(dealsFilter.q)}" style="min-width:240px;">
+          <select id="dF_market">${marketOpts}</select>
+          <label><input type="checkbox" id="dF_noimg" ${dealsFilter.only_no_image?"checked":""}> nur ohne Bild</label>
+          <label><input type="checkbox" id="dF_nopx" ${dealsFilter.only_no_price?"checked":""}> nur ohne Preis</label>
+          <input id="dF_min" type="number" step="0.01" placeholder="min €" value="${esc(dealsFilter.min_price)}" style="width:90px;">
+          <input id="dF_max" type="number" step="0.01" placeholder="max €" value="${esc(dealsFilter.max_price)}" style="width:90px;">
+          <button class="act" onclick="applyDealFilter()">🔎 Filter</button>
+          <button class="act" onclick="resetDealFilter()">✖ Reset</button>
+        </div>
+        <div class="toolbar" style="background:#0b1220;padding:8px 12px;border-radius:8px;">
+          <strong>${selCount}</strong> ausgewählt
+          <button class="act" onclick="selectAllDeals()">☑ Alle</button>
+          <button class="act" onclick="dealsSelected.clear();renderDeals()">☐ Keine</button>
+          <span style="border-left:1px solid #334155;height:18px;margin:0 6px;"></span>
+          <button class="act" onclick="bulkAct('requeue')" ${selCount?'':'disabled'}>↻ Requeue</button>
+          <button class="act" onclick="bulkAct('mark_sent')" ${selCount?'':'disabled'}>✅ Mark sent</button>
+          <button class="act" onclick="bulkSetPrio()" ${selCount?'':'disabled'}>⭐ Priorität</button>
+          <button class="act danger" onclick="bulkAct('delete')" ${selCount?'':'disabled'}>🗑 Löschen</button>
+          <span style="border-left:1px solid #334155;height:18px;margin:0 6px;"></span>
+          <button class="act" onclick="cleanupOld()" title="Cleanup">🧹 Alte ${esc(dealsStatus)} löschen…</button>
+        </div>
         <table><thead><tr>
-            <th>ID</th><th>Product</th><th>Market</th><th>Title</th>
-            <th>Retry</th><th>Created</th><th></th>
+            <th></th><th>ID</th><th>Product</th><th>Market</th><th>Title</th>
+            <th>Prio</th><th>Retry</th><th>Created</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>`;
+
+    $("#dF_q").onchange = e => dealsFilter.q = e.target.value;
+    $("#dF_market").onchange = e => { dealsFilter.market = e.target.value; applyDealFilter(); };
+    $("#dF_noimg").onchange = e => { dealsFilter.only_no_image = e.target.checked; applyDealFilter(); };
+    $("#dF_nopx").onchange = e => { dealsFilter.only_no_price = e.target.checked; applyDealFilter(); };
+    $("#dF_min").onchange = e => dealsFilter.min_price = e.target.value;
+    $("#dF_max").onchange = e => dealsFilter.max_price = e.target.value;
+}
+function applyDealFilter() { renderDeals(); }
+function resetDealFilter() {
+    dealsFilter = { q:"", market:"", only_no_image:false, only_no_price:false, min_price:"", max_price:"" };
+    renderDeals();
+}
+function toggleSelect(id, checked) {
+    if (checked) dealsSelected.add(id); else dealsSelected.delete(id);
+    // Nur Header-Zeile updaten — voll re-render macht Liste flackern
+    renderDeals();
+}
+function selectAllDeals() {
+    document.querySelectorAll("#tab-deals tbody tr").forEach(r => {
+        const cb = r.querySelector("input[type=checkbox]");
+        if (!cb) return;
+        const m = r.querySelector("td:nth-child(2)");
+        if (m) dealsSelected.add(parseInt(m.textContent, 10));
+    });
+    renderDeals();
+}
+async function bulkAct(action) {
+    if (!dealsSelected.size) return;
+    if (action === "delete" && !confirm(`${dealsSelected.size} Deals löschen?`)) return;
+    const r = await api("/api/deals/bulk", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ ids: [...dealsSelected], action })
+    });
+    alert(`${action}: ${r.affected} deals`);
+    dealsSelected.clear();
+    renderDeals();
+}
+async function bulkSetPrio() {
+    const v = prompt("Priorität setzen (höher = zuerst):", "100");
+    if (v === null) return;
+    const r = await api("/api/deals/bulk", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ ids:[...dealsSelected], action:"set_priority", priority: parseInt(v,10) })
+    });
+    alert(`set_priority: ${r.affected} deals`);
+    renderDeals();
+}
+async function setPrio(id) {
+    const v = prompt("Priorität (höher = zuerst):", "100");
+    if (v === null) return;
+    await api(`/api/deals/${id}/priority`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ priority: parseInt(v,10) })
+    });
+    renderDeals();
+}
+async function cleanupOld() {
+    const d = prompt(`Lösche alle '${dealsStatus}' älter als wie viele Tage?`, "30");
+    if (d === null) return;
+    const days = parseInt(d, 10);
+    // dry-run first
+    const dry = await api("/api/deals/cleanup", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ status: dealsStatus, days, dry_run:true })
+    });
+    if (!confirm(`${dry.candidates} Deals würden gelöscht. Fortfahren?`)) return;
+    const res = await api("/api/deals/cleanup", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ status: dealsStatus, days, dry_run:false })
+    });
+    alert(`Gelöscht: ${res.deleted}`);
+    renderDeals();
+}
+async function resendDeal(id) {
+    if (!confirm("Diesen Deal jetzt sofort erneut posten (Timer wird übersprungen)?")) return;
+    const r = await api(`/api/deals/${id}/resend`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ instant:true })
+    });
+    alert(`Resend gequeued (Prio ${r.priority}). Skip-Wait aktiv: ${r.instant}`);
+    renderDeals();
+}
+async function editDeal(id) {
+    const d = await api(`/api/deals/${id}`);
+    const p = d.payload || {};
+    const fields = ["title","discounted_price","normal_price","discount_percent",
+                    "image_url","video_url","affiliate_url","caption","cta"];
+    const form = fields.map(f => {
+        const v = (f === "title" || f === "affiliate_url") ? (d[f] ?? "") : (p[f] ?? "");
+        return `<div class="kv"><div class="k">${esc(f)}</div>
+                <div class="v"><input id="edit_${f}" value="${esc(v)}" style="width:100%;background:#0b1220;color:#e2e8f0;border:1px solid #334155;padding:6px;border-radius:5px;"></div></div>`;
+    }).join("");
+    $("#modalRoot").innerHTML = `
+      <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+        <div class="modal">
+          <button class="close" onclick="closeModal()">✕</button>
+          <h2>Deal #${id} bearbeiten</h2>
+          <h3>Felder</h3>
+          ${form}
+          <div style="margin-top:14px;">
+            <button class="act" onclick="saveEdit(${id})">💾 Speichern</button>
+            <button class="act" onclick="closeModal()">Abbrechen</button>
+          </div>
+        </div>
+      </div>`;
+}
+async function saveEdit(id) {
+    const fields = ["title","discounted_price","normal_price","discount_percent",
+                    "image_url","video_url","affiliate_url","caption","cta"];
+    const top = {}; const payload = {};
+    for (const f of fields) {
+        const el = document.getElementById(`edit_${f}`);
+        if (!el) continue;
+        const v = el.value;
+        if (f === "title" || f === "affiliate_url") top[f] = v;
+        else payload[f] = v;
+    }
+    top.payload = payload;
+    await api(`/api/deals/${id}`, {
+        method:"PATCH", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify(top)
+    });
+    closeModal();
+    renderDeals();
 }
 async function requeueDeal(id) {
     await api(`/api/deals/${id}/requeue`, { method: "POST" });
@@ -617,26 +1009,51 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal()
 // ── Workers ───────────────────────────────────────────────
 async function renderWorkers() {
     const data = await api("/api/status");
-    const rows = data.workers.map(w => `
+    let cfg = [];
+    try { cfg = await api("/api/config"); } catch(e) {}
+    const pausedMap = {};
+    cfg.filter(c => c.key.startsWith("worker.") && c.key.endsWith(".paused"))
+       .forEach(c => { pausedMap[c.key.split(".")[1]] = !!c.value; });
+
+    const rows = data.workers.map(w => {
+        const paused = pausedMap[w.name];
+        return `
         <tr>
           <td>${esc(w.name)}</td>
-          <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span></td>
+          <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span>
+              ${paused?'<span class="badge" style="background:#451a03;color:#fdba74;">⏸ pause</span>':''}</td>
           <td>${esc(w.current_task || "")}</td>
           <td>${esc(w.pid || "")}</td>
           <td><small>${esc(w.started_at || "")}</small></td>
           <td><small>${esc(w.last_heartbeat || "")}</small></td>
           <td class="row-actions">
+            ${paused
+              ? `<button class="act" onclick="workerCfg('${esc(w.name)}','resume')">▶ Resume</button>`
+              : `<button class="act" onclick="workerCfg('${esc(w.name)}','pause')">⏸ Pause</button>`}
             <button class="act" onclick="signalWorker('${esc(w.name)}','stop')">⏻ Stop</button>
             <button class="act danger" onclick="signalWorker('${esc(w.name)}','kill')">⚡ Kill</button>
           </td>
-        </tr>`).join("");
+        </tr>`;
+    }).join("");
     $("#tab-workers").innerHTML = `
-        <p><small>Stop sendet SIGTERM (sauber), Kill sendet SIGKILL.
-        Restart muss über <code>run_all.py</code> erfolgen.</small></p>
+        <p><small>Pause/Resume setzt ein Flag in der DB — der Worker pollt es.
+        Stop = SIGTERM, Kill = SIGKILL. Restart braucht <code>run_all.py</code>.</small></p>
         <table><thead><tr>
             <th>Name</th><th>Status</th><th>Aufgabe</th><th>PID</th>
             <th>Started</th><th>Heartbeat</th><th></th>
-        </tr></thead><tbody>${rows}</tbody></table>`;
+        </tr></thead><tbody>${rows}</tbody></table>
+
+        <h3 style="font-size:13px;color:#94a3b8;margin:18px 0 6px;text-transform:uppercase;letter-spacing:.5px;">
+            URL manuell einreichen</h3>
+        <div class="toolbar">
+          <input id="subUrl" placeholder="https://www.amazon.de/dp/B0..." style="min-width:480px;">
+          <button class="act" onclick="submitUrl()">📨 In product_list einreihen</button>
+        </div>
+        <small>Wird vom <code>product_opener</code> aufgegriffen wie ein Telegram-Observer-Link.</small>`;
+}
+async function workerCfg(name, action) {
+    await api(`/api/workers/${name}/${action}`, { method:"POST" });
+    renderWorkers();
 }
 async function signalWorker(name, action) {
     if (!confirm(`${action.toUpperCase()} → ${name}?`)) return;
@@ -645,10 +1062,24 @@ async function signalWorker(name, action) {
     } catch (e) { alert(e.message); }
     renderWorkers();
 }
+async function submitUrl() {
+    const u = $("#subUrl").value.trim();
+    if (!u) return;
+    try {
+        const r = await api("/api/deals/submit_url", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ url: u })
+        });
+        alert(r.added ? `✅ hinzugefügt (Größe ${r.size})` : `(bereits in product_list)`);
+        $("#subUrl").value = "";
+    } catch(e) { alert(e.message); }
+}
 
-// ── Logs ──────────────────────────────────────────────────
+// ── Logs (mit optionalem Live-Stream über WebSocket) ──────
 let logWorker = null;
 let logGrep = "";
+let logWS = null;
+let logLive = false;
 async function renderLogs() {
     const idx = await api("/api/logs");
     const days = Object.keys(idx);
@@ -659,12 +1090,12 @@ async function renderLogs() {
         `<option ${w===logWorker?'selected':''}>${esc(w)}</option>`
     ).join("");
     let body = "";
-    if (logWorker) {
+    // Beim Tab-Wechsel ggf. WS schließen
+    closeLogWS();
+    if (logWorker && !logLive) {
         const q = new URLSearchParams({ lines: 300 });
         if (logGrep) q.set("grep", logGrep);
         body = await api(`/api/logs/${logWorker}?${q}`);
-    } else {
-        body = "# keine Logs vorhanden";
     }
     $("#tab-logs").innerHTML = `
         <div class="toolbar">
@@ -672,10 +1103,33 @@ async function renderLogs() {
           <select id="logSel">${opts}</select>
           <input id="logGrep" placeholder="filter…" value="${esc(logGrep)}">
           <button class="act" onclick="renderLogs()">↻ Refresh</button>
+          <label style="margin-left:10px;">
+            <input type="checkbox" id="logLive" ${logLive?"checked":""}> 🔴 Live-Stream
+          </label>
         </div>
-        <pre class="log">${esc(body)}</pre>`;
+        <pre class="log" id="logBody">${esc(body || (logLive ? "Verbinde…" : "# kein Worker ausgewählt"))}</pre>`;
     $("#logSel").onchange = e => { logWorker = e.target.value; renderLogs(); };
     $("#logGrep").onchange = e => { logGrep = e.target.value; renderLogs(); };
+    $("#logLive").onchange = e => { logLive = e.target.checked; renderLogs(); };
+    if (logLive && logWorker) openLogWS(logWorker);
+}
+function closeLogWS() {
+    if (logWS) { try { logWS.close(); } catch(e){} logWS = null; }
+}
+function openLogWS(worker) {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    logWS = new WebSocket(`${proto}//${location.host}/ws/logs/${worker}`);
+    const body = () => document.getElementById("logBody");
+    logWS.onmessage = ev => {
+        const el = body(); if (!el) return;
+        if (logGrep && !ev.data.toLowerCase().includes(logGrep.toLowerCase())) return;
+        el.textContent += ev.data;
+        // max ca. 4000 Zeichen autoscroll
+        if (el.textContent.length > 200000) el.textContent = el.textContent.slice(-150000);
+        el.scrollTop = el.scrollHeight;
+    };
+    logWS.onclose = () => { /* still */ };
+    logWS.onerror = () => { /* still */ };
 }
 
 // ── State ─────────────────────────────────────────────────
@@ -735,7 +1189,92 @@ async function deleteState(k) {
     renderState();
 }
 
-// ── Dispatcher / Auto-Refresh ─────────────────────────────
+// ── Settings (Runtime-Config: Channel-Toggles, Limits, …) ─
+async function renderSettings() {
+    const items = await api("/api/config");
+    // Gruppiere nach Namespace (vor erstem Punkt)
+    const groups = {};
+    items.forEach(it => {
+        const ns = (it.key.split(".")[0] || "misc");
+        (groups[ns] = groups[ns] || []).push(it);
+    });
+    const order = ["facebook","telegram","instagram","ai","filter","worker"];
+    const known = new Set(order);
+    const ns_list = [...order.filter(n => groups[n]), ...Object.keys(groups).filter(n => !known.has(n))];
+
+    const html = ns_list.map(ns => {
+        const rows = groups[ns].map(it => {
+            const v = it.value;
+            const isBool = typeof v === "boolean" || (it.key.endsWith(".enabled") || it.key.endsWith(".paused") || it.key.endsWith(".dry_run"));
+            const isNum  = typeof v === "number";
+            let ctrl;
+            if (isBool) {
+                const checked = v ? "checked" : "";
+                ctrl = `<label class="switch"><input type="checkbox" ${checked}
+                          onchange="saveCfg('${esc(it.key)}', this.checked)"> ${v?"ON":"OFF"}</label>`;
+            } else if (isNum) {
+                ctrl = `<input type="number" value="${esc(v)}" style="width:120px;"
+                          onchange="saveCfg('${esc(it.key)}', parseFloat(this.value))">`;
+            } else {
+                ctrl = `<input value="${esc(JSON.stringify(v))}" style="min-width:280px;"
+                          onchange="saveCfgRaw('${esc(it.key)}', this.value)">`;
+            }
+            return `
+              <tr>
+                <td><span class="tag">${esc(it.key)}</span><br>
+                    <small>${esc(it.description || "")}</small></td>
+                <td>${ctrl}</td>
+                <td><small>${it.source === "default" ? "default" : "db · " + esc(it.updated_at||"")}</small></td>
+                <td><button class="act danger" onclick="cfgReset('${esc(it.key)}')">↺ reset</button></td>
+              </tr>`;
+        }).join("");
+        const nsTitle = ({
+            facebook: "📘 Facebook", telegram: "✈️ Telegram", instagram: "📷 Instagram",
+            ai: "🤖 KI / Extractor", filter: "🔧 Filter", worker: "👷 Worker-Steuerung",
+        })[ns] || `📦 ${ns}`;
+        return `
+          <h3 style="margin:20px 0 6px;font-size:13px;color:#7dd3fc;
+                     text-transform:uppercase;letter-spacing:.5px;">${nsTitle}</h3>
+          <table><thead><tr>
+            <th>Key</th><th>Wert</th><th>Quelle</th><th></th>
+          </tr></thead><tbody>${rows}</tbody></table>`;
+    }).join("");
+
+    $("#tab-settings").innerHTML = `
+        <p><small>Änderungen wirken <b>sofort</b> auf laufende Worker (Cache &lt; 5 s).
+        ↺ reset löscht den DB-Wert → Default greift wieder.</small></p>
+        <div class="toolbar">
+          <button class="act" onclick="newCfgKey()">+ neuer Key</button>
+          <button class="act" onclick="renderSettings()">↻ Refresh</button>
+        </div>
+        ${html}`;
+}
+async function saveCfg(key, value) {
+    await api(`/api/config/${encodeURIComponent(key)}`, {
+        method: "PUT", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ value })
+    });
+    renderSettings();
+}
+async function saveCfgRaw(key, raw) {
+    let v;
+    try { v = JSON.parse(raw); }
+    catch { v = raw; }
+    await saveCfg(key, v);
+}
+async function cfgReset(key) {
+    if (!confirm(`Reset ${key} auf Default?`)) return;
+    await api(`/api/config/${encodeURIComponent(key)}`, { method:"DELETE" });
+    renderSettings();
+}
+async function newCfgKey() {
+    const k = prompt("Key (z.B. facebook.min_wait_secs):");
+    if (!k) return;
+    const v = prompt(`Wert für ${k} (JSON, z.B. true / 60 / "abc"):`, "true");
+    if (v === null) return;
+    let val; try { val = JSON.parse(v); } catch { val = v; }
+    await saveCfg(k, val);
+}
 async function render() {
     try {
         if (activeTab === "overview") await renderOverview();
@@ -744,6 +1283,7 @@ async function render() {
         else if (activeTab === "workers") await renderWorkers();
         else if (activeTab === "logs") await renderLogs();
         else if (activeTab === "state") await renderState();
+        else if (activeTab === "settings") await renderSettings();
         $("#refreshTag").textContent = "✓ " + new Date().toLocaleTimeString();
     } catch (e) {
         $("#refreshTag").textContent = "⚠ " + e.message;
@@ -751,7 +1291,7 @@ async function render() {
 }
 render();
 setInterval(() => {
-    if (["overview","workers","deals","timeline"].includes(activeTab)) render();
+    if (["overview","workers","timeline"].includes(activeTab)) render();
 }, 3000);
 </script>
 </body>
