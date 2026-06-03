@@ -17,12 +17,10 @@ log = get_logger("ws_server")  # noqa: E402
 
 # === zentrale Config & Pfade ===
 from core.paths import (
-    WS_HOST as HOST,
-    WS_PORT as PORT,
     INBOX_DIR,
     PRODUCKT_DIR,         # <- Sibling von inbox
-    
 )
+from core.config import WS_HOST as HOST, WS_PORT as PORT
 from core.workers.telegram.telSender import send_url_to_observer # WICHTIG!
 # websockets erst nach config importieren (reine Ordnungssache)
 import websockets

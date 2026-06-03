@@ -30,7 +30,6 @@ from core.workers.telegram.image_processor import get_best_image_url, download_a
 # Settings
 INVITE_RE     = re.compile(r"(?:t\.me\/\+|joinchat\/)([A-Za-z0-9_-]+)")
 CHANNEL_REF   = os.getenv("CHANNEL_INVITE_URL") or getattr(config, "CHANNEL_INVITE_URL", "")
-DATA_DIR: Path = config.DATA_DIR
 MAX_TEXT_LEN  = 4096
 AFFILIATE_URL = os.getenv("AFFILIATE_URL", "https://amzn.to/42vWlQM")
 WATCH_SECS    = int(float(os.getenv("WATCH_INTERVAL_SECS", "10")))  # alle 10s

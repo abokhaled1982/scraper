@@ -81,3 +81,64 @@ def session_scope() -> Session:
         raise
     finally:
         session.close()
+
+
+# ───────────────────────────────────────────────────────────────
+# Admin: Backup + Reset (vom Dashboard aufgerufen)
+# ───────────────────────────────────────────────────────────────
+
+def _sqlite_file_path() -> "Path | None":
+    """Liefert den Dateipfad der SQLite-DB oder None (falls non-SQLite)."""
+    from pathlib import Path
+    if not DB_URL.startswith("sqlite:///"):
+        return None
+    return Path(DB_URL.replace("sqlite:///", "", 1)).resolve()
+
+
+def backup_db() -> str:
+    """Erzeugt einen konsistenten Snapshot der SQLite-DB in db/backups/.
+    Nutzt die SQLite-Backup-API → safe auch wenn Worker schreiben.
+    Gibt den Pfad zur Backup-Datei zurück.
+    """
+    import sqlite3
+    from datetime import datetime
+    src = _sqlite_file_path()
+    if src is None:
+        raise RuntimeError("Backup nur für SQLite unterstützt")
+    backup_dir = src.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = backup_dir / f"core_data.backup-{ts}.db"
+    src_conn = sqlite3.connect(str(src))
+    dst_conn = sqlite3.connect(str(dst))
+    try:
+        src_conn.backup(dst_conn)
+    finally:
+        dst_conn.close()
+        src_conn.close()
+    return str(dst)
+
+
+def reset_db(make_backup: bool = True) -> dict:
+    """Setzt die Datenbank zurück: optionales Backup → drop_all → create_all.
+    ACHTUNG: Löscht alle Deals, Events, State, Config, Worker-Status.
+    """
+    from .models import Base
+    info: dict = {"backup": None}
+    if make_backup:
+        try:
+            info["backup"] = backup_db()
+        except Exception as e:
+            info["backup_error"] = str(e)
+    # WAL/SHM zur Sicherheit leeren bevor wir das Schema neu aufbauen
+    try:
+        with ENGINE.begin() as conn:
+            from sqlalchemy import text
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+    except Exception:
+        pass
+    Base.metadata.drop_all(ENGINE)
+    Base.metadata.create_all(ENGINE)
+    _ensure_columns_sqlite()
+    info["ok"] = True
+    return info

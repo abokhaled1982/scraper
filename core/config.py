@@ -12,10 +12,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ───────────────────────────────────────────────────────────────
 # Datenbank
 # ───────────────────────────────────────────────────────────────
-# Format wie SQLAlchemy es erwartet. Default: SQLite-Datei im Projekt.
+# Format wie SQLAlchemy es erwartet. Default: SQLite-Datei unter .db/.
+DB_DIR = Path(os.getenv("CORE_DB_DIR", str(BASE_DIR / ".db"))).resolve()
+DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_URL = os.getenv(
     "CORE_DB_URL",
-    f"sqlite:///{BASE_DIR / 'core_data.db'}",
+    f"sqlite:///{DB_DIR / 'core_data.db'}",
 )
 
 # ───────────────────────────────────────────────────────────────
@@ -35,3 +37,15 @@ DASHBOARD_PORT = int(os.getenv("CORE_DASHBOARD_PORT", "8000"))
 
 # Heartbeat-Schwelle in Sekunden – darüber gilt ein Worker als „stale".
 WORKER_STALE_AFTER_SECS = int(os.getenv("CORE_WORKER_STALE_SECS", "60"))
+
+# ───────────────────────────────────────────────────────────────
+# WebSocket-Server (Browser-Addon → Amazon-Parser)
+# ───────────────────────────────────────────────────────────────
+WS_HOST = os.getenv("CORE_WS_HOST", "127.0.0.1")
+WS_PORT = int(os.getenv("CORE_WS_PORT", "8765"))
+
+# ───────────────────────────────────────────────────────────────
+# Worker-Intervalle (Sekunden)
+# ───────────────────────────────────────────────────────────────
+WATCH_INTERVAL_SECS = float(os.getenv("CORE_WATCH_INTERVAL_SECS", "10"))
+INTERVAL_SECS       = int(os.getenv("CORE_INTERVAL_SECS", "13"))

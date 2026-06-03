@@ -88,7 +88,6 @@ ACTIVE_MODULES = [
     "core.db.state_repo",
     "core.db.workers_repo",
     "core.dashboard",
-    "core.migrate",
     # Amazon-Pipeline (Subprozesse aus run_all.py)
     "core.workers.amazon.ws_server",
     "core.workers.amazon.watcher",

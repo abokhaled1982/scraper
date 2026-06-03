@@ -7,7 +7,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("watcher")  # noqa: E402
-from core.paths import INBOX_DIR,WATCH_INTERVAL_SECS
+from core.paths import INBOX_DIR
+from core.config import WATCH_INTERVAL_SECS
 from core.workers.amazon.parser_worker import parse_and_merge
 from core.db import workers_repo
 

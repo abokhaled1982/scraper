@@ -24,6 +24,7 @@ import uvicorn
 
 from core.config import DASHBOARD_HOST, DASHBOARD_PORT, LOG_DIR
 from core.db import workers_repo, deals_repo, state_repo, config_repo, init_db
+from core.db.engine import reset_db as _reset_db, backup_db as _backup_db
 
 app = FastAPI(title="Scraper Dashboard")
 
@@ -243,6 +244,32 @@ def api_config_set(key: str, body: dict = Body(...)) -> dict:
 def api_config_delete(key: str) -> dict:
     config_repo.delete(key)
     return {"ok": True, "key": key}
+
+
+# ───────────────────────────────────────────────────────────────
+# Admin: DB Backup + Reset
+# ───────────────────────────────────────────────────────────────
+
+@app.post("/api/admin/db/backup")
+def api_admin_db_backup() -> dict:
+    try:
+        path = _backup_db()
+        return {"ok": True, "path": path}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/admin/db/reset")
+def api_admin_db_reset(body: dict = Body(default={})) -> dict:
+    """Setzt die DB zurück. Erwartet body={"confirm": "RESET"}.
+    Erzeugt vorher automatisch ein Backup in db/backups/."""
+    if (body or {}).get("confirm") != "RESET":
+        raise HTTPException(400, "confirm must be 'RESET'")
+    make_backup = bool((body or {}).get("backup", True))
+    try:
+        return _reset_db(make_backup=make_backup)
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1246,8 +1273,28 @@ async function renderSettings() {
         <div class="toolbar">
           <button class="act" onclick="newCfgKey()">+ neuer Key</button>
           <button class="act" onclick="renderSettings()">↻ Refresh</button>
+          <button class="act" onclick="dbBackup()">💾 DB-Backup</button>
+          <button class="act danger" onclick="dbReset()">⚠ DB Reset</button>
         </div>
         ${html}`;
+}
+async function dbBackup() {
+    try {
+        const r = await api("/api/admin/db/backup", { method:"POST",
+            headers:{"Content-Type":"application/json"}, body:"{}" });
+        alert(`Backup erstellt:\n${r.path}`);
+    } catch (e) { alert("Backup fehlgeschlagen: " + e); }
+}
+async function dbReset() {
+    const t = prompt("⚠️ ACHTUNG: alle Deals, State, Config & Worker-Status werden gelöscht.\nVorher wird automatisch ein Backup in db/backups/ erzeugt.\n\nZum Bestätigen tippe: RESET");
+    if (t !== "RESET") return;
+    try {
+        const r = await api("/api/admin/db/reset", { method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ confirm:"RESET", backup:true }) });
+        alert(`DB zurückgesetzt.\nBackup: ${r.backup || "(keins)"}\n\nBitte run_all neu starten, damit Worker frische Sessions ziehen.`);
+        renderSettings();
+    } catch (e) { alert("Reset fehlgeschlagen: " + e); }
 }
 async function saveCfg(key, value) {
     await api(`/api/config/${encodeURIComponent(key)}`, {

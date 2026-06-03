@@ -19,7 +19,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger  # noqa: E402
 log = get_logger("product_parser")  # noqa: E402
-from core.paths import PRODUCKT_DIR, INTERVAL_SECS
+from core.paths import PRODUCKT_DIR
+from core.config import INTERVAL_SECS
 from core.db import deals_repo
 
 # Importiere die fachlich getrennten Module
