@@ -63,15 +63,24 @@ def parse_price_string(price_str: str) -> Dict[str, Any]:
     price_str_cleaned = re.sub(r'[^\d,\.€$£]', '', price_str).strip()
     
     # Intelligente Behandlung von Dezimal- und Tausenderzeichen
-    if price_str_cleaned.count(',') > 1 and '.' not in price_str_cleaned:
-        # Beispiel: 1.234,56 -> 1234.56
-        cleaned_str = price_str_cleaned.replace('.', '').replace(',', '.')
-    elif price_str_cleaned.count(',') == 1 and price_str_cleaned.count('.') == 0:
-         # Beispiel: 399,99 € -> 399.99
-         cleaned_str = price_str_cleaned.replace(',', '.')
+    has_comma = ',' in price_str_cleaned
+    has_dot   = '.' in price_str_cleaned
+    if has_comma and has_dot:
+        # Mischformat: das LETZTE Trennzeichen ist das Dezimalzeichen.
+        last_comma = price_str_cleaned.rfind(',')
+        last_dot   = price_str_cleaned.rfind('.')
+        if last_comma > last_dot:
+            # Europäisch: '1.234,56' -> '1234.56'
+            cleaned_str = price_str_cleaned.replace('.', '').replace(',', '.')
+        else:
+            # US: '1,234.56' -> '1234.56'
+            cleaned_str = price_str_cleaned.replace(',', '')
+    elif has_comma:
+        # Beispiel: '399,99 €' -> '399.99'
+        cleaned_str = price_str_cleaned.replace(',', '.')
     else:
-         # Standardfall (z.B. 399.99 € oder 1,234.56)
-         cleaned_str = price_str_cleaned.replace(',', '') 
+        # Nur Punkte oder gar nichts (z.B. '99.99' oder '1234')
+        cleaned_str = price_str_cleaned
 
     # Extrahiere Währung und numerischen Teil
     match = re.search(r'([0-9\.]+)', cleaned_str)

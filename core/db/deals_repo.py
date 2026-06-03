@@ -301,6 +301,118 @@ def get_events(deal_id: int, limit: int = 50) -> list[dict]:
         ]
 
 
+# ───────────────────────────────────────────────────────────────
+# Pipeline-Phasen (Dashboard-Visualisierung)
+# ───────────────────────────────────────────────────────────────
+# Kanonische Pipeline-Stufen, die ein Link von der Erfassung bis zum
+# Versand durchläuft. Jede Phase wird aus den DealEvent-Einträgen
+# abgeleitet (Status: pending / active / done / failed / skipped).
+PHASE_INGESTED = "ingested"      # created — Link wurde erfasst
+PHASE_ENRICHED = "enriched"      # updated — Payload durch Parser/AI angereichert
+PHASE_CLAIMED  = "claimed"       # claimed — Worker hat Deal übernommen
+PHASE_DELIVERED = "delivered"    # sent — Versand erfolgt (Telegram/FB/…)
+
+PHASE_DEFINITIONS: list[dict] = [
+    {"key": PHASE_INGESTED,  "label": "Erfasst",       "icon": "🆕"},
+    {"key": PHASE_ENRICHED,  "label": "Angereichert",  "icon": "✨"},
+    {"key": PHASE_CLAIMED,   "label": "In Bearbeitung", "icon": "🔒"},
+    {"key": PHASE_DELIVERED, "label": "Versendet",     "icon": "✅"},
+]
+
+
+def _compute_phases_from(events: list, status: str) -> list[dict]:
+    """
+    Berechnet kanonische Pipeline-Phasen aus einer Event-Liste.
+
+    events: Liste von DealEvent oder dicts mit 'event', 'detail', 'created_at'.
+    status: aktueller Deal-Status (queue/processing/sent/failed).
+
+    Returns: [{key, label, icon, state, at, detail}] in Pipeline-Reihenfolge.
+        state ∈ {pending, active, done, failed}
+    """
+    def _ev(e):
+        if isinstance(e, dict):
+            return e.get("event"), e.get("detail"), e.get("created_at")
+        ts = e.created_at.isoformat() if e.created_at else None
+        return e.event, e.detail, ts
+
+    # Erste Vorkommnisse je Event-Typ chronologisch (ältestes zuerst)
+    norm = [_ev(e) for e in events]
+    norm.sort(key=lambda x: (x[2] or ""))
+
+    first: dict[str, tuple[str | None, str | None]] = {}  # event -> (detail, at)
+    last_failure: tuple[str | None, str | None] | None = None
+    for ev, det, at in norm:
+        if ev and ev not in first:
+            first[ev] = (det, at)
+        if ev == "failed":
+            last_failure = (det, at)
+
+    mapping = {
+        PHASE_INGESTED: "created",
+        PHASE_ENRICHED: "updated",
+        PHASE_CLAIMED:  "claimed",
+        PHASE_DELIVERED: "sent",
+    }
+
+    out: list[dict] = []
+    for spec in PHASE_DEFINITIONS:
+        key = spec["key"]
+        ev_name = mapping[key]
+        info = first.get(ev_name)
+        phase = {**spec, "state": "pending", "at": None, "detail": None}
+        if info is not None:
+            phase["detail"] = info[0]
+            phase["at"] = info[1]
+            phase["state"] = "done"
+        out.append(phase)
+
+    # Index der letzten "done"-Phase ermitteln. Pending-Phasen davor wurden
+    # offensichtlich übersprungen (z.B. wenn der Parser kein 'updated'-Event
+    # ausgelöst hat, der Deal aber bereits geclaimt wurde) → 'skipped'.
+    last_done_idx = -1
+    for i, p in enumerate(out):
+        if p["state"] == "done":
+            last_done_idx = i
+    for i in range(last_done_idx):
+        if out[i]["state"] == "pending":
+            out[i]["state"] = "skipped"
+
+    # Erste Pending-Phase NACH der letzten Done-Phase markieren je nach Status.
+    next_idx = next(
+        (i for i in range(last_done_idx + 1, len(out)) if out[i]["state"] == "pending"),
+        None,
+    )
+
+    if status == DEAL_STATUS_FAILED and next_idx is not None:
+        out[next_idx]["state"] = "failed"
+        if last_failure:
+            out[next_idx]["detail"] = last_failure[0]
+            out[next_idx]["at"] = last_failure[1]
+    elif status == DEAL_STATUS_FAILED:
+        # alle Phasen done → letzte als failed kennzeichnen
+        out[-1]["state"] = "failed"
+    elif status in (DEAL_STATUS_QUEUE, DEAL_STATUS_PROCESSING) and next_idx is not None:
+        out[next_idx]["state"] = "active"
+    # status=sent: keine aktive Phase — alles relevant abgeschlossen.
+
+    return out
+
+
+def get_phases(deal_id: int) -> list[dict] | None:
+    """Liefert die berechneten Pipeline-Phasen für einen Deal."""
+    with session_scope() as s:
+        d = s.get(Deal, deal_id)
+        if not d:
+            return None
+        events = s.execute(
+            select(DealEvent)
+            .where(DealEvent.deal_id == deal_id)
+            .order_by(DealEvent.created_at.asc())
+        ).scalars().all()
+        return _compute_phases_from(list(events), d.status)
+
+
 def list_recent_events(limit: int = 200, hours: int = 72) -> list[dict]:
     """Chronologische Liste aller Events der letzten N Stunden, mit Deal-Infos verjoint.
 

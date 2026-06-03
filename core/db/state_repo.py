@@ -88,11 +88,13 @@ def get_dict(key: str) -> dict:
 def update_dict(key: str, updates: dict) -> None:
     with session_scope() as s:
         row = s.get(StateKV, key)
-        current = row.value if (row and isinstance(row.value, dict)) else {}
+        current = dict(row.value) if (row and isinstance(row.value, dict)) else {}
         current.update(updates)
         if row is None:
             s.add(StateKV(key=key, value=current))
         else:
+            # Neuzuweisung mit *neuem* dict erzwingt SQLAlchemy-Change-Detection
+            # für die JSON-Column (in-place .update() wird nicht erkannt).
             row.value = current
 
 

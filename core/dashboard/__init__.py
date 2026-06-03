@@ -60,7 +60,16 @@ def api_deal_detail(deal_id: int) -> dict:
     if not d:
         raise HTTPException(404, "deal not found")
     d["events"] = deals_repo.get_events(deal_id, limit=100)
+    d["phases"] = deals_repo.get_phases(deal_id) or []
     return d
+
+
+@app.get("/api/deals/{deal_id}/phases")
+def api_deal_phases(deal_id: int) -> dict:
+    phases = deals_repo.get_phases(deal_id)
+    if phases is None:
+        raise HTTPException(404, "deal not found")
+    return {"deal_id": deal_id, "phases": phases}
 
 
 @app.post("/api/deals/{deal_id}/requeue")
@@ -270,6 +279,39 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
 .kv .v .imgs { display:flex; gap:6px; flex-wrap:wrap; }
 .badge { display:inline-block; background:#082f49; color:#7dd3fc;
     padding:2px 8px; border-radius:6px; font-size:11px; margin-right:4px; }
+
+/* ── Pipeline-Stepper ── */
+.stepper { display:flex; gap:0; margin:14px 0 6px; background:#020617;
+    padding:14px 12px; border-radius:8px; overflow-x:auto; }
+.step { flex:1; min-width:140px; position:relative; padding:0 8px; text-align:center; }
+.step + .step::before { content:""; position:absolute; left:-50%; top:18px;
+    width:100%; height:2px; background:#334155; z-index:0; }
+.step.done + .step::before, .step.active + .step::before { background:#0ea5e9; }
+.step.failed + .step::before { background:#7f1d1d; }
+.step .dot { width:36px; height:36px; border-radius:50%; margin:0 auto;
+    background:#1e293b; border:2px solid #334155; display:flex;
+    align-items:center; justify-content:center; font-size:18px;
+    position:relative; z-index:1; }
+.step.done    .dot { background:#052e16; border-color:#22c55e; color:#86efac; }
+.step.active  .dot { background:#082f49; border-color:#0ea5e9; color:#7dd3fc;
+    animation: pulse 1.6s ease-in-out infinite; }
+.step.failed  .dot { background:#450a0a; border-color:#dc2626; color:#fca5a5; }
+.step.pending .dot { color:#475569; }
+.step.skipped .dot { background:#1e293b; border-color:#475569; color:#64748b;
+    opacity:.6; }
+.step .lbl { font-size:11.5px; margin-top:6px; color:#cbd5e1; font-weight:600; }
+.step .ts  { font-size:10px; color:#64748b; margin-top:2px; line-height:1.2;
+    word-break:break-word; }
+.step.pending .lbl { color:#64748b; font-weight:400; }
+@keyframes pulse { 0%,100% { box-shadow:0 0 0 0 rgba(14,165,233,.45); }
+                   50%      { box-shadow:0 0 0 8px rgba(14,165,233,0); } }
+
+/* Phase-Pill für Deals-Tab */
+.phase-pill { display:inline-block; padding:1px 7px; border-radius:999px;
+    font-size:10.5px; font-weight:600; background:#082f49; color:#7dd3fc; }
+.phase-pill.failed { background:#450a0a; color:#fca5a5; }
+.phase-pill.active { background:#451a03; color:#fdba74; }
+.phase-pill.done   { background:#052e16; color:#86efac; }
 </style>
 </head>
 <body>
@@ -545,6 +587,7 @@ async function showDealDetail(id) {
           <div><span class="badge">${esc(d.status)}</span>
                <span class="badge">${esc(d.market)}</span>
                <small>created ${esc(d.created_at||"")}</small></div>
+          ${renderStepper(d.phases || [])}
           ${groups || "<p><small>Kein Payload vorhanden</small></p>"}
           <h3>Roh-Payload (JSON)</h3>
           <pre class="json">${rawJson}</pre>
@@ -553,6 +596,20 @@ async function showDealDetail(id) {
             <tbody>${events}</tbody></table>
         </div>
       </div>`;
+}
+
+function renderStepper(phases) {
+    if (!phases || !phases.length) return "";
+    const steps = phases.map(p => {
+        const ts = p.at ? (p.at.replace("T", " ").slice(0, 19)) : "—";
+        const det = p.detail ? `<div class="ts">${esc(p.detail.toString().slice(0,60))}</div>` : "";
+        return `<div class="step ${esc(p.state)}">
+            <div class="dot">${esc(p.icon || "•")}</div>
+            <div class="lbl">${esc(p.label)}</div>
+            <div class="ts">${esc(ts)}</div>${det}
+          </div>`;
+    }).join("");
+    return `<h3>Pipeline-Phasen</h3><div class="stepper">${steps}</div>`;
 }
 function closeModal() { $("#modalRoot").innerHTML = ""; }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });

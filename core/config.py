@@ -31,7 +31,7 @@ LOG_DIR = Path(os.getenv("CORE_LOG_DIR", str(BASE_DIR / ".log"))).resolve()
 # Web-Dashboard
 # ───────────────────────────────────────────────────────────────
 DASHBOARD_HOST = os.getenv("CORE_DASHBOARD_HOST", "127.0.0.1")
-DASHBOARD_PORT = int(os.getenv("CORE_DASHBOARD_PORT", "9030"))
+DASHBOARD_PORT = int(os.getenv("CORE_DASHBOARD_PORT", "8000"))
 
 # Heartbeat-Schwelle in Sekunden – darüber gilt ein Worker als „stale".
 WORKER_STALE_AFTER_SECS = int(os.getenv("CORE_WORKER_STALE_SECS", "60"))

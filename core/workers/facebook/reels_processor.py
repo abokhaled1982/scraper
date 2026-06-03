@@ -31,7 +31,8 @@ def _is_empty(value) -> bool:
     if value is None:
         return True
     s = str(value).strip()
-    return s in ("", "N/A", "null", "none", "0", "0.00", "0.00 €", "0 €")
+    # Case-insensitive Vergleich, damit auch 'None' (str(None)) abgefangen wird
+    return s.lower() in ("", "n/a", "null", "none", "0", "0.00", "0.00 €", "0 €")
 
 
 def validate_deal_data(data: dict) -> dict:
