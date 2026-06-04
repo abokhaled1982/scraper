@@ -102,10 +102,29 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
 
         # Prüfe ob ein bereits gerendertes Video in der Video-Queue vorhanden ist
         existing_video = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
+        local_video: pathlib.Path | None = None
         if existing_video.exists():
             log.info(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
             local_video = existing_video
         else:
+            # 💰 Resend-Schutz: Video bereits in sent/? Zurückholen statt neu rendern.
+            sent_video = VIDEOS_SENT_DIR / f"{product_id}.mp4"
+            if sent_video.exists():
+                try:
+                    VIDEOS_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+                    sent_video.rename(existing_video)
+                    log.info(f"[VIDEO] ♻️  Cache-Hit (sent/) wiederverwendet – kein Re-Render: {existing_video.name}")
+                    local_video = existing_video
+                except Exception as e:
+                    log.warning(f"[VIDEO] sent/ → queue/ rename fehlgeschlagen ({e}), versuche copy")
+                    try:
+                        import shutil
+                        shutil.copy2(sent_video, existing_video)
+                        local_video = existing_video
+                    except Exception as e2:
+                        log.error(f"[VIDEO] Copy fehlgeschlagen: {e2} – re-render unvermeidbar")
+
+        if local_video is None:
             template_type, template_id = resolve_template_selection(data, default_template_type="typ3_audio")
 
             log.info(f"[TEMPLATE] type={template_type} id={template_id}")
