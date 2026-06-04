@@ -106,6 +106,7 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
         if existing_video.exists():
             log.info(f"[VIDEO] ♻️  Vorhandenes Video gefunden – Creatomate-Render übersprungen: {existing_video.name}")
             local_video = existing_video
+            deals_repo.add_event(deal_id, "render_cache_hit", "queue/")
         else:
             # 💰 Resend-Schutz: Video bereits in sent/? Zurückholen statt neu rendern.
             sent_video = VIDEOS_SENT_DIR / f"{product_id}.mp4"
@@ -115,6 +116,7 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
                     sent_video.rename(existing_video)
                     log.info(f"[VIDEO] ♻️  Cache-Hit (sent/) wiederverwendet – kein Re-Render: {existing_video.name}")
                     local_video = existing_video
+                    deals_repo.add_event(deal_id, "render_cache_hit", "sent/ (resend)")
                 except Exception as e:
                     log.warning(f"[VIDEO] sent/ → queue/ rename fehlgeschlagen ({e}), versuche copy")
                     try:
@@ -126,6 +128,7 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
 
         if local_video is None:
             template_type, template_id = resolve_template_selection(data, default_template_type="typ3_audio")
+            deals_repo.add_event(deal_id, "template_selected", f"{template_type} | {template_id}")
 
             log.info(f"[TEMPLATE] type={template_type} id={template_id}")
 
@@ -155,8 +158,10 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
             local_video = await asyncio.get_event_loop().run_in_executor(None, download_video, render_result, product_id)
             if local_video:
                 log.info(f"[VIDEO] ✅ Video heruntergeladen: {local_video}")
+                deals_repo.add_event(deal_id, "render_done", str(render_result.get("url") or "creatomate"))
             else:
                 log.error(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
+                deals_repo.add_event(deal_id, "render_failed")
 
         # ── Telegram: Video SOFORT senden (vor Facebook), wie ein normaler Post ──
         # Facebook bleibt mit eigenem Timer; Telegram darf nicht warten.
@@ -166,8 +171,10 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
                 tg_ok = await send_reel_video(pathlib.Path(local_video), data)
                 if tg_ok:
                     log.info(f"[TELEGRAM] ✅ Reel sofort an Telegram gesendet: {product_id}")
+                    deals_repo.add_event(deal_id, "posted", "telegram")
                 else:
                     log.warning(f"[TELEGRAM] ⚠️ Telegram-Versand fehlgeschlagen – FB-Flow läuft weiter.")
+                    deals_repo.add_event(deal_id, "post_failed", "telegram")
             except Exception as tg_e:
                 log.error(f"[TELEGRAM] ⚠️ Fehler beim Telegram-Video-Versand: {tg_e}")
         # ─────────────────────────────────────────────────────────────────────────
@@ -177,6 +184,7 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
         sent = await fb_service.send_post(data, None, local_video)
         if sent:
             log.info(f"[FACEBOOK] ✅ Reel erfolgreich gepostet: {product_id}")
+            deals_repo.add_event(deal_id, "posted", "facebook")
 
             # ── Instagram: gleiches Video posten ─────────────────────────────
             try:
@@ -188,6 +196,7 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
                     media_id = ig_service.post_reel(video_path, ig_caption)
                     if media_id:
                         log.info(f"[INSTAGRAM] ✅ Reel auch auf Instagram gepostet: {product_id}")
+                        deals_repo.add_event(deal_id, "posted", "instagram")
                         # Affiliate-Link als Kommentar + Bio-Link aktualisieren
                         offer_url = str(data.get("affiliate_url") or data.get("url") or "").strip()
                         if offer_url and offer_url not in ("N/A", "null", ""):
@@ -255,6 +264,7 @@ async def render_reel_for_deal(deal: dict) -> pathlib.Path | None:
     existing_video = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
     if existing_video.exists():
         log.info(f"[VIDEO] ♻️ Vorhandenes Video gefunden – Render übersprungen: {existing_video.name}")
+        deals_repo.add_event(deal_id, "render_cache_hit", "queue/")
         return existing_video
 
     # 💰 Resend-Schutz: nach erfolgreichem Versand liegt das Video in sent/.
@@ -265,6 +275,7 @@ async def render_reel_for_deal(deal: dict) -> pathlib.Path | None:
             VIDEOS_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
             sent_video.rename(existing_video)
             log.info(f"[VIDEO] ♻️ Cache-Hit im sent/-Ordner → wiederverwendet (kein Re-Render): {existing_video.name}")
+            deals_repo.add_event(deal_id, "render_cache_hit", "sent/ (resend)")
             return existing_video
         except Exception as e:
             log.warning(f"[VIDEO] Konnte Cache-Video nicht aus sent/ zurückholen ({e}) – kopiere stattdessen")
@@ -276,6 +287,7 @@ async def render_reel_for_deal(deal: dict) -> pathlib.Path | None:
                 log.error(f"[VIDEO] Auch Copy fehlgeschlagen: {e2} – fahre mit Re-Render fort")
 
     template_type, template_id = resolve_template_selection(data, default_template_type="typ3_audio")
+    deals_repo.add_event(deal_id, "template_selected", f"{template_type} | {template_id}")
     log.info(f"[TEMPLATE] type={template_type} id={template_id}")
     loop = asyncio.get_event_loop()
     if template_type == "typ3_audio":
@@ -289,5 +301,7 @@ async def render_reel_for_deal(deal: dict) -> pathlib.Path | None:
     local_video = await loop.run_in_executor(None, download_video, render_result, product_id)
     if not local_video:
         log.error(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
+        deals_repo.add_event(deal_id, "render_failed")
         return None
+    deals_repo.add_event(deal_id, "render_done", str(render_result.get("url") or "creatomate"))
     return pathlib.Path(local_video)

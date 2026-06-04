@@ -20,6 +20,44 @@ def _extract_market(payload: dict) -> str:
     return str(payload.get("market") or "UNKNOWN").upper()
 
 
+def add_event(deal_id: int | None, event: str, detail: str | None = None) -> None:
+    """Hilfsfunktion: schreibt ein DealEvent (z.B. template_selected, render_done,
+    posted:facebook, …). Schluckt Fehler, da Tracking nie den Worker-Flow
+    blockieren darf."""
+    if not deal_id:
+        return
+    try:
+        with session_scope() as s:
+            d = s.get(Deal, int(deal_id))
+            if not d:
+                return
+            s.add(DealEvent(deal=d, event=event, detail=(detail or None)))
+    except Exception:
+        pass
+
+
+def add_event_by_product_id(product_id: str | None, event: str,
+                            detail: str | None = None) -> None:
+    """Wie add_event, aber sucht den jüngsten Deal mit dieser product_id.
+    Nützlich für Worker, die nur die product_id im Payload haben (z.B.
+    tel_video_sender)."""
+    if not product_id:
+        return
+    try:
+        with session_scope() as s:
+            d = s.execute(
+                select(Deal)
+                .where(Deal.product_id == str(product_id))
+                .order_by(Deal.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if not d:
+                return
+            s.add(DealEvent(deal=d, event=event, detail=(detail or None)))
+    except Exception:
+        pass
+
+
 # ───────────────────────────────────────────────────────────────
 # Schreiben
 # ───────────────────────────────────────────────────────────────

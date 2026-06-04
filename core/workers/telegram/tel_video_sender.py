@@ -128,6 +128,11 @@ async def send_reel_video(video_path: Path, payload: dict) -> bool:
         log.info(f"[VideoSend] ✅ Reel an Telegram gesendet: {product_id} ({video_path.name})")
 
         _mark_sent(payload)
+        try:
+            from core.db import deals_repo
+            deals_repo.add_event_by_product_id(payload.get("product_id"), "posted", "telegram (video)")
+        except Exception:
+            pass
         return True
 
     except Exception as e:

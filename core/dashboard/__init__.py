@@ -156,6 +156,45 @@ def api_deal_phases(deal_id: int) -> dict:
     return {"deal_id": deal_id, "phases": phases}
 
 
+@app.get("/api/deals/{deal_id}/logs", response_class=PlainTextResponse)
+def api_deal_logs(deal_id: int, lines: int = 300, days: int = 2) -> str:
+    """Sammelt aus allen Worker-Logfiles der letzten N Tage die Zeilen,
+    die die product_id (oder die deal-id) des Deals enthalten."""
+    d = deals_repo.get(deal_id)
+    if not d:
+        raise HTTPException(404, "deal not found")
+    needles: list[str] = []
+    if d.get("product_id"):
+        needles.append(str(d["product_id"]))
+    payload = d.get("payload") or {}
+    if isinstance(payload, dict) and payload.get("asin"):
+        needles.append(str(payload["asin"]))
+    needles.append(f"#{deal_id}")
+    needles_lc = [n.lower() for n in needles if n]
+    root = Path(LOG_DIR)
+    if not root.exists():
+        return f"# kein Log-Verzeichnis: {root}"
+    day_dirs = sorted(
+        (p for p in root.iterdir() if p.is_dir()),
+        key=lambda p: p.name, reverse=True,
+    )[: max(1, days)]
+    hits: list[str] = []
+    for day in day_dirs:
+        for f in sorted(day.glob("*.log")):
+            worker = f.stem
+            try:
+                with f.open("r", encoding="utf-8", errors="replace") as fh:
+                    for ln in fh:
+                        low = ln.lower()
+                        if any(n in low for n in needles_lc):
+                            hits.append(f"[{day.name} {worker}] {ln.rstrip()}")
+            except OSError:
+                continue
+    if not hits:
+        return f"# keine Logzeilen mit {needles!r} in {days} Tagen gefunden"
+    return "\n".join(hits[-max(1, lines):])
+
+
 @app.post("/api/deals/{deal_id}/requeue")
 def api_deal_requeue(deal_id: int) -> dict:
     ok = deals_repo.requeue(deal_id)
@@ -625,6 +664,25 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
     overflow:hidden; }
 .queue-banner .bar > div { height:100%; background:linear-gradient(90deg,#0ea5e9,#22c55e);
     transition: width .9s linear; }
+
+/* ── Lifecycle-Cards im Deal-Detail ── */
+.lc-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+    gap:10px; margin:10px 0 14px; }
+.lc-card { display:flex; gap:10px; padding:10px 12px; background:#020617;
+    border:1px solid #1e293b; border-radius:10px; }
+.lc-card .lc-icon { font-size:22px; line-height:1; }
+.lc-card .lc-title { font-size:10.5px; color:#94a3b8; text-transform:uppercase;
+    letter-spacing:.5px; font-weight:600; }
+.lc-card .lc-value { font-size:13px; color:#e2e8f0; margin-top:2px; word-break:break-word; }
+.lc-card .lc-value code { font-size:11px; background:#0b1220; padding:1px 6px;
+    border-radius:4px; color:#7dd3fc; }
+.lc-card .lc-sub { font-size:11px; color:#64748b; margin-top:3px;
+    word-break:break-word; }
+.lc-card .lc-sub a { color:#7dd3fc; }
+.ch-pill { display:inline-block; padding:2px 9px; border-radius:999px;
+    font-size:11px; font-weight:600; margin:2px 4px 2px 0; }
+.ch-pill.ch-done    { background:#052e16; color:#86efac; border:1px solid #166534; }
+.ch-pill.ch-pending { background:#1e293b; color:#64748b; border:1px dashed #334155; }
 </style>
 </head>
 <body>
@@ -1080,7 +1138,6 @@ async function showDealDetail(id) {
     try { d = await api(`/api/deals/${id}`); }
     catch (e) { alert(e.message); return; }
     const payload = d.payload || {};
-    // Top-Level Deal-Spalten zusaetzlich in payload mergen fuer einheitliche Anzeige
     const merged = Object.assign({
         product_id: d.product_id, market: d.market, title: d.title,
         affiliate_url: d.affiliate_url,
@@ -1095,10 +1152,13 @@ async function showDealDetail(id) {
             keys.forEach(k => usedKeys.add(k));
         }
     }
-    // Restliche Felder (die KI kann variabel weitere Felder liefern)
     const restKeys = Object.keys(merged).filter(k => !usedKeys.has(k));
     const restHtml = renderKV(merged, restKeys);
     if (restHtml) groups += `<h3>Weitere KI-Felder</h3>` + restHtml;
+
+    // ── Lifecycle-Übersicht aus Events ableiten ──────────────────
+    const lc = summarizeLifecycle(d.events || [], d);
+    const lifecycleHtml = renderLifecycle(lc, d);
 
     const events = (d.events || []).map(e =>
         `<tr><td><span class="badge">${esc(e.event)}</span></td>` +
@@ -1117,14 +1177,121 @@ async function showDealDetail(id) {
                <span class="badge">${esc(d.market)}</span>
                <small>created ${esc(d.created_at||"")}</small></div>
           ${renderStepper(d.phases || [])}
+          <h3>Lebenszyklus</h3>
+          ${lifecycleHtml}
           ${groups || "<p><small>Kein Payload vorhanden</small></p>"}
           <h3>Roh-Payload (JSON)</h3>
           <pre class="json">${rawJson}</pre>
-          <h3>Events</h3>
+          <h3>Events <button class="act" style="float:right;font-size:11px;" onclick="loadDealLogs(${d.id})">📜 Logs laden</button></h3>
           <table><thead><tr><th>Event</th><th>Zeit</th><th>Detail</th></tr></thead>
             <tbody>${events}</tbody></table>
+          <div id="dealLogs_${d.id}"></div>
         </div>
       </div>`;
+}
+
+// ── Lifecycle-Helper ──────────────────────────────────────────────
+function summarizeLifecycle(events, d) {
+    // sort ascending (oldest first) for first-seen lookup
+    const evs = [...events].sort((a,b) => (a.created_at||"").localeCompare(b.created_at||""));
+    const first = (name) => evs.find(e => e.event === name) || null;
+    // posted ist ein Sammel-Event mit Detail = "facebook" | "instagram" | "telegram"
+    const channels = {};
+    for (const e of evs) {
+        if (e.event === "posted") {
+            const ch = (e.detail || "").toLowerCase();
+            const key = ch.includes("telegram") ? "telegram"
+                      : ch.includes("instagram") ? "instagram"
+                      : ch.includes("facebook")  ? "facebook" : (ch || "other");
+            if (!channels[key]) channels[key] = e.created_at || "";
+        }
+    }
+    return {
+        created:  first("created"),
+        updated:  first("updated"),
+        templateSelected: [...evs].reverse().find(e => e.event === "template_selected") || null,
+        cacheHit:  first("render_cache_hit"),
+        renderDone: first("render_done"),
+        renderFailed: first("render_failed"),
+        claimed: first("claimed"),
+        channels,
+        failed: first("failed"),
+        sent:   first("sent"),
+        sentDetail: ([...evs].reverse().find(e => e.event === "sent") || {}).detail || null,
+    };
+}
+function renderLifecycle(lc, d) {
+    const fmtTs = ts => ts ? esc(ts.replace("T"," ").slice(0,19)) : "—";
+    const card = (icon, title, value, sub) => `
+        <div class="lc-card">
+            <div class="lc-icon">${icon}</div>
+            <div class="lc-body">
+                <div class="lc-title">${esc(title)}</div>
+                <div class="lc-value">${value}</div>
+                ${sub ? `<div class="lc-sub">${sub}</div>` : ""}
+            </div>
+        </div>`;
+
+    // Quelle
+    const sourceVal = `<span class="tag">${esc(d.market || "?")}</span>`;
+    const sourceSub = lc.created ? `erfasst ${fmtTs(lc.created.created_at)}` : "";
+
+    // Template
+    let tmplVal = "<small>(noch nicht gewählt)</small>", tmplSub = "";
+    if (lc.templateSelected) {
+        const parts = String(lc.templateSelected.detail || "").split("|").map(s=>s.trim());
+        const ttype = parts[0] || "?";
+        const tid   = parts[1] || "";
+        tmplVal = `<span class="badge">${esc(ttype)}</span>`;
+        tmplSub = tid ? `<code>${esc(tid)}</code>` : "";
+    }
+
+    // Render
+    let renderVal = "<small>—</small>", renderSub = "";
+    if (lc.cacheHit) {
+        renderVal = `<span class="badge" style="background:#052e16;color:#86efac;">♻️ Cache-Hit</span>`;
+        renderSub = `${esc(lc.cacheHit.detail || "")} · ${fmtTs(lc.cacheHit.created_at)}`;
+    } else if (lc.renderDone) {
+        renderVal = `<span class="badge" style="background:#082f49;color:#7dd3fc;">✅ Creatomate</span>`;
+        const url = (lc.renderDone.detail || "").startsWith("http")
+            ? `<a href="${esc(lc.renderDone.detail)}" target="_blank">▶ Video</a>` : "";
+        renderSub = `${url} · ${fmtTs(lc.renderDone.created_at)}`;
+    } else if (lc.renderFailed) {
+        renderVal = `<span class="badge" style="background:#450a0a;color:#fca5a5;">❌ Render-Fehler</span>`;
+        renderSub = fmtTs(lc.renderFailed.created_at);
+    }
+
+    // Channels
+    const allCh = ["facebook","instagram","telegram"];
+    const chHtml = allCh.map(c => {
+        const ts = lc.channels[c];
+        const done = !!ts;
+        const cls = done ? "ch-done" : "ch-pending";
+        const icon = c === "facebook" ? "📘" : c === "instagram" ? "📷" : "✈";
+        return `<span class="ch-pill ${cls}" title="${done?'versendet '+esc(ts):'nicht versendet'}">${icon} ${c}${done?' ✓':''}</span>`;
+    }).join("");
+    const channelsVal = chHtml;
+    const channelsSub = lc.sentDetail ? `<small>final: ${esc(lc.sentDetail)}</small>` : "";
+
+    return `
+        <div class="lc-grid">
+            ${card("🔗", "Quelle", sourceVal, sourceSub)}
+            ${card("🎬", "Creatomate-Template", tmplVal, tmplSub)}
+            ${card("🎞️", "Rendering", renderVal, renderSub)}
+            ${card("📡", "Kanäle", channelsVal, channelsSub)}
+        </div>`;
+}
+async function loadDealLogs(id) {
+    const target = document.getElementById(`dealLogs_${id}`);
+    if (!target) return;
+    target.innerHTML = `<h3>Logs (alle Worker, letzte 2 Tage)</h3><pre class="json">… lädt …</pre>`;
+    try {
+        const txt = await fetch(`/api/deals/${id}/logs`).then(r => r.text());
+        target.innerHTML = `<h3>Logs (alle Worker, letzte 2 Tage)</h3>
+            <pre class="json" style="max-height:360px;overflow:auto;">${esc(txt)}</pre>`;
+    } catch (e) {
+        target.innerHTML = `<h3>Logs</h3><pre class="json">Fehler: ${esc(e.message)}</pre>`;
+    }
 }
 
 function renderStepper(phases) {

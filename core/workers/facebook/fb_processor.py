@@ -112,6 +112,7 @@ async def process_single_deal(deal: dict, sent_ids: set, fb_service) -> bool:
             return False
         sent_ids.add(product_id)
         if deal_id:
+            deals_repo.add_event(deal_id, "posted", "facebook")
             deals_repo.mark_sent(deal_id, detail="facebook")
         log.info(f"[DONE] ✅ Deal gepostet und in DB als 'sent' markiert: {product_id}")
         return True

@@ -226,6 +226,7 @@ class TelegramOfferRouter:
             # markiert. Hier nachholen, damit der Deal aus 'queue' verschwindet.
             if deal_id:
                 try:
+                    deals_repo.add_event(deal_id, "posted", "telegram")
                     deals_repo.mark_sent(deal_id, detail="telegram-offer")
                 except Exception as e:
                     log.warning(f"[QUEUE] mark_sent (offer) failed für #{deal_id}: {e}")
@@ -260,6 +261,7 @@ class TelegramOfferRouter:
         log.info(f"[REEL-TG] ✅ Reel an Telegram gesendet: {product_id}")
         if deal_id:
             try:
+                deals_repo.add_event(deal_id, "posted", "telegram (standalone)")
                 deals_repo.mark_sent(deal_id, detail="telegram-only")
             except Exception as e:
                 log.warning(f"[REEL-TG] mark_sent fehlgeschlagen: {e}")

@@ -7,7 +7,7 @@
     "ai_extractor_hints": {
       "is_fallback_template": true,
       "recommended_categories": [
-        "elektronik", "haushalt", "kueche", "werkzeug", "garten", "spielzeug",
+        "elektronik", "haushalt", "kueche", "werkzeug", "garten", "spielzeug", "schmuck",
         "sport", "beauty", "drogerie", "lebensmittel", "buecher", "auto",
         "heimwerker", "buero", "tierbedarf", "baby", "gesundheit", "sonstiges"
       ],
