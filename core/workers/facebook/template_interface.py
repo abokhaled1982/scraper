@@ -153,8 +153,11 @@ def resolve_template_selection(
     """Resolve logical template_type and final template_id for a deal.
 
     Priority:
-    1) explicit template_id in deal JSON
-    2) template_type in deal JSON -> lookup in TEMPLATE_REGISTRY
+    1) explicit template_id in deal JSON  — NUR akzeptiert, wenn dieselbe ID
+       aktuell in der Registry steht (sonst tote IDs aus alten Payloads
+       schicken Geld an Creatomate für nicht existente Templates).
+    2) template_type in deal JSON -> lookup in TEMPLATE_REGISTRY (nur wenn
+       der Typ tatsaechlich registriert ist).
     3) produkt_kategorie / category in deal JSON -> Registry-Lookup
        (ai_extractor_hints.recommended_categories)
     4) is_fallback_template aus Registry
@@ -163,11 +166,35 @@ def resolve_template_selection(
     explicit_template_id = str(deal_data.get("template_id") or "").strip()
     template_type = str(deal_data.get("template_type") or "").strip()
 
-    if explicit_template_id:
-        effective_type = template_type or "custom"
-        return effective_type, explicit_template_id
+    # Bekannte IDs in der Registry (lokal, dynamisch geladen aus templates/*.json)
+    registry_ids = {
+        str(cfg.get("template_id") or "").strip(): t
+        for t, cfg in TEMPLATE_REGISTRY.items()
+    }
+    registry_ids.pop("", None)
 
-    # NEU: Kategorie-basierte Auswahl, wenn kein template_type explizit gesetzt ist.
+    # 1) Explizite ID nur akzeptieren, wenn lokal bekannt.
+    if explicit_template_id:
+        if explicit_template_id in registry_ids:
+            matched_type = registry_ids[explicit_template_id]
+            effective_type = template_type or matched_type
+            return effective_type, explicit_template_id
+        log.warning(
+            "Deal liefert template_id=%s, die nicht (mehr) in der lokalen "
+            "Registry ist – ignoriere Override und waehle dynamisch.",
+            explicit_template_id,
+        )
+
+    # 2) Expliziter Typ nur akzeptieren, wenn aktuell registriert.
+    if template_type and template_type not in TEMPLATE_REGISTRY:
+        log.warning(
+            "Deal liefert template_type=%s, der nicht (mehr) in der Registry "
+            "existiert – ignoriere und waehle dynamisch.",
+            template_type,
+        )
+        template_type = ""
+
+    # 3) Kategorie-basierte Auswahl
     if not template_type:
         category = (
             deal_data.get("produkt_kategorie")
@@ -179,12 +206,13 @@ def resolve_template_selection(
         if matched:
             template_type = matched
 
+    # 4/5) Fallback
     if not template_type:
         template_type = _find_fallback_template_type() or default_template_type
 
     template_cfg = TEMPLATE_REGISTRY.get(template_type)
     if not template_cfg:
-        available = ", ".join(sorted(TEMPLATE_REGISTRY.keys()))
+        available = ", ".join(sorted(TEMPLATE_REGISTRY.keys())) or "(keine!)"
         raise ValueError(
             f"Unknown template_type '{template_type}'. Available: {available}"
         )
