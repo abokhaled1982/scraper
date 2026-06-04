@@ -68,6 +68,21 @@ def _extract_identity(payload: Union[dict, list, str]) -> Tuple[str, str]:
     # Fallback: Fingerprint des Payloads
     return ("filehash", _sha1_payload(payload))
 
+def _fb_will_handle(product_id: Optional[str]) -> bool:
+    """True, wenn Facebook aktiv ist UND der Deal dort noch nicht gepostet
+    wurde. In diesem Fall darf telRouter den Deal NICHT als ``sent``
+    markieren, sonst verschwindet er aus der Queue, bevor fb_watcher ihn
+    sieht (Race zwischen Single-Queue-Konsumenten)."""
+    if not product_id:
+        return False
+    if not cfg.is_enabled("facebook"):
+        return False
+    try:
+        return product_id not in state_repo.get_set("sent_ids:facebook")
+    except Exception:
+        return False
+
+
 # Registry laden/speichern (in state_kv)
 def _load_sent_registry() -> dict:
     data = state_repo.get_dict(_SENT_ASINS_KEY)
@@ -203,6 +218,12 @@ class TelegramOfferRouter:
             # Duplikat-Register steht, wird der Deal jetzt aktiv aus der
             # Queue genommen (mark_sent mit detail), sonst klebt er ewig.
             if kval in reg.get(ktype, []):
+                # Telegram hat diesen Deal bereits gesendet. Solange FB ihn
+                # aber noch nicht abgearbeitet hat, NICHT mark_sent rufen —
+                # sonst verschwindet er aus der Queue, bevor fb_watcher ihn
+                # sieht.
+                if _fb_will_handle(product_id):
+                    continue
                 if deal_id:
                     try:
                         deals_repo.mark_sent(deal_id, detail="duplicate-skipped (sent_asins)")
@@ -222,12 +243,17 @@ class TelegramOfferRouter:
             await self._send_offer(entity, payload)
             reg.setdefault(ktype, []).append(kval)
             _save_sent_registry(reg)
-            # Standard-Offer wird im _send_offer nicht via mark_sent_by_product_id
-            # markiert. Hier nachholen, damit der Deal aus 'queue' verschwindet.
+            # Wenn FB aktiv ist und den Deal noch posten muss, NICHT
+            # mark_sent rufen — fb_watcher übernimmt das nach erfolgreichem
+            # FB-Post. Sonst race: Telegram nimmt Deal aus der Queue, FB
+            # sieht ihn nie.
             if deal_id:
                 try:
                     deals_repo.add_event(deal_id, "posted", "telegram")
-                    deals_repo.mark_sent(deal_id, detail="telegram-offer")
+                    if _fb_will_handle(product_id):
+                        log.info(f"[QUEUE] ⏳ Deal #{deal_id} ({product_id}) an Telegram gesendet — warte auf Facebook (bleibt in Queue)")
+                    else:
+                        deals_repo.mark_sent(deal_id, detail="telegram-offer")
                 except Exception as e:
                     log.warning(f"[QUEUE] mark_sent (offer) failed für #{deal_id}: {e}")
             return True

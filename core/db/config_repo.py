@@ -82,14 +82,28 @@ def invalidate_cache(key: str | None = None) -> None:
 # ───────────────────────────────────────────────────────────────
 # CRUD
 # ───────────────────────────────────────────────────────────────
+# Keys, deren Wert NIE aus dem TTL-Cache bedient werden darf, weil sie
+# Dashboard-Toggles steuern und in Worker-Prozessen sofort wirksam sein
+# müssen (sonst sieht ein anderer Prozess bis zu _CACHE_TTL Sekunden den
+# alten Wert).
+_NO_CACHE_SUFFIXES = (".enabled", ".dry_run", ".post_reels")
+
+
+def _bypass_cache(key: str) -> bool:
+    return any(key.endswith(suf) for suf in _NO_CACHE_SUFFIXES)
+
+
 def get(key: str, default: Any = None) -> Any:
-    hit, val = _cache_get(key)
-    if hit:
-        return val
+    bypass = _bypass_cache(key)
+    if not bypass:
+        hit, val = _cache_get(key)
+        if hit:
+            return val
     with session_scope() as s:
         row = s.get(RuntimeConfig, key)
         if row is not None:
-            _cache_set(key, row.value)
+            if not bypass:
+                _cache_set(key, row.value)
             return row.value
     if default is not None:
         return default
