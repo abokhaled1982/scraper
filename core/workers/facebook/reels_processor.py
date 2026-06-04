@@ -211,3 +211,64 @@ async def process_single_deal(deal: dict, sent_ids: set) -> bool:
             except Exception:
                 pass
         return False
+
+
+# ───────────────────────────────────────────────────────────────
+# Reusable: nur das Rendering + Video-Download (ohne FB/IG/TG-Versand).
+# Wird auch von telRouter genutzt, wenn Facebook ausgeschaltet ist.
+# ───────────────────────────────────────────────────────────────
+async def render_reel_for_deal(deal: dict) -> pathlib.Path | None:
+    """Rendert (oder findet im Cache) ein Reel-Video für einen Queue-Deal.
+    Markiert den Deal bei Validierungsfehler als failed. Rückgabe: Pfad zur
+    MP4 oder None."""
+    product_id = deal.get("product_id")
+    deal_id = deal.get("id")
+    data = deal.get("payload") or {}
+    if data.get("type") != "reel":
+        return None
+    validation = validate_deal_data(data)
+    if not validation["valid"]:
+        log.error(f"[FILTER] 🗑️ {product_id}: {validation['reason']}. Mark failed in DB.")
+        if deal_id:
+            deals_repo.mark_failed(deal_id, validation["reason"])
+        return None
+
+    existing_video = VIDEOS_QUEUE_DIR / f"{product_id}.mp4"
+    if existing_video.exists():
+        log.info(f"[VIDEO] ♻️ Vorhandenes Video gefunden – Render übersprungen: {existing_video.name}")
+        return existing_video
+
+    # 💰 Resend-Schutz: nach erfolgreichem Versand liegt das Video in sent/.
+    # Statt erneut bei Creatomate zu zahlen, schieben wir es zurück in queue/.
+    sent_video = VIDEOS_SENT_DIR / f"{product_id}.mp4"
+    if sent_video.exists():
+        try:
+            VIDEOS_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+            sent_video.rename(existing_video)
+            log.info(f"[VIDEO] ♻️ Cache-Hit im sent/-Ordner → wiederverwendet (kein Re-Render): {existing_video.name}")
+            return existing_video
+        except Exception as e:
+            log.warning(f"[VIDEO] Konnte Cache-Video nicht aus sent/ zurückholen ({e}) – kopiere stattdessen")
+            try:
+                import shutil
+                shutil.copy2(sent_video, existing_video)
+                return existing_video
+            except Exception as e2:
+                log.error(f"[VIDEO] Auch Copy fehlgeschlagen: {e2} – fahre mit Re-Render fort")
+
+    template_type, template_id = resolve_template_selection(data, default_template_type="typ3_audio")
+    log.info(f"[TEMPLATE] type={template_type} id={template_id}")
+    loop = asyncio.get_event_loop()
+    if template_type == "typ3_audio":
+        render_result = await loop.run_in_executor(None, render_typ3_audio, data, template_id)
+    else:
+        modifications = build_modifications_for_template(
+            data, template_type=template_type, discount_value=validation["discount"],
+        )
+        render_result = await loop.run_in_executor(None, render_reel, modifications, template_id)
+    log.info(f"[DONE] ✅ Reel gerendert: {product_id}, URL: {render_result.get('url')}")
+    local_video = await loop.run_in_executor(None, download_video, render_result, product_id)
+    if not local_video:
+        log.error(f"[VIDEO] ❌ Video-Download fehlgeschlagen für {product_id}")
+        return None
+    return pathlib.Path(local_video)

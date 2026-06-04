@@ -21,7 +21,7 @@ from core.logging import get_logger  # noqa: E402
 log = get_logger("telRouter")  # noqa: E402
 
 from core import paths as config
-from core.db import deals_repo, state_repo, workers_repo
+from core.db import deals_repo, state_repo, workers_repo, config_repo as cfg
 from core.workers.telegram.login_once import LoginConfig, ensure_logged_in
 from core.workers.telegram.offer_message import build_caption_html, pick_image_source, build_inline_keyboard
 # NEU: Import der Bildverarbeitungs-Logik
@@ -179,20 +179,96 @@ class TelegramOfferRouter:
         deals = _iter_queue_deals()
         for deal in deals:
             payload = deal.get("payload")
+            deal_id = deal.get("id")
+            product_id = deal.get("product_id")
             if not isinstance(payload, dict):
+                # Kaputter Payload → Deal als failed markieren, damit er die
+                # Queue nicht für immer blockiert.
+                if deal_id:
+                    try:
+                        deals_repo.mark_failed(deal_id, "invalid payload (no dict)")
+                        log.warning(f"[QUEUE] 🗑️ Deal #{deal_id} ohne dict-Payload → failed")
+                    except Exception:
+                        pass
                 continue
-            # Reels haben eigene Pipeline (tel_video_sender) — hier überspringen,
-            # damit kein doppelter Foto-Post entsteht während das Video rendert.
-            if payload.get("type") == "reel":
+
+            is_reel = payload.get("type") == "reel"
+            # Reels: Facebook ist Master, wenn aktiv. Dann lässt telRouter den
+            # Eintrag für fb_watcher liegen — KEIN auto-mark-sent.
+            if is_reel and cfg.is_enabled("facebook"):
                 continue
+
             ktype, kval = _extract_identity(payload)
+            # 🔧 KEIN stilles Skip mehr: Wenn der Eintrag bereits im
+            # Duplikat-Register steht, wird der Deal jetzt aktiv aus der
+            # Queue genommen (mark_sent mit detail), sonst klebt er ewig.
             if kval in reg.get(ktype, []):
+                if deal_id:
+                    try:
+                        deals_repo.mark_sent(deal_id, detail="duplicate-skipped (sent_asins)")
+                        log.info(f"[QUEUE] ⏭️ Deal #{deal_id} ({product_id}) bereits im sent_asins-Register → als sent markiert (Queue geleert)")
+                    except Exception as e:
+                        log.warning(f"[QUEUE] mark_sent failed für #{deal_id}: {e}")
                 continue
+
+            if is_reel:
+                ok = await self._send_reel_standalone(deal)
+                if ok:
+                    reg.setdefault(ktype, []).append(kval)
+                    _save_sent_registry(reg)
+                    return True
+                continue
+
             await self._send_offer(entity, payload)
             reg.setdefault(ktype, []).append(kval)
             _save_sent_registry(reg)
+            # Standard-Offer wird im _send_offer nicht via mark_sent_by_product_id
+            # markiert. Hier nachholen, damit der Deal aus 'queue' verschwindet.
+            if deal_id:
+                try:
+                    deals_repo.mark_sent(deal_id, detail="telegram-offer")
+                except Exception as e:
+                    log.warning(f"[QUEUE] mark_sent (offer) failed für #{deal_id}: {e}")
             return True
         return False
+
+    async def _send_reel_standalone(self, deal: dict) -> bool:
+        """Rendert + sendet ein Reel ausschließlich an Telegram (FB aus)."""
+        from pathlib import Path as _P
+        from core.workers.facebook.reels_processor import render_reel_for_deal
+        from core.paths import VIDEOS_SENT_DIR
+        from core.workers.telegram.tel_video_sender import send_reel_video
+        product_id = deal.get("product_id")
+        deal_id    = deal.get("id")
+        payload    = deal.get("payload") or {}
+        try:
+            video_path = await render_reel_for_deal(deal)
+        except Exception as e:
+            log.error(f"[REEL-TG] Render-Fehler {product_id}: {e}")
+            return False
+        if not video_path or not video_path.exists():
+            log.warning(f"[REEL-TG] Kein Video für {product_id}")
+            return False
+        try:
+            ok = await send_reel_video(video_path, payload)
+        except Exception as e:
+            log.error(f"[REEL-TG] Telegram-Versand fehlgeschlagen {product_id}: {e}")
+            return False
+        if not ok:
+            log.warning(f"[REEL-TG] Telegram-Versand nicht bestätigt: {product_id}")
+            return False
+        log.info(f"[REEL-TG] ✅ Reel an Telegram gesendet: {product_id}")
+        if deal_id:
+            try:
+                deals_repo.mark_sent(deal_id, detail="telegram-only")
+            except Exception as e:
+                log.warning(f"[REEL-TG] mark_sent fehlgeschlagen: {e}")
+        try:
+            VIDEOS_SENT_DIR.mkdir(parents=True, exist_ok=True)
+            video_path.rename(VIDEOS_SENT_DIR / video_path.name)
+        except Exception as e:
+            log.warning(f"[REEL-TG] Video-Move fehlgeschlagen: {e}")
+        return True
 
     async def run_watch(self):
         workers_repo.register(_WORKER)

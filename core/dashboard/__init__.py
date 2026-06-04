@@ -190,12 +190,32 @@ def api_deal_resend(deal_id: int, body: dict = Body(default={})) -> dict:
     d = deals_repo.get(deal_id)
     if not d:
         raise HTTPException(404, "deal not found")
-    # Entfernt aus sent_ids:facebook, sonst springt der fb_watcher nicht an
+    pid = d.get("product_id")
+    # 1) Entfernt aus sent_ids:facebook (fb_watcher In-Memory + DB)
     try:
         sent = state_repo.get_set("sent_ids:facebook")
-        if d.get("product_id") in sent:
-            sent.discard(d["product_id"])
+        if pid in sent:
+            sent.discard(pid)
             state_repo.put("sent_ids:facebook", sorted(sent))
+    except Exception:
+        pass
+    # 2) Entfernt aus sent_asins-Register (telRouter Duplikat-Schutz).
+    #    Ohne diesen Schritt würde telRouter den Deal sofort wieder
+    #    als duplicate-skipped abräumen → "Resend macht nichts".
+    try:
+        reg = state_repo.get_dict("sent_asins") or {"asin": [], "filehash": []}
+        changed = False
+        if pid and pid in reg.get("asin", []):
+            reg["asin"] = [a for a in reg["asin"] if a != pid]
+            changed = True
+        # Auch ASIN aus payload (Amazon-Schema)
+        payload = d.get("payload") or {}
+        asin = (payload.get("asin") if isinstance(payload, dict) else None)
+        if asin and asin in reg.get("asin", []):
+            reg["asin"] = [a for a in reg["asin"] if a != asin]
+            changed = True
+        if changed:
+            state_repo.put("sent_asins", reg)
     except Exception:
         pass
     deals_repo.requeue(deal_id)
@@ -270,6 +290,34 @@ def api_admin_db_reset(body: dict = Body(default={})) -> dict:
         return _reset_db(make_backup=make_backup)
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@app.get("/api/admin/sent_asins")
+def api_admin_sent_asins_get() -> dict:
+    """Liefert das Duplikat-Register des telRouter (verhindert Doppel-Posts)."""
+    reg = state_repo.get_dict("sent_asins") or {}
+    asins = reg.get("asin") or []
+    hashes = reg.get("filehash") or []
+    return {
+        "asin_count": len(asins),
+        "filehash_count": len(hashes),
+        "asins": asins[-50:],   # letzte 50
+    }
+
+
+@app.post("/api/admin/sent_asins/reset")
+def api_admin_sent_asins_reset(body: dict = Body(default={})) -> dict:
+    """Leert das Duplikat-Register. Optional body={"asins": ["B0.."]} entfernt
+    nur einzelne Einträge statt alles."""
+    reg = state_repo.get_dict("sent_asins") or {"asin": [], "filehash": []}
+    only = (body or {}).get("asins")
+    if isinstance(only, list) and only:
+        removed = [a for a in reg.get("asin", []) if a in only]
+        reg["asin"] = [a for a in reg.get("asin", []) if a not in only]
+        state_repo.put("sent_asins", reg)
+        return {"ok": True, "removed": removed, "remaining": len(reg["asin"])}
+    state_repo.put("sent_asins", {"asin": [], "filehash": []})
+    return {"ok": True, "cleared": True}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -551,6 +599,32 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
 .phase-pill.failed { background:#450a0a; color:#fca5a5; }
 .phase-pill.active { background:#451a03; color:#fdba74; }
 .phase-pill.done   { background:#052e16; color:#86efac; }
+
+/* Live-Status-Pill (inkl. Pulse) für Queue/Processing */
+.live-pill { display:inline-flex; align-items:center; gap:6px; padding:2px 10px;
+    border-radius:999px; font-size:11px; font-weight:600; }
+.live-pill .led { width:8px; height:8px; border-radius:50%; display:inline-block; }
+.live-pill.queue       { background:#082f49; color:#7dd3fc; }
+.live-pill.queue .led  { background:#0ea5e9; animation: ledpulse 1.4s ease-in-out infinite; }
+.live-pill.processing  { background:#451a03; color:#fdba74; }
+.live-pill.processing .led { background:#f97316; animation: ledpulse 0.9s ease-in-out infinite; }
+.live-pill.sent        { background:#052e16; color:#86efac; }
+.live-pill.sent .led   { background:#22c55e; }
+.live-pill.failed      { background:#450a0a; color:#fca5a5; }
+.live-pill.failed .led { background:#dc2626; }
+@keyframes ledpulse { 0%,100% { transform:scale(1); opacity:1; }
+                      50%      { transform:scale(1.6); opacity:.5; } }
+
+/* Queue-Live-Banner */
+.queue-banner { display:flex; align-items:center; gap:14px; padding:10px 14px;
+    background:linear-gradient(90deg,#082f49,#0b1220); border:1px solid #0369a1;
+    border-radius:8px; margin-bottom:10px; font-size:12.5px; }
+.queue-banner .tick { font-variant-numeric:tabular-nums; color:#fdba74;
+    font-weight:700; min-width:32px; text-align:right; }
+.queue-banner .bar  { flex:1; height:6px; background:#1e293b; border-radius:3px;
+    overflow:hidden; }
+.queue-banner .bar > div { height:100%; background:linear-gradient(90deg,#0ea5e9,#22c55e);
+    transition: width .9s linear; }
 </style>
 </head>
 <body>
@@ -770,6 +844,7 @@ async function renderDeals() {
 
     sec.innerHTML = `
         <div class="toolbar">${tabs}</div>
+        ${dealsStatus==="queue" ? renderQueueBanner(deals.length) : ""}
         <div class="toolbar" style="flex-wrap:wrap;">
           <input id="dF_q" placeholder="Suche (ID/Titel/URL)…" value="${esc(dealsFilter.q)}" style="min-width:240px;">
           <select id="dF_market">${marketOpts}</select>
@@ -794,7 +869,7 @@ async function renderDeals() {
         </div>
         <table><thead><tr>
             <th></th><th>ID</th><th>Product</th><th>Market</th><th>Title</th>
-            <th>Prio</th><th>Retry</th><th>Created</th><th></th>
+            <th>Live-Status</th><th>Prio</th><th>Retry</th><th>Created</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>`;
 
     $("#dF_q").onchange = e => dealsFilter.q = e.target.value;
@@ -809,6 +884,41 @@ function resetDealFilter() {
     dealsFilter = { q:"", market:"", only_no_image:false, only_no_price:false, min_price:"", max_price:"" };
     renderDeals();
 }
+
+// ─── Queue-Live-Banner (Tick-Anzeige) ───
+// Standard-Tick aus core.config (WATCH_INTERVAL_SECS env, Fallback 10).
+let __queueTickSecs = 10;
+let __queueTickCounter = 0;
+function renderQueueBanner(count) {
+    const next = Math.max(0, __queueTickSecs - __queueTickCounter);
+    const pct  = Math.min(100, (__queueTickCounter / __queueTickSecs) * 100);
+    const msg  = count
+      ? `<strong>${count}</strong> Deal(s) warten → nächster telRouter-Tick in <span class="tick">${next}s</span>`
+      : `Queue leer — nächster Polling-Tick in <span class="tick">${next}s</span>`;
+    return `<div class="queue-banner">
+        <span>🔄</span><span style="flex:0 0 auto;">${msg}</span>
+        <div class="bar"><div style="width:${pct}%;"></div></div>
+    </div>`;
+}
+setInterval(() => {
+    if (activeTab !== "deals" || dealsStatus !== "queue") { __queueTickCounter = 0; return; }
+    __queueTickCounter += 1;
+    if (__queueTickCounter >= __queueTickSecs) {
+        __queueTickCounter = 0;
+        renderDeals();  // alle Xs frisch laden, parallel zum Worker-Tick
+    } else {
+        // nur Banner aktualisieren (kein DB-Hit)
+        const sec = document.querySelector("#tab-deals .queue-banner");
+        if (sec) {
+            const next = __queueTickSecs - __queueTickCounter;
+            const pct  = Math.min(100, (__queueTickCounter / __queueTickSecs) * 100);
+            const tEl = sec.querySelector(".tick");
+            const bEl = sec.querySelector(".bar > div");
+            if (tEl) tEl.textContent = `${next}s`;
+            if (bEl) bEl.style.width = `${pct}%`;
+        }
+    }
+}, 1000);
 function toggleSelect(id, checked) {
     if (checked) dealsSelected.add(id); else dealsSelected.delete(id);
     // Nur Header-Zeile updaten — voll re-render macht Liste flackern
@@ -1274,6 +1384,7 @@ async function renderSettings() {
           <button class="act" onclick="newCfgKey()">+ neuer Key</button>
           <button class="act" onclick="renderSettings()">↻ Refresh</button>
           <button class="act" onclick="dbBackup()">💾 DB-Backup</button>
+          <button class="act" onclick="resetSentAsins()" title="Leert das Duplikat-Register → zuvor gesendete Deals können erneut versendet werden">🔄 sent_asins leeren</button>
           <button class="act danger" onclick="dbReset()">⚠ DB Reset</button>
         </div>
         ${html}`;
@@ -1295,6 +1406,16 @@ async function dbReset() {
         alert(`DB zurückgesetzt.\nBackup: ${r.backup || "(keins)"}\n\nBitte run_all neu starten, damit Worker frische Sessions ziehen.`);
         renderSettings();
     } catch (e) { alert("Reset fehlgeschlagen: " + e); }
+}
+async function resetSentAsins() {
+    let info;
+    try { info = await api("/api/admin/sent_asins"); } catch(e) { alert(e); return; }
+    if (!confirm(`Duplikat-Register leeren?\n\nAktuell: ${info.asin_count} ASIN/Produkt-IDs, ${info.filehash_count} Filehashes.\n\nDanach können alle zuvor versendeten Deals erneut in die Queue → telRouter übernimmt sie wieder.`)) return;
+    try {
+        await api("/api/admin/sent_asins/reset", { method:"POST",
+            headers:{"Content-Type":"application/json"}, body:"{}" });
+        alert("✅ Duplikat-Register geleert.");
+    } catch (e) { alert("Fehlgeschlagen: " + e); }
 }
 async function saveCfg(key, value) {
     await api(`/api/config/${encodeURIComponent(key)}`, {
@@ -1339,6 +1460,8 @@ async function render() {
 render();
 setInterval(() => {
     if (["overview","workers","timeline"].includes(activeTab)) render();
+    // Deals-Tab: nur queue/processing automatisch nachladen (5s)
+    else if (activeTab === "deals" && ["queue","processing"].includes(dealsStatus)) renderDeals();
 }, 3000);
 </script>
 </body>

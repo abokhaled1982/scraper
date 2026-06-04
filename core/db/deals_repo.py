@@ -262,8 +262,50 @@ def _to_dict(d: Deal) -> dict:
 # Dashboard-Operationen
 # ───────────────────────────────────────────────────────────────
 
+def _purge_from_sent_registries(deal) -> None:
+    """Entfernt einen Deal aus den Duplikat-Registern, sodass Worker ihn
+    beim n\u00e4chsten Tick wieder verarbeiten (statt als 'already sent' zu droppen).
+
+    Betroffene Stores (state_kv):
+      - sent_ids:facebook  (fb_watcher in-memory + DB)
+      - sent_asins         (telRouter Duplikat-Schutz)
+    """
+    try:
+        from . import state_repo  # lokal, vermeidet Zyklen
+    except Exception:
+        return
+    pid = deal.product_id
+    payload = deal.payload if isinstance(deal.payload, dict) else {}
+    asin = payload.get("asin") if isinstance(payload, dict) else None
+
+    # 1) sent_ids:facebook (Set)
+    try:
+        sent = state_repo.get_set("sent_ids:facebook")
+        if pid and pid in sent:
+            sent.discard(pid)
+            state_repo.put("sent_ids:facebook", sorted(sent))
+    except Exception:
+        pass
+
+    # 2) sent_asins (dict mit 'asin' + 'filehash')
+    try:
+        reg = state_repo.get_dict("sent_asins") or {"asin": [], "filehash": []}
+        changed = False
+        for candidate in (pid, asin):
+            if candidate and candidate in reg.get("asin", []):
+                reg["asin"] = [a for a in reg["asin"] if a != candidate]
+                changed = True
+        if changed:
+            state_repo.put("sent_asins", reg)
+    except Exception:
+        pass
+
+
 def requeue(deal_id: int) -> bool:
-    """Setzt einen Deal (jeden Status) zurück in die Queue."""
+    """Setzt einen Deal (jeden Status) zur\u00fcck in die Queue.
+    R\u00e4umt automatisch die Duplikat-Register, sonst w\u00fcrde der n\u00e4chste
+    Worker-Tick den Deal sofort wieder als 'already sent' abr\u00e4umen.
+    """
     with session_scope() as s:
         d = s.get(Deal, deal_id)
         if not d:
@@ -272,6 +314,7 @@ def requeue(deal_id: int) -> bool:
         d.locked_by = None
         d.locked_at = None
         d.error_message = None
+        _purge_from_sent_registries(d)
         s.add(DealEvent(deal=d, event="requeued", detail="dashboard"))
         return True
 
@@ -528,6 +571,7 @@ def bulk_requeue(ids: Iterable[int], priority: int | None = None) -> int:
             d.error_message = None
             if priority is not None:
                 d.priority = int(priority)
+            _purge_from_sent_registries(d)
             s.add(DealEvent(deal=d, event="requeued", detail=f"bulk(prio={priority})"))
             n += 1
     return n
