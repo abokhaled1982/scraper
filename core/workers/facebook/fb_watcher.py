@@ -93,7 +93,18 @@ async def run_init_phase(fb_service) -> None:
     fb_service.init()
     await asyncio.sleep(1)  # kurz warten bis Thread hochgefahren
 
-    # Schritt 2: Verbindung sicherstellen — wie ensure_logged_in() bei Telegram
+    # Schritt 2: Chrome mit eigenem Profil + Facebook-Addon auto-starten,
+    # damit sich die Extension automatisch beim WebSocket-Server meldet
+    # (kein manuelles Chrome-Öffnen / Addon-Laden mehr nötig).
+    import os as _os
+    from core.workers.chrome_launcher import ChromeProfile
+    fb_profile_name = _os.environ.get("FACEBOOK_CHROME_PROFILE", "facebook")
+    fb_addon_dir    = _os.environ.get("FACEBOOK_ADDON_DIR", "addons/facebook")
+    fb_start_url    = _os.environ.get("FACEBOOK_START_URL", "https://www.facebook.com/")
+    fb_chrome = ChromeProfile(fb_profile_name, addons=[fb_addon_dir])
+    fb_chrome.launch_if_needed(start_url=fb_start_url)
+
+    # Schritt 3: Verbindung sicherstellen — wie ensure_logged_in() bei Telegram
     log.info("[FACEBOOK] Warte auf Extension-Verbindung vor dem Start...")
     connected = await asyncio.get_event_loop().run_in_executor(
         None,

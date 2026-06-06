@@ -26,6 +26,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from core.logging import get_logger  # noqa: E402
 log = get_logger("product_opener")  # noqa: E402
 from core.db import state_repo
+from core.workers.chrome_launcher import ChromeProfile  # noqa: E402
 
 _PRODUCT_LIST_KEY = "product_list"
 _OPENED_KEY = "opened"
@@ -35,7 +36,10 @@ CHROME_BIN = os.environ.get(
     "CHROME_BIN",
     "/usr/bin/google-chrome"  # or "/usr/bin/chromium-browser" depending on what is installed
 )
-PROFILE_NAME   = os.environ.get("CHROME_PROFILE", "Profile 1")
+# Dediziertes Worker-Profil (eigenes user-data-dir) + Auto-Load der Extension
+PROFILE_NAME   = os.environ.get("AMAZON_CHROME_PROFILE", "amazon")
+ADDON_DIR      = os.environ.get("AMAZON_ADDON_DIR", "addons/proudct_parser")
+_chrome = ChromeProfile(PROFILE_NAME, addons=[ADDON_DIR])
 PAUSE_SECONDS  = int(os.environ.get("PAUSE_SECONDS", "30"))
 SKIP_TTL_SECONDS = int(os.environ.get("SKIP_TTL_SECONDS", str(24*3600)))
 DRY_RUN = os.environ.get("DRY_RUN", "0") not in ("0", "", "false", "False", "no", "No")
@@ -130,16 +134,7 @@ def open_in_chrome(url: str) -> bool:
     if DRY_RUN:
         log.info(f"[DRY-RUN] Would open: {url}")
         return True
-    cmd = [CHROME_BIN, f"--profile-directory={PROFILE_NAME}", "--new-tab", url]
-    try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except FileNotFoundError:
-        log.info(f"[ERR] Chrome not found: {CHROME_BIN}")
-        return False
-    except Exception as e:
-        log.info(f"[ERR] launching Chrome: {e}")
-        return False
+    return _chrome.open(url, new_tab=True)
 
 def compute_canonical(url: str, meta: dict) -> tuple[str, str]:
     return canonicalize_amazon_url(url), compute_meta_hash(meta)

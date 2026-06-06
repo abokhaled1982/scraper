@@ -35,3 +35,14 @@ core_data.db-shm
 *.db-shm
 
 .log/
+
+# ──────────────────────────────────────────────
+# Chrome-Profile + systemd-Daten liegen außerhalb
+# (~/.local/share/scraper/), aber Backup-Tarballs
+# o.ä. landen evtl. hier:
+# ──────────────────────────────────────────────
+chrome_profiles/
+profiles/
+scripts/*.local
+*.tar.gz
+

@@ -38,9 +38,19 @@ _arg_parser.add_argument(
     action="store_true",
     help="Zeigt eine kompakte Live-Konsole (statisches Layout) statt scrollender Logs.",
 )
+_arg_parser.add_argument(
+    "--setup-profiles",
+    nargs="?",
+    const="all",
+    choices=["all", "facebook", "amazon"],
+    default=None,
+    help="Einmaliger Profil-Login: \u00f6ffnet Chrome mit Worker-Profil + Addon, "
+         "damit du dich einloggen kannst. Beendet sich danach.",
+)
 ARGS = _arg_parser.parse_args()
 MODE = ARGS.mode
 USE_TUI = ARGS.tui
+SETUP_TARGET = ARGS.setup_profiles
 
 # ----------------------------------------------------------
 # Initial Setup & Pfade
@@ -62,7 +72,7 @@ load_dotenv()
 SESSION_DIR = os.getenv("SESSION_DIR", ".sessions")
 
 # Telegram-Konfiguration + Import nur im full-Modus
-if MODE == "full":
+if MODE == "full" and not SETUP_TARGET:
     try:
         from core.workers.telegram.login_once import LoginConfig, ensure_both_sessions_sequential
     except ImportError:
@@ -172,6 +182,75 @@ async def do_telegram_login_check():
 # ----------------------------------------------------------
 # Main Supervisor
 # ----------------------------------------------------------
+def setup_profiles(target: str) -> int:
+    """Einmaliger interaktiver Profil-Login (Facebook/Amazon).
+
+    \u00d6ffnet Chrome mit dem jeweiligen Worker-Profil + geladener Extension,
+    damit der Nutzer sich einloggen kann. Sessions bleiben anschlie\u00dfend
+    persistent im Profil-Ordner.
+    """
+    import subprocess
+    from core.workers.chrome_launcher import (
+        ChromeProfile,
+        _resolve_chrome_bin,
+        _resolve_addon_paths,
+    )
+
+    targets = {
+        "facebook": (
+            os.environ.get("FACEBOOK_CHROME_PROFILE", "facebook"),
+            os.environ.get("FACEBOOK_ADDON_DIR", "addons/facebook"),
+            os.environ.get("FACEBOOK_START_URL", "https://www.facebook.com/"),
+        ),
+        "amazon": (
+            os.environ.get("AMAZON_CHROME_PROFILE", "amazon"),
+            os.environ.get("AMAZON_ADDON_DIR", "addons/proudct_parser"),
+            os.environ.get("AMAZON_START_URL", "https://www.amazon.de/"),
+        ),
+    }
+    order = ["facebook", "amazon"] if target == "all" else [target]
+
+    try:
+        chrome_bin = _resolve_chrome_bin()
+    except FileNotFoundError as e:
+        log.error(str(e))
+        return 1
+
+    for key in order:
+        name, addon_rel, url = targets[key]
+        prof = ChromeProfile(name, addons=[addon_rel])
+        addon_abs = _resolve_addon_paths([addon_rel])
+        if not addon_abs:
+            log.error(f"[setup] Addon nicht gefunden: {addon_rel}")
+            return 2
+
+        log.info("\n" + "=" * 60)
+        log.info(f"\u25b6  Setup f\u00fcr Profil: {name}")
+        log.info(f"   Profile-Dir : {prof.user_data_dir}")
+        log.info(f"   Extension   : {addon_abs[0]}")
+        log.info(f"   URL         : {url}")
+        log.info("=" * 60)
+        log.info("\u23f3  Bitte einloggen / Berechtigungen erteilen,")
+        log.info("   danach das Fenster SCHLIESSEN, um zum n\u00e4chsten Schritt zu kommen.\n")
+
+        cmd = [
+            chrome_bin,
+            f"--user-data-dir={prof.user_data_dir}",
+            f"--load-extension={addon_abs[0]}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            url,
+        ]
+        try:
+            subprocess.run(cmd, check=False)
+        except KeyboardInterrupt:
+            log.info("[setup] Abgebrochen.")
+            return 130
+
+    log.info("\n\u2705 Setup abgeschlossen. Du kannst jetzt 'python run_all.py' starten.")
+    return 0
+
+
 async def main():
     os.chdir(HERE)
     _ensure_dirs()
@@ -279,6 +358,9 @@ async def _wait_and_shutdown(procs: List[Tuple[str, asyncio.subprocess.Process]]
     log.info("[supervisor] all stopped")
 
 if __name__ == "__main__":
+    # Setup-Modus läuft synchron, ohne DB/Telegram-Init und ohne Supervisor.
+    if SETUP_TARGET:
+        sys.exit(setup_profiles(SETUP_TARGET))
     try:
         asyncio.run(main())
     except Exception as e:

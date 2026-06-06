@@ -556,10 +556,11 @@ def test_block_opener(r: Result) -> None:
 
     # open_in_chrome mit gemocktem subprocess
     def _chrome_real_call():
+        from core.workers import chrome_launcher
         orig_dry = product_opener.DRY_RUN
         product_opener.DRY_RUN = False
         try:
-            with patch.object(product_opener.subprocess, "Popen") as popen:
+            with patch.object(chrome_launcher.subprocess, "Popen") as popen:
                 product_opener.open_in_chrome("https://x.de/dp/B0")
                 assert_true(popen.called, "Popen should be called")
                 args = popen.call_args[0][0]
