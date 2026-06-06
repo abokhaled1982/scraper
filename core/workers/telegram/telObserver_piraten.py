@@ -71,14 +71,41 @@ SESSION_DIR = os.getenv("SESSION_DIR", ".sessions")
 PHONE = os.getenv("TELEGRAM_PHONE")
 PASSWORD = os.getenv("TELEGRAM_PASSWORD")
 
-# WICHTIG: Env-Variable für den Piraten-Kanal, z.B. PIRATEN_CHANNEL_INVITE_URL=https://t.me/PirateDeals
-PIRATEN_CHANNEL_REF = (os.getenv("PIRATEN_CHANNEL_INVITE_URL") or "").strip()
+# WICHTIG: Env-Variable für die Piraten-Kanäle. Mehrere Kanäle Komma-getrennt.
+# Optional kann jedem Kanal ein Label vorangestellt werden: "Label=URL".
+# Unterstützte URL-Formate:
+#   - https://t.me/Username                     (öffentlich)
+#   - https://t.me/+InviteHash                  (privat)
+#   - https://web.telegram.org/a/#-100XXXXXXXXXX (Kanal-ID; Account muss Mitglied sein)
+#   - -100XXXXXXXXXX                            (rohe Kanal-ID)
+_RAW_REFS = (os.getenv("PIRATEN_CHANNEL_INVITE_URL") or "").strip()
+
+def _parse_refs_with_labels(raw: str):
+    """Parst "Label=URL,Label2=URL2,URLohneLabel" → Liste von (label_or_None, url)."""
+    items = []
+    for chunk in re.split(r"[,\s;]+", raw):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" in chunk and not chunk.lstrip().startswith("http"):
+            label, _, url = chunk.partition("=")
+            label = label.strip() or None
+            url = url.strip()
+            if url:
+                items.append((label, url))
+        else:
+            items.append((None, chunk))
+    return items
+
+PIRATEN_CHANNEL_ENTRIES = _parse_refs_with_labels(_RAW_REFS)
+PIRATEN_CHANNEL_REFS = [u for _, u in PIRATEN_CHANNEL_ENTRIES]
+PIRATEN_CHANNEL_LABELS = {u: lbl for lbl, u in PIRATEN_CHANNEL_ENTRIES if lbl}
 PIRATEN_SESSION_NAME = os.getenv("PIRATEN_SESSION_NAME", "piraten_session")
 
 if not API_ID or not API_HASH:
     raise SystemExit("❌ API_ID und API_HASH fehlen in .env")
-if not PIRATEN_CHANNEL_REF:
-    raise SystemExit("❌ PIRATEN_CHANNEL_INVITE_URL fehlt in .env! (z.B. https://t.me/PirateDeals)")
+if not PIRATEN_CHANNEL_REFS:
+    raise SystemExit("❌ PIRATEN_CHANNEL_INVITE_URL fehlt in .env! (z.B. PirateDeals=https://t.me/PirateDeals)")
 
 PIRATEN_CFG = LoginConfig(API_ID, API_HASH, PIRATEN_SESSION_NAME, SESSION_DIR, PHONE, PASSWORD)
 
@@ -185,51 +212,129 @@ def extract_best_url(raw_url: str) -> str:
 # ------------------------
 # Channel Management (robust)
 # ------------------------
+def _parse_channel_ref(ref: str):
+    """Übersetzt einen Roh-String in das, was Telethon auflösen kann.
+    Gibt entweder PeerChannel(id) (int-ID) oder den (gesäuberten) Username/URL zurück.
+    Zweiter Rückgabewert: optionaler Invite-Hash (für private t.me/+ Links).
+    """
+    ref = ref.strip()
+
+    # 1) Private Invite-Hash (t.me/+ABC oder t.me/joinchat/ABC)
+    m_inv = re.search(r'(?:t\.me/joinchat/|t\.me/\+|invite/)([A-Za-z0-9_-]+)', ref, re.I)
+    if m_inv:
+        return None, m_inv.group(1)
+
+    # 2) web.telegram.org/a/#-100XXXXXXXXXX oder /k/#-100XXX...
+    m_web = re.search(r'web\.telegram\.org/[ak]/#(-?\d+)', ref, re.I)
+    if m_web:
+        cid = int(m_web.group(1))
+        return _peer_from_int(cid), None
+
+    # 3) Rohe Channel-ID, z.B. -1001609138702 oder 1609138702
+    if re.fullmatch(r'-?\d{6,}', ref):
+        cid = int(ref)
+        return _peer_from_int(cid), None
+
+    # 4) Öffentlicher Username / t.me/Username
+    clean = re.sub(r'https?://t\.me/', '', ref).strip('/ ')
+    if clean.startswith('@'):
+        clean = clean[1:]
+    return clean, None
+
+
+def _peer_from_int(cid: int):
+    """Wandelt eine numerische Bot-API-ID in einen Telethon-Peer um."""
+    from telethon.tl.types import PeerChannel, PeerChat, PeerUser
+    # -100... → Channel/Supergroup
+    if cid <= -1000000000000:
+        return PeerChannel(int(str(cid)[4:]))
+    if cid < 0:
+        return PeerChat(-cid)
+    # Positive ID kann sowohl Channel als auch User sein – probiere Channel zuerst
+    return PeerChannel(cid)
+
+
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
     log.info(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
-    
-    entity = None
-    
-    # 1. Versuch: Ist es ein Private Invite Link (t.me/+)
-    invite_match = re.search(r'(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)', ref)
-    if invite_match:
-        invite_hash = invite_match.group(1)
+    target, invite_hash = _parse_channel_ref(ref)
+
+    # Privater Invite-Link: erst beitreten
+    if invite_hash:
         try:
-            await client(ImportChatInviteRequest(invite_hash))
+            updates = await client(ImportChatInviteRequest(invite_hash))
             log.info(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
+            chats = getattr(updates, 'chats', None) or []
+            if chats:
+                return chats[0]
         except UserAlreadyParticipantError:
-            pass # Alles gut, schon drin
+            log.info("ℹ️ Bereits Teilnehmer (Invite-Hash).")
         except Exception as e:
             log.warning(f"⚠️ Invite via Hash fehlgeschlagen: {e}")
+        target = invite_hash  # Marker für Dialog-Scan
 
-    # 2. Versuch: Öffentlicher Username / URL (z.B. t.me/PirateDeals)
-    # Wir säubern den Link, um nur den Usernamen zu bekommen
-    clean_ref = re.sub(r'https?:\/\/t\.me\/', '', ref).strip('/ ')
-    if clean_ref.startswith('@'):
-        clean_ref = clean_ref[1:]
+    # Bei numerischen IDs / PeerChannel: zuerst Dialoge in den Cache laden,
+    # damit get_entity() den access_hash kennt.
+    from telethon.tl.types import PeerChannel
+    needs_cache_warmup = isinstance(target, (int, PeerChannel)) or invite_hash is not None
+    if needs_cache_warmup:
+        try:
+            log.info("ℹ️ Lade Dialoge in den Cache ...")
+            await client.get_dialogs()
+        except Exception as e:
+            log.warning(f"⚠️ get_dialogs() fehlgeschlagen: {e}")
+
+    # Auflösung versuchen
+    try:
+        entity = await client.get_entity(target) if target is not None else None
+        if entity is not None:
+            title = getattr(entity, 'title', None) or getattr(entity, 'username', None) or str(target)
+            log.info(f"✅ Entity gefunden: {title}")
+            try:
+                await client(JoinChannelRequest(entity))
+                log.info("✅ Beitritt OK (oder war bereits Mitglied).")
+            except UserAlreadyParticipantError:
+                pass
+            except Exception as e_join:
+                log.info(f"ℹ️ Kein expliziter Join nötig/möglich: {e_join}")
+            return entity
+    except Exception as e:
+        log.warning(f"⚠️ get_entity({target!r}) fehlgeschlagen: {e} — durchsuche Dialoge ...")
+
+    # Robuster Dialog-Scan: vergleicht ID in mehreren Formen
+    target_ids = set()
+    if isinstance(target, int):
+        cid = abs(target)
+        if cid > 1_000_000_000_000:  # -100... entfernen
+            cid = int(str(cid)[3:])
+        target_ids.add(cid)
+        target_ids.add(target)
+    elif isinstance(target, PeerChannel):
+        target_ids.add(target.channel_id)
+        target_ids.add(-1_000_000_000_000 - target.channel_id)
 
     try:
-        # Erst versuchen wir, die Entität zu finden
-        entity = await client.get_entity(clean_ref)
-        log.info(f"✅ Entity gefunden: {getattr(entity, 'title', clean_ref)}")
-        
-        # WICHTIG: Jetzt explizit beitreten, falls es ein öffentlicher Kanal ist
-        # Bei privaten Chats würde das fehlschlagen, daher try/except
-        try:
-            await client(JoinChannelRequest(entity))
-            log.info("✅ Erfolgreich dem öffentlichen Kanal beigetreten (oder war bereits drin).")
-        except UserAlreadyParticipantError:
-            pass
-        except Exception as e_join:
-            # Manche Entities (z.B. Chats) erlauben kein JoinChannelRequest, das ist okay
-            log.info(f"ℹ️ Kein expliziter Join nötig oder möglich: {e_join}")
-            
-        return entity
-
+        from telethon.utils import get_peer_id
+        async for dialog in client.iter_dialogs():
+            ent = dialog.entity
+            try:
+                peer_marked = get_peer_id(ent)  # -100<id> Form
+            except Exception:
+                peer_marked = None
+            ent_id = getattr(ent, 'id', None)
+            if ent_id in target_ids or peer_marked in target_ids:
+                log.info(f"✅ Entity in Dialogs gefunden: {getattr(ent, 'title', ent_id)} (id={ent_id})")
+                return ent
     except Exception as e:
-        log.error(f"❌ Kritischer Fehler: Konnte {ref} nicht auflösen oder beitreten.")
-        log.error(f"   Fehler: {e}")
-        raise
+        log.error(f"❌ Dialog-Scan fehlgeschlagen: {e}")
+
+    raise RuntimeError(
+        f"Konnte {ref} nicht auflösen.\n"
+        f"   → Der Account ist offenbar (noch) NICHT Mitglied dieses Kanals.\n"
+        f"   → Mit nur einer Kanal-ID kann Telethon nicht beitreten – "
+        f"bitte öffne den Kanal einmal manuell in der Telegram-App (über Invite-Link "
+        f"oder Username) oder setze in der .env stattdessen einen Username (https://t.me/xyz) "
+        f"bzw. Invite-Link (https://t.me/+ABC...) für diesen Kanal."
+    )
 # ------------------------
 # Message Handling (wie telObserver)
 # ------------------------
@@ -265,7 +370,7 @@ def extract_links_from_msg(msg) -> list:
     return links
 
 async def process_message_links(links: list, chat_name: str, log_preview: str = ""):
-    """Löst Kurzlinks auf und trägt sie in product_list.json ein."""
+    """Löst Kurzlinks auf und trägt sie in die DB ein. Loggt pro Link „URL  ←  [Kanal]“."""
     added_count = 0
     if log_preview:
         log.info(f"[PIRATEN:{chat_name}] Links gefunden ({len(links)}): {log_preview[:120]}")
@@ -276,22 +381,25 @@ async def process_message_links(links: list, chat_name: str, log_preview: str = 
             success, reason = add_link_to_product_list(url)
             if success:
                 added_count += 1
-                log.info(f"[PIRATEN] ✅ Hinzugefügt: {url}")
+                log.info(f"🔗 {url}   ←  [{chat_name}]")
             else:
-                log.info(f"[PIRATEN] ℹ️ {reason}: {url}")
+                log.info(f"[PIRATEN] ℹ️ {reason}: {url}   ←  [{chat_name}]")
         except Exception as e:
             log.error(f"[PIRATEN] Fehler bei {raw_url}: {e}")
     if added_count > 0:
         log.info(f"[PIRATEN:{chat_name}] ✅ {added_count} neue Links gespeichert.")
     return added_count
 
-async def handle_message(evt: events.NewMessage.Event):
+async def handle_message(evt: events.NewMessage.Event, chat_name_override: str | None = None):
     msg = evt.message
-    try:
-        chat = await evt.get_chat()
-        chat_name = getattr(chat, "title", None) or getattr(chat, "username", None) or "Kanal"
-    except Exception:
-        chat_name = "Kanal"
+    if chat_name_override:
+        chat_name = chat_name_override
+    else:
+        try:
+            chat = await evt.get_chat()
+            chat_name = getattr(chat, "title", None) or getattr(chat, "username", None) or "Kanal"
+        except Exception:
+            chat_name = "Kanal"
 
     text = (msg.message or "").strip()
     log_preview = text.replace('\n', ' ')
@@ -315,29 +423,64 @@ async def _amain():
     _WORKER = "tel_observer_piraten"
     workers_repo.register(_WORKER)
     log.info(f"🏴‍☠️ Starte Piraten-Observer Session: {PIRATEN_SESSION_NAME}")
+    log.info(f"🏴‍☠️ Kanäle ({len(PIRATEN_CHANNEL_REFS)}): {PIRATEN_CHANNEL_REFS}")
     client = await ensure_logged_in(PIRATEN_CFG)
     async with client:
-        entity = await _ensure_join_and_resolve(client, PIRATEN_CHANNEL_REF)
-        chat_name = getattr(entity, 'title', PIRATEN_CHANNEL_REF)
-        log.info(f"🏴‍☠️ Überwache Kanal: {chat_name}")
-        workers_repo.set_task(_WORKER, f"watching {chat_name}")
+        entities = []
+        # Mapping: entity.id -> Anzeigename (Label aus .env hat Vorrang)
+        id_to_name: Dict[int, str] = {}
+        for ref in PIRATEN_CHANNEL_REFS:
+            try:
+                ent = await _ensure_join_and_resolve(client, ref)
+                title = (
+                    PIRATEN_CHANNEL_LABELS.get(ref)
+                    or getattr(ent, 'title', None)
+                    or getattr(ent, 'username', None)
+                    or str(ref)
+                )
+                entities.append(ent)
+                id_to_name[ent.id] = title
+                log.info(f"   ✅ {ref}  →  {title} (id={ent.id})")
+            except Exception as e:
+                log.error(f"❌ Kanal {ref} übersprungen: {e}")
 
-        # ── Catch-Up: letzte N Nachrichten beim Start verarbeiten ──────────
+        if not entities:
+            raise SystemExit("❌ Kein einziger Kanal konnte aufgelöst werden – Abbruch.")
+
+        log.info(f"🏴‍☠️ Überwache {len(entities)} Kanal/Kanäle: {list(id_to_name.values())}")
+        workers_repo.set_task(_WORKER, f"watching {len(entities)} channel(s)")
+
+        # ── Catch-Up: letzte N Nachrichten je Kanal beim Start verarbeiten ──
         if CATCHUP_MESSAGES > 0:
-            log.info(f"⏪ Catch-Up: verarbeite letzte {CATCHUP_MESSAGES} Nachrichten...")
+            log.info(f"⏪ Catch-Up: verarbeite letzte {CATCHUP_MESSAGES} Nachrichten je Kanal...")
             total_added = 0
-            async for msg in client.iter_messages(entity, limit=CATCHUP_MESSAGES):
-                links = extract_links_from_msg(msg)
-                if links:
-                    added = await process_message_links(links, chat_name)
-                    total_added += added
+            for ent in entities:
+                name = id_to_name.get(ent.id, "Kanal")
+                async for msg in client.iter_messages(ent, limit=CATCHUP_MESSAGES):
+                    links = extract_links_from_msg(msg)
+                    if links:
+                        added = await process_message_links(links, name)
+                        total_added += added
             log.info(f"⏪ Catch-Up abgeschlossen: {total_added} neue Links hinzugefügt.\n")
 
         # ── Live-Listener: neue Nachrichten ───────────────────────────────
-        @client.on(events.NewMessage(chats=entity))
+        @client.on(events.NewMessage(chats=entities))
         async def _on(evt):
             try:
-                await handle_message(evt)
+                # Label aus .env nutzen, sonst Telegram-Titel
+                chat_id = getattr(evt.chat_id, "real", None) or evt.chat_id
+                # evt.chat_id ist bereits int (-100... Form); auf raw id mappen
+                raw = abs(chat_id)
+                if raw > 1_000_000_000_000:
+                    raw = int(str(raw)[3:])
+                chat_name = id_to_name.get(raw) or id_to_name.get(chat_id) or "Kanal"
+                if chat_name == "Kanal":
+                    try:
+                        chat = await evt.get_chat()
+                        chat_name = getattr(chat, "title", None) or getattr(chat, "username", None) or "Kanal"
+                    except Exception:
+                        pass
+                await handle_message(evt, chat_name_override=chat_name)
                 workers_repo.set_task(_WORKER, "processed message")
             except Exception as e:
                 workers_repo.set_error(_WORKER, str(e)[:200])
