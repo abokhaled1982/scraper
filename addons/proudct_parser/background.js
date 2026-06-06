@@ -272,6 +272,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return;
     }
 
+    // ── Tab fokussieren: vor Clipboard-Reads im Content-Script ──────────────
+    // Bringt sowohl den Tab als auch sein Fenster in den Vordergrund, damit
+    // navigator.clipboard.readText() nicht mit "Document is not focused"
+    // abbricht. Spiegelt das Facebook-Addon-Verhalten (Tab-Focus-Guard).
+    if (msg?.type === "FOCUS_TAB") {
+      const tab = _sender.tab;
+      if (!tab?.id) {
+        sendResponse({ ok: false, error: "no_tab_id" });
+        return;
+      }
+      try {
+        await chrome.tabs.update(tab.id, { active: true });
+        if (typeof tab.windowId === "number") {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+        sendResponse({ ok: true, tabId: tab.id, windowId: tab.windowId ?? null });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e && e.message ? e.message : e) });
+      }
+      return;
+    }
+
     if (msg?.type === "DOWNLOAD_FILE") {
       const { filename, content, mime = "text/html;charset=utf-8" } = msg;
       try {

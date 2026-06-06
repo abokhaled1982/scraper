@@ -172,6 +172,40 @@
   }
 
   /**
+   * Fordert vom Background-Script an, den aktuellen Tab + sein Fenster in
+   * den Vordergrund zu bringen. Das ist der robusteste Weg gegen
+   * "Document is not focused" – analog zum Tab-Focus-Guard im Facebook-Addon
+   * (chrome.tabs.update + chrome.windows.update).
+   *
+   * @returns {Promise<boolean>} true, wenn der Background bestätigt hat.
+   */
+  function requestTabFocus() {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "FOCUS_TAB" }, (resp) => {
+          if (chrome.runtime.lastError) {
+            console.warn(
+              `[Focus] FOCUS_TAB runtime error: ${chrome.runtime.lastError.message}`
+            );
+            resolve(false);
+            return;
+          }
+          if (!resp?.ok) {
+            console.warn(`[Focus] FOCUS_TAB rejected: ${resp?.error || "unknown"}`);
+            resolve(false);
+            return;
+          }
+          resolve(true);
+        });
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        console.warn(`[Focus] FOCUS_TAB threw: ${msg}`);
+        resolve(false);
+      }
+    });
+  }
+
+  /**
    * Versucht, dem Dokument den Fokus zu geben, damit
    * navigator.clipboard.readText() nicht mit "Document is not focused" abbricht.
    * Best-effort: in Hintergrund-Tabs ist das nicht garantiert, aber im aktiven
@@ -232,35 +266,60 @@
    * Vorschau, damit man auf jedem Rechner sehen kann, was tatsächlich
    * zurückkommt. Liefert immer ein Objekt – nie eine Exception.
    *
-   * Strategie:
+   * Strategie (analog zum Facebook-Addon-Tab-Focus-Guard):
    *   1) Async-API (navigator.clipboard.readText) nach Fokus-Anforderung.
-   *   2) Bei Fehler (typisch "Document is not focused") Fallback über
-   *      execCommand("paste") in eine versteckte Textarea.
+   *   2) Bei "Document is not focused": Background bittet, den Tab + sein
+   *      Fenster zu aktivieren (chrome.tabs.update / chrome.windows.update),
+   *      danach erneut versuchen.
+   *   3) Letzter Fallback: execCommand("paste") in eine versteckte Textarea.
    *
    * @param {number} attempt - 1-basierter Versuchszähler (nur fürs Log).
    * @returns {Promise<{ok: boolean, value: string, error: string|null, source: string}>}
    */
   async function readClipboardSafe(attempt) {
     ensureDocumentFocused();
-    const focused = document.hasFocus();
 
-    // 1) Async-API versuchen
+    // 1) Erster Async-API-Versuch
     try {
       const raw = await navigator.clipboard.readText();
       const value = (raw || "").trim();
       const preview = value.length > 120 ? value.slice(0, 120) + "…" : value;
       console.log(
-        `[Clipboard] #${attempt} async ok (focused=${focused}) – len=${value.length}, value="${preview}"`
+        `[Clipboard] #${attempt} async ok (focused=${document.hasFocus()}) – len=${value.length}, value="${preview}"`
       );
       return { ok: true, value, error: null, source: "async" };
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
+      const isFocusError = /not focused|focus/i.test(msg);
       console.warn(
-        `[Clipboard] #${attempt} async failed (focused=${focused}): ${msg} – trying execCommand fallback`
+        `[Clipboard] #${attempt} async failed (focused=${document.hasFocus()}): ${msg}`
       );
+
+      // 2) Bei Fokus-Fehler: Tab + Fenster über Background aktiv setzen und retry
+      if (isFocusError) {
+        const focused = await requestTabFocus();
+        console.log(`[Clipboard] #${attempt} requested tab focus -> ${focused}`);
+        ensureDocumentFocused();
+        // Kurz warten, damit der Fokuswechsel im Renderer ankommt
+        await sleep(120);
+        try {
+          const raw2 = await navigator.clipboard.readText();
+          const value2 = (raw2 || "").trim();
+          const preview2 = value2.length > 120 ? value2.slice(0, 120) + "…" : value2;
+          console.log(
+            `[Clipboard] #${attempt} async ok after refocus (focused=${document.hasFocus()}) – len=${value2.length}, value="${preview2}"`
+          );
+          return { ok: true, value: value2, error: null, source: "async-refocus" };
+        } catch (e2) {
+          const msg2 = e2 && e2.message ? e2.message : String(e2);
+          console.warn(
+            `[Clipboard] #${attempt} async still failed after refocus: ${msg2} – trying execCommand fallback`
+          );
+        }
+      }
     }
 
-    // 2) Fallback über execCommand
+    // 3) Letzter Fallback: execCommand("paste")
     const fb = readClipboardViaExecCommand();
     if (fb.ok) {
       const preview = fb.value.length > 120 ? fb.value.slice(0, 120) + "…" : fb.value;
@@ -362,6 +421,7 @@
     // damit wir stale Inhalte sicher erkennen können.
     let clipboardWritable = true;
     try {
+      await requestTabFocus();
       ensureDocumentFocused();
       await navigator.clipboard.writeText(CLIPBOARD_SENTINEL);
     } catch (e) {
