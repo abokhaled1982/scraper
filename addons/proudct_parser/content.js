@@ -23,9 +23,10 @@
   const linkReadyForUrl = new Map(); // urlKey → affiliateLink-String
   let lastDeliveredLink = null;       // letzter erfolgreich gelieferter Link (zur Stale-Erkennung)
   let lastDeliveredUrlKey = null;     // urlKey, zu dem lastDeliveredLink gehört
-  // Sentinel, mit dem das Clipboard vor dem Copy-Klick überschrieben wird,
-  // um stale Inhalte sicher zu erkennen.
-  const CLIPBOARD_SENTINEL = "__amzn_ss_pending__";
+  // In-Flight-Lock: pro urlKey wird ensureStripeLinkReadyForCurrentProduct()
+  // serialisiert. Verhindert, dass parallele Trigger (interval/mutation/visibility)
+  // sich gegenseitig das Clipboard zerschießen.
+  const inFlightStripeByUrl = new Map(); // urlKey → Promise<string|null>
 
   // --- Dienstprogramme (Utils) ---
 
@@ -164,7 +165,6 @@
   function isPlausibleAffiliateLink(link) {
     if (!link || typeof link !== "string") return false;
     if (!/^https?:\/\//i.test(link)) return false;
-    if (link === CLIPBOARD_SENTINEL) return false;
     // amzn.to-Shortlink oder Amazon-URL mit Affiliate-Parametern
     if (/^https?:\/\/amzn\.to\/[A-Za-z0-9]+/i.test(link)) return true;
     if (/amazon\.[a-z.]+\/.*(?:tag=|linkCode=)/i.test(link)) return true;
@@ -338,21 +338,24 @@
    * plausiblen Affiliate-Link. Bewusst als for-Schleife mit festem
    * Versuchsbudget – einfacher zu debuggen als eine offene while-Schleife.
    *
+   * Statt eines Sentinels (der das Clipboard kaputt machen würde, wenn
+   * Amazons Copy-Click kein neues writeText auslöst) merken wir uns den
+   * Anfangsinhalt und akzeptieren nur Links, die sich davon unterscheiden.
+   *
    * @param {object} opts
    * @param {number} opts.attempts - Anzahl der Versuche.
    * @param {number} opts.intervalMs - Pause zwischen den Versuchen.
-   * @param {boolean} opts.clipboardWritable - true, wenn Sentinel geschrieben
-   *   werden konnte (dann gilt: Sentinel = "noch nichts Neues").
+   * @param {string} opts.baselineClipboard - Inhalt des Clipboards vor dem
+   *   Copy-Klick. Wird verworfen, wenn er identisch wiederkommt.
    * @returns {Promise<string|null>}
    */
-  async function pollForAffiliateLink({ attempts, intervalMs, clipboardWritable }) {
+  async function pollForAffiliateLink({ attempts, intervalMs, baselineClipboard }) {
     for (let i = 1; i <= attempts; i++) {
       // 1) Clipboard prüfen
       const clip = await readClipboardSafe(i);
       if (clip.ok) {
-        const isSentinel = clip.value === CLIPBOARD_SENTINEL;
-        const sentinelOk = clipboardWritable ? !isSentinel : true;
-        if (sentinelOk && isPlausibleAffiliateLink(clip.value)) {
+        const isBaseline = clip.value === baselineClipboard;
+        if (!isBaseline && isPlausibleAffiliateLink(clip.value)) {
           console.log(`[Poll] link via clipboard on attempt #${i}: ${clip.value}`);
           return clip.value;
         }
@@ -379,15 +382,44 @@
    * Öffnet das SiteStripe-Popover, klickt "Affiliate-Link kopieren" und
    * liefert den aktuellen Affiliate-Link. Strategie:
    *   1) DOM zuerst (Popover-Input/Anchor) – immer korrekt für das aktuelle Produkt.
-   *   2) Clipboard als Fallback, aber vorher mit Sentinel überschrieben und
-   *      anschließend gepollt, bis sich der Inhalt ändert.
+   *   2) Clipboard-Baseline merken, Copy klicken, auf Änderung warten.
    *   3) Stale-Detection: identischer Link für eine *andere* URL → verworfen.
+   *
+   * WICHTIG: Pro urlKey wird die Funktion serialisiert (Promise-Lock), damit
+   * parallele Trigger (interval/mutation/visibility) sich nicht gegenseitig
+   * das Clipboard zerschießen.
+   *
    * @returns {Promise<string|null>}
    */
   async function ensureStripeLinkReadyForCurrentProduct() {
     const urlKey = location.href.split("#")[0];
     if (linkReadyForUrl.has(urlKey)) return linkReadyForUrl.get(urlKey);
 
+    // In-Flight-Lock: gibt es bereits einen laufenden Resolve für diese URL,
+    // hängen wir uns einfach an dessen Promise. Verhindert Race Conditions
+    // beim Clipboard und doppelte Copy-Button-Klicks.
+    if (inFlightStripeByUrl.has(urlKey)) {
+      console.log("[Stripe] join in-flight resolver for", urlKey);
+      return inFlightStripeByUrl.get(urlKey);
+    }
+
+    const promise = (async () => {
+      try {
+        return await _resolveStripeLink(urlKey);
+      } finally {
+        inFlightStripeByUrl.delete(urlKey);
+      }
+    })();
+
+    inFlightStripeByUrl.set(urlKey, promise);
+    return promise;
+  }
+
+  /**
+   * Tatsächliche Resolve-Implementierung. Wird nur einmal pro urlKey gleichzeitig
+   * ausgeführt (siehe ensureStripeLinkReadyForCurrentProduct-Lock).
+   */
+  async function _resolveStripeLink(urlKey) {
     // Schritt 1: SiteStripe-Popover öffnen
     if (!clickedOnceForUrl.has(urlKey)) {
       const btn = await waitForStripeButton();
@@ -417,17 +449,27 @@
       }
     }
 
-    // Schritt 3: Clipboard vor dem Copy-Klick mit Sentinel überschreiben,
-    // damit wir stale Inhalte sicher erkennen können.
-    let clipboardWritable = true;
-    try {
-      await requestTabFocus();
-      ensureDocumentFocused();
-      await navigator.clipboard.writeText(CLIPBOARD_SENTINEL);
-    } catch (e) {
-      clipboardWritable = false;
-      const msg = e && e.message ? e.message : String(e);
-      console.warn(`[Stripe] clipboard write (sentinel) failed: ${msg}`);
+    // Schritt 3: Baseline des Clipboards merken (statt Sentinel zu schreiben).
+    // Vorteil: wir zerstören keinen evtl. bereits korrekt gesetzten Affiliate-Link
+    // und können trotzdem erkennen, ob sich der Inhalt nach dem Copy-Klick ändert.
+    let baselineClipboard = "";
+    {
+      const baseline = await readClipboardSafe(0);
+      if (baseline.ok) {
+        baselineClipboard = baseline.value;
+        // Falls die Baseline bereits ein plausibler Link für DIESES Produkt ist
+        // (z. B. weil ein vorheriger Lauf erfolgreich war), direkt verwenden.
+        if (
+          isPlausibleAffiliateLink(baselineClipboard) &&
+          (!lastDeliveredUrlKey || lastDeliveredUrlKey === urlKey)
+        ) {
+          console.log("[Stripe] baseline clipboard already valid:", baselineClipboard);
+          linkReadyForUrl.set(urlKey, baselineClipboard);
+          lastDeliveredLink = baselineClipboard;
+          lastDeliveredUrlKey = urlKey;
+          return baselineClipboard;
+        }
+      }
     }
 
     // Schritt 4: "Affiliate-Link kopieren"-Button im Dialog abwarten und klicken
@@ -445,13 +487,12 @@
     console.log("[Stripe] clicking copy button");
     copyBtn.click();
 
-    // Schritt 5: Clipboard + DOM pollen, bis ein plausibler Link gefunden wird
-    // (max. ~10 s, in festen Intervallen). Für-Schleife statt while, damit jeder
-    // Versuch numerisch nachvollziehbar ist und sich leichter debuggen lässt.
+    // Schritt 5: Clipboard + DOM pollen, bis ein plausibler Link gefunden wird,
+    // der NICHT dem Baseline-Inhalt entspricht (max. ~10 s, feste Intervalle).
     const link = await pollForAffiliateLink({
       attempts: 20,
       intervalMs: 500,
-      clipboardWritable,
+      baselineClipboard,
     });
 
     if (!link) {
