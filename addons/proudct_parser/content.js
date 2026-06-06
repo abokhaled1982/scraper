@@ -172,27 +172,106 @@
   }
 
   /**
+   * Versucht, dem Dokument den Fokus zu geben, damit
+   * navigator.clipboard.readText() nicht mit "Document is not focused" abbricht.
+   * Best-effort: in Hintergrund-Tabs ist das nicht garantiert, aber im aktiven
+   * Tab (auch ohne Klick) hilft es zuverlässig.
+   */
+  function ensureDocumentFocused() {
+    try {
+      window.focus();
+    } catch {
+      /* noop */
+    }
+    try {
+      if (document.body && typeof document.body.focus === "function") {
+        document.body.focus({ preventScroll: true });
+      }
+    } catch {
+      /* noop */
+    }
+  }
+
+  /**
+   * Fallback-Read über eine versteckte <textarea> + execCommand("paste").
+   * Funktioniert in Content-Scripts auch dann, wenn die Async-Clipboard-API
+   * mit "Document is not focused" abbricht (z. B. wenn DevTools den Fokus hat).
+   *
+   * @returns {{ok: boolean, value: string, error: string|null}}
+   */
+  function readClipboardViaExecCommand() {
+    let ta = null;
+    try {
+      ta = document.createElement("textarea");
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.left = "-1000px";
+      ta.style.opacity = "0";
+      ta.style.pointerEvents = "none";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+
+      const ok = document.execCommand("paste");
+      const value = (ta.value || "").trim();
+      if (!ok && !value) {
+        return { ok: false, value: "", error: "execCommand('paste') returned false" };
+      }
+      return { ok: true, value, error: null };
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      return { ok: false, value: "", error: msg };
+    } finally {
+      if (ta && ta.parentNode) ta.parentNode.removeChild(ta);
+    }
+  }
+
+  /**
    * Liest den Clipboard-Inhalt sicher aus. Loggt jeden Versuch inklusive
    * Vorschau, damit man auf jedem Rechner sehen kann, was tatsächlich
    * zurückkommt. Liefert immer ein Objekt – nie eine Exception.
    *
+   * Strategie:
+   *   1) Async-API (navigator.clipboard.readText) nach Fokus-Anforderung.
+   *   2) Bei Fehler (typisch "Document is not focused") Fallback über
+   *      execCommand("paste") in eine versteckte Textarea.
+   *
    * @param {number} attempt - 1-basierter Versuchszähler (nur fürs Log).
-   * @returns {Promise<{ok: boolean, value: string, error: string|null}>}
+   * @returns {Promise<{ok: boolean, value: string, error: string|null, source: string}>}
    */
   async function readClipboardSafe(attempt) {
+    ensureDocumentFocused();
+    const focused = document.hasFocus();
+
+    // 1) Async-API versuchen
     try {
       const raw = await navigator.clipboard.readText();
       const value = (raw || "").trim();
       const preview = value.length > 120 ? value.slice(0, 120) + "…" : value;
       console.log(
-        `[Clipboard] attempt #${attempt} ok – len=${value.length}, value="${preview}"`
+        `[Clipboard] #${attempt} async ok (focused=${focused}) – len=${value.length}, value="${preview}"`
       );
-      return { ok: true, value, error: null };
+      return { ok: true, value, error: null, source: "async" };
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
-      console.warn(`[Clipboard] attempt #${attempt} failed: ${msg}`);
-      return { ok: false, value: "", error: msg };
+      console.warn(
+        `[Clipboard] #${attempt} async failed (focused=${focused}): ${msg} – trying execCommand fallback`
+      );
     }
+
+    // 2) Fallback über execCommand
+    const fb = readClipboardViaExecCommand();
+    if (fb.ok) {
+      const preview = fb.value.length > 120 ? fb.value.slice(0, 120) + "…" : fb.value;
+      console.log(
+        `[Clipboard] #${attempt} execCommand ok – len=${fb.value.length}, value="${preview}"`
+      );
+      return { ok: true, value: fb.value, error: null, source: "execCommand" };
+    }
+
+    console.warn(`[Clipboard] #${attempt} execCommand failed: ${fb.error}`);
+    return { ok: false, value: "", error: fb.error, source: "none" };
   }
 
   /**
@@ -283,10 +362,12 @@
     // damit wir stale Inhalte sicher erkennen können.
     let clipboardWritable = true;
     try {
+      ensureDocumentFocused();
       await navigator.clipboard.writeText(CLIPBOARD_SENTINEL);
     } catch (e) {
       clipboardWritable = false;
-      console.warn("[Stripe] clipboard write (sentinel) failed:", e);
+      const msg = e && e.message ? e.message : String(e);
+      console.warn(`[Stripe] clipboard write (sentinel) failed: ${msg}`);
     }
 
     // Schritt 4: "Affiliate-Link kopieren"-Button im Dialog abwarten und klicken
