@@ -714,6 +714,19 @@ const $ = sel => document.querySelector(sel);
 const esc = s => (s ?? "").toString()
     .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 
+// Live-Countdown bis zum nächsten Tick eines Workers (aus stats.next_run_at)
+function fmtNext(stats) {
+    const nra = stats && stats.next_run_at;
+    if (!nra) return '<small style="color:#64748b;">—</small>';
+    const t = Date.parse(nra.endsWith('Z') ? nra : nra + 'Z');
+    if (isNaN(t)) return '<small style="color:#64748b;">—</small>';
+    const rem = Math.max(0, Math.round((t - Date.now()) / 1000));
+    if (rem === 0) return '<span class="badge" style="background:#052e16;color:#4ade80;">🟢 jetzt</span>';
+    const col = rem < 15 ? '#4ade80' : (rem < 60 ? '#fde047' : '#67e8f9');
+    const lbl = rem >= 60 ? `${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')}` : `${rem}s`;
+    return `<span class="badge" style="background:#0f172a;color:${col};">⏳ ${lbl}</span>`;
+}
+
 let activeTab = "overview";
 
 document.querySelectorAll("nav button").forEach(b => {
@@ -744,21 +757,74 @@ async function renderOverview() {
     ].map(([k,l]) =>
         `<div class="card"><h2>${l}</h2><div class="v ${k}">${c[k] ?? 0}</div></div>`
     ).join("");
+
+    // "Nächster Versand"-Banner: kombiniert Queue-Count + früheste Worker-ETA
+    //   - Nur Worker mit next_run_at zählen (telRouter, fb_watcher)
+    //   - Wenn Queue leer ist → klar als "keine Deals" anzeigen
+    const senders = (data.workers || []).filter(w => (w.stats || {}).next_run_at);
+    let nextBanner = '';
+    const queueN = c.queue ?? 0;
+    if (queueN === 0) {
+        nextBanner = `
+        <div class="card" style="grid-column: 1 / -1; background:#0b1220; border:1px solid #1e293b;">
+          <h2>Nächster Versand</h2>
+          <div style="font-size:18px; color:#94a3b8;">Queue ist leer — kein Deal eingeplant</div>
+        </div>`;
+    } else if (senders.length) {
+        // früheste ETA über alle Sender-Worker
+        const etas = senders.map(w => {
+            const nra = w.stats.next_run_at;
+            const t = Date.parse(nra.endsWith('Z') ? nra : nra + 'Z');
+            return { name: w.name, t, paused: (w.current_task || '').includes('paused') };
+        }).filter(x => !isNaN(x.t));
+        if (etas.length) {
+            etas.sort((a,b) => a.t - b.t);
+            const earliest = etas[0];
+            const rem = Math.max(0, Math.round((earliest.t - Date.now()) / 1000));
+            const lbl = rem >= 60 ? `${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')} min` : `${rem} s`;
+            const col = rem < 15 ? '#4ade80' : (rem < 60 ? '#fde047' : '#67e8f9');
+            const all = etas.map(e => {
+                const r = Math.max(0, Math.round((e.t - Date.now()) / 1000));
+                const l = r >= 60 ? `${Math.floor(r/60)}:${String(r%60).padStart(2,'0')}` : `${r}s`;
+                return `<span class="badge" style="background:#0f172a;color:#cbd5e1;margin-right:6px;">
+                  ${esc(e.name)} <strong style="color:${col};">⏳ ${l}</strong></span>`;
+            }).join('');
+            nextBanner = `
+            <div class="card" data-eta="${earliest.t}" style="grid-column: 1 / -1; background:#0b1220; border:1px solid #1e293b;">
+              <h2>Nächster Versand <span style="color:#64748b;font-weight:normal;">(${queueN} in Queue)</span></h2>
+              <div style="font-size:28px; font-weight:700; color:${col};">⏳ ${lbl}</div>
+              <div style="margin-top:8px; font-size:12px; color:#94a3b8;">
+                Frühester Worker: <strong>${esc(earliest.name)}</strong></div>
+              <div style="margin-top:8px;">${all}</div>
+            </div>`;
+        }
+    } else {
+        nextBanner = `
+        <div class="card" style="grid-column: 1 / -1; background:#0b1220; border:1px solid #1e293b;">
+          <h2>Nächster Versand</h2>
+          <div style="font-size:16px; color:#fde047;">
+            ${queueN} Deal(s) in Queue, aber kein aktiver Sender-Worker meldet eine ETA.
+          </div>
+        </div>`;
+    }
+
     const rows = data.workers.length ? data.workers.map(w => `
         <tr>
           <td>${esc(w.name)}</td>
           <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span></td>
           <td>${esc(w.current_task || "")}</td>
+          <td>${fmtNext(w.stats)}</td>
           <td>${esc(w.pid || "")}</td>
           <td><small>${esc(w.last_heartbeat || "")}</small></td>
         </tr>`).join("")
-        : `<tr><td colspan="5"><small>noch keine Worker registriert</small></td></tr>`;
+        : `<tr><td colspan="6"><small>noch keine Worker registriert</small></td></tr>`;
     $("#tab-overview").innerHTML = `
         <div class="grid">${cards}</div>
+        ${nextBanner}
         <h2 style="font-size:13px; color:#94a3b8; text-transform:uppercase;
                    letter-spacing:.5px; margin:0 0 8px;">Worker</h2>
         <table><thead><tr>
-            <th>Name</th><th>Status</th><th>Aufgabe</th><th>PID</th><th>Heartbeat</th>
+            <th>Name</th><th>Status</th><th>Aufgabe</th><th>Next</th><th>PID</th><th>Heartbeat</th>
         </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -1327,6 +1393,7 @@ async function renderWorkers() {
           <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span>
               ${paused?'<span class="badge" style="background:#451a03;color:#fdba74;">⏸ pause</span>':''}</td>
           <td>${esc(w.current_task || "")}</td>
+          <td>${fmtNext(w.stats)}</td>
           <td>${esc(w.pid || "")}</td>
           <td><small>${esc(w.started_at || "")}</small></td>
           <td><small>${esc(w.last_heartbeat || "")}</small></td>
@@ -1343,7 +1410,7 @@ async function renderWorkers() {
         <p><small>Pause/Resume setzt ein Flag in der DB — der Worker pollt es.
         Stop = SIGTERM, Kill = SIGKILL. Restart braucht <code>run_all.py</code>.</small></p>
         <table><thead><tr>
-            <th>Name</th><th>Status</th><th>Aufgabe</th><th>PID</th>
+            <th>Name</th><th>Status</th><th>Aufgabe</th><th>Next</th><th>PID</th>
             <th>Started</th><th>Heartbeat</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>
 
@@ -1630,6 +1697,21 @@ setInterval(() => {
     // Deals-Tab: nur queue/processing automatisch nachladen (5s)
     else if (activeTab === "deals" && ["queue","processing"].includes(dealsStatus)) renderDeals();
 }, 3000);
+
+// Sekunden-Tick: Overview-Banner (Nächster Versand) zwischen den API-Polls
+// flüssig herunterzählen, ohne den ganzen DOM neu zu rendern.
+setInterval(() => {
+    if (activeTab !== "overview") return;
+    const card = document.querySelector('#tab-overview .card[data-eta]');
+    if (!card) return;
+    const t = parseInt(card.getAttribute('data-eta'), 10);
+    if (isNaN(t)) return;
+    const rem = Math.max(0, Math.round((t - Date.now()) / 1000));
+    const lbl = rem >= 60 ? `${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')} min` : `${rem} s`;
+    const col = rem < 15 ? '#4ade80' : (rem < 60 ? '#fde047' : '#67e8f9');
+    const big = card.querySelector('div[style*="font-size:28px"]');
+    if (big) { big.textContent = `⏳ ${lbl}`; big.style.color = col; }
+}, 1000);
 </script>
 </body>
 </html>

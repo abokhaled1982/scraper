@@ -62,6 +62,24 @@ def set_idle(name: str) -> None:
     heartbeat(name, state=WORKER_STATE_IDLE, current_task=None)
 
 
+def set_next_run(name: str, secs: float, label: str = "next tick") -> None:
+    """Markiert den Worker als idle und merkt den nächsten geplanten Tick.
+
+    Speichert ``next_run_at`` (UTC-ISO) in den Worker-Stats, damit
+    Dashboard und TUI einen Live-Countdown anzeigen können.
+    Setzt zusätzlich ``current_task`` auf z.B. ``"sleeping (next in 10s)"``,
+    sodass die Info auch ohne weitere UI-Änderungen sichtbar ist.
+    """
+    next_at = datetime.utcnow() + timedelta(seconds=max(0.0, float(secs)))
+    task = f"sleeping → {label} in {int(secs)}s"
+    heartbeat(
+        name,
+        state=WORKER_STATE_IDLE,
+        current_task=task,
+        stats={"next_run_at": next_at.isoformat(), "next_run_secs": int(secs)},
+    )
+
+
 def set_error(name: str, msg: str) -> None:
     heartbeat(name, state=WORKER_STATE_ERROR, current_task=msg)
 

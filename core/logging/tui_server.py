@@ -337,9 +337,10 @@ def _render_workers() -> Panel:
     t.add_column("Worker", style="white", no_wrap=True)
     t.add_column("State", justify="center", no_wrap=True)
     t.add_column("Aktuell", style="dim", overflow="ellipsis")
+    t.add_column("Next", justify="right", no_wrap=True)
     t.add_column("Heartbeat", justify="right", style="dim", no_wrap=True)
     if not rows:
-        t.add_row("(keine Worker registriert)", "", "", "")
+        t.add_row("(keine Worker registriert)", "", "", "", "")
     for w in rows:
         state = (w.get("state") or "?").lower()
         color = _WORKER_STATE_COLOR.get(state, "white")
@@ -355,10 +356,27 @@ def _render_workers() -> Panel:
         cur = (w.get("current_task") or "").strip()
         if len(cur) > 40:
             cur = cur[:37] + "…"
+        # Live-Countdown bis zum nächsten geplanten Tick
+        next_cell = Text("—", style="dim")
+        nra = (w.get("stats") or {}).get("next_run_at")
+        if nra:
+            try:
+                next_dt = datetime.fromisoformat(nra)
+                remaining = int((next_dt - datetime.utcnow()).total_seconds())
+                if remaining <= 0:
+                    next_cell = Text("🟢 jetzt", style="bold green")
+                else:
+                    nm, ns = divmod(remaining, 60)
+                    label = f"{nm:02d}:{ns:02d}" if nm else f"{ns}s"
+                    ncol = "green" if remaining < 15 else ("yellow" if remaining < 60 else "cyan")
+                    next_cell = Text(f"⏳ {label}", style=f"bold {ncol}")
+            except Exception:
+                pass
         t.add_row(
             w["name"],
             Text(state.upper(), style=color),
             cur,
+            next_cell,
             hb,
         )
     return Panel(t, title="👷 Workers", border_style="blue")

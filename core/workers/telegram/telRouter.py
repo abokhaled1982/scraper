@@ -317,12 +317,14 @@ class TelegramOfferRouter:
             log.info(f"🔎 Telegramm Watcher aktiv: prüfe DB-Queue alle {WATCH_SECS}s …")
             while True:
                 try:
-                    workers_repo.set_idle(_WORKER)
+                    workers_repo.set_task(_WORKER, "checking queue")
                     sent = await self._send_one_new_item(entity)
                     if not sent:
                         log.info("ℹ️ Nichts Neues gefunden.")
                 except Exception as e:
                     log.error(f"❌ Fehler im Watcher Telegram: {e}")
+                # Live-Countdown bis zum nächsten Tick (für Dashboard/TUI)
+                workers_repo.set_next_run(_WORKER, WATCH_SECS, label="queue check")
                 await asyncio.sleep(WATCH_SECS)
 
     async def run_once(self):

@@ -65,7 +65,10 @@ async def safety_wait():
         max_w = min_w
     wait      = random.randint(min_w, max_w)
     start_str = time.strftime("%H:%M:%S")
+    # Initialen Countdown für Dashboard/TUI publizieren
+    workers_repo.set_next_run(_WORKER, wait, label="safety wait")
     remaining = wait
+    _last_pub = wait
     while remaining > 0:
         # Falls Dashboard mittlerweile Token gesetzt hat → sofort raus
         if cfg.consume_skip_wait_token("facebook"):
@@ -73,6 +76,10 @@ async def safety_wait():
             return
         m, s = divmod(remaining, 60)
         log.info(f"⏳ Letzter Deal: {start_str} Uhr | Nächster Start in: [ {m:02d}:{s:02d} ] ")
+        # Countdown alle 5s in die DB schreiben (nicht jede Sekunde → DB-Last)
+        if _last_pub - remaining >= 5 or remaining < 5:
+            workers_repo.set_next_run(_WORKER, remaining, label="safety wait")
+            _last_pub = remaining
         await asyncio.sleep(1)
         remaining -= 1
     log.info("\n\n[SAFETY] 🟢 Pause beendet. Suche nach neuen Deals...")
@@ -156,6 +163,7 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
             workers_repo.set_idle(_WORKER)
             # Worker-Pause respektieren (vom Dashboard gesetzt)
             if cfg.is_worker_paused(_WORKER) or not cfg.is_enabled("facebook"):
+                workers_repo.set_next_run(_WORKER, CHECK_INTERVAL_SECS, label="queue check (paused)")
                 await asyncio.sleep(CHECK_INTERVAL_SECS)
                 continue
             # Dashboard-Resend-Sync: sent_ids aus der DB neu laden, damit
@@ -180,6 +188,8 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
                         await safety_wait()
         except Exception as e:
             log.error(f"[LOOP-ERROR] {e}")
+        # Live-Countdown bis zum nächsten Tick (für Dashboard/TUI)
+        workers_repo.set_next_run(_WORKER, CHECK_INTERVAL_SECS, label="queue check")
         await asyncio.sleep(CHECK_INTERVAL_SECS)
 
 
