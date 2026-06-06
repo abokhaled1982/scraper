@@ -14,7 +14,7 @@ log = get_logger("telSender")  # noqa: E402
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
-from telethon.errors import UserAlreadyParticipantError
+from telethon.errors import UserAlreadyParticipantError, FloodWaitError, InviteHashExpiredError, InviteHashInvalidError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 # Dein bestehender Login-Helper
@@ -69,8 +69,11 @@ async def _get_client_and_entity():
              
              # WICHTIG: Temporär in dieser Datei, bis login_once.py korrigiert ist.
              async def _ensure_join_and_resolve_local(client: TelegramClient, ref: str):
-                 # ... (Logik von telObserver.py/_ensure_join_and_resolve hierher kopieren)
-                 # Da das Skript sonst fehlschlägt, verwenden wir die Logik von telObserver.py
+                 # Erst direkt auflösen – wenn bereits Mitglied, kein Invite nötig (vermeidet FloodWait).
+                 try:
+                     return await client.get_entity(ref)
+                 except Exception:
+                     pass
                  invite_match = re.search(r"(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)", ref)
                  if invite_match:
                      invite_hash = invite_match.group(1)
@@ -78,6 +81,10 @@ async def _get_client_and_entity():
                          await client(ImportChatInviteRequest(invite_hash))
                      except UserAlreadyParticipantError:
                          pass
+                     except FloodWaitError as fw:
+                         log.warning(f"⚠️ (Sender) FloodWait beim Invite ({fw.seconds}s) – überspringe Join.")
+                     except (InviteHashExpiredError, InviteHashInvalidError) as ie:
+                         log.error(f"❌ (Sender) Invite-Hash ungültig/abgelaufen: {ie}")
                      except Exception as e:
                          log.warning(f"⚠️ (Sender) Invite fehlgeschlagen: {e}")
                  return await client.get_entity(ref)

@@ -7,7 +7,7 @@ from pathlib import Path
 import aiohttp 
 
 from telethon import TelegramClient, Button
-from telethon.errors import UserAlreadyParticipantError
+from telethon.errors import UserAlreadyParticipantError, FloodWaitError, InviteHashExpiredError, InviteHashInvalidError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 from dotenv import load_dotenv
@@ -102,6 +102,13 @@ class TelegramOfferRouter:
         self.client: Optional[TelegramClient] = None
 
     async def _ensure_join_and_resolve(self, client: TelegramClient, channel_ref: str):
+        # Zuerst direkt auflösen – wenn wir bereits Mitglied sind, brauchen wir keinen Invite
+        # (vermeidet FloodWait durch wiederholtes ImportChatInviteRequest beim Neustart).
+        try:
+            return await client.get_entity(channel_ref)
+        except Exception:
+            pass
+
         invite = _extract_invite_hash(channel_ref)
         if invite:
             try:
@@ -109,6 +116,10 @@ class TelegramOfferRouter:
                 log.info("✅ Kanal via Invite betreten.")
             except UserAlreadyParticipantError:
                 pass
+            except FloodWaitError as fw:
+                log.warning(f"⚠️ FloodWait beim Invite ({fw.seconds}s) – überspringe Join.")
+            except (InviteHashExpiredError, InviteHashInvalidError) as ie:
+                log.error(f"❌ Invite-Hash ungültig/abgelaufen: {ie}")
             except Exception as e:
                 log.warning(f"⚠️ Invite fehlgeschlagen: {e}")
         return await client.get_entity(channel_ref)

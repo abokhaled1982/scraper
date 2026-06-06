@@ -23,7 +23,7 @@ from typing import Optional, Any
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, Button
-from telethon.errors import UserAlreadyParticipantError
+from telethon.errors import UserAlreadyParticipantError, FloodWaitError, InviteHashExpiredError, InviteHashInvalidError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -77,12 +77,21 @@ def _mark_sent(payload: dict) -> None:
 
 
 async def _resolve_channel(client: TelegramClient, ref: str):
+    # Zuerst direkt auflösen – wenn bereits Mitglied, kein Invite nötig (vermeidet FloodWait).
+    try:
+        return await client.get_entity(ref)
+    except Exception:
+        pass
     m = _INVITE_RE.search(ref)
     if m:
         try:
             await client(ImportChatInviteRequest(m.group(1)))
         except UserAlreadyParticipantError:
             pass
+        except FloodWaitError as fw:
+            log.warning(f"⚠️ FloodWait beim Invite ({fw.seconds}s) – überspringe Join.")
+        except (InviteHashExpiredError, InviteHashInvalidError) as ie:
+            log.error(f"❌ Invite-Hash ungültig/abgelaufen: {ie}")
         except Exception as e:
             log.warning(f"⚠️ Invite fehlgeschlagen: {e}")
     return await client.get_entity(ref)

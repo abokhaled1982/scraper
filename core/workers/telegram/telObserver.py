@@ -23,7 +23,7 @@ log = get_logger("telObserver")  # noqa: E402
 # Telethon
 try:
     from telethon import events, TelegramClient
-    from telethon.errors import UserAlreadyParticipantError
+    from telethon.errors import UserAlreadyParticipantError, FloodWaitError, InviteHashExpiredError, InviteHashInvalidError
     from telethon.tl.functions.messages import ImportChatInviteRequest
 except Exception as e:
     log.error("❌ Fehlende Abhängigkeit: telethon. Bitte installieren: pip install telethon")
@@ -142,7 +142,17 @@ def add_link_to_product_list(url: str) -> Tuple[bool, str]:
 # ------------------------
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
     log.info(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
-    # Wenn ein Invite-Hash vorhanden ist (z.B. t.me/+ABC...)
+
+    # 1) Zuerst direkt auflösen – wenn wir bereits Mitglied sind, brauchen wir keinen Invite-Request
+    #    (vermeidet FloodWait durch wiederholtes ImportChatInviteRequest beim Neustart).
+    try:
+        ent = await client.get_entity(ref)
+        log.info("✅ Entity bereits auflösbar (kein Invite nötig).")
+        return ent
+    except Exception as e_first:
+        log.info(f"ℹ️ get_entity(ref) zunächst fehlgeschlagen: {e_first} – prüfe Invite-Hash …")
+
+    # 2) Wenn ein Invite-Hash vorhanden ist (z.B. t.me/+ABC...), Beitritt versuchen
     invite_match = re.search(r'(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)', ref)
     if invite_match:
         invite_hash = invite_match.group(1)
@@ -151,10 +161,15 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
             log.info(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
         except UserAlreadyParticipantError:
             log.info("ℹ️ Bereits Teilnehmer des Kanals (Invite-Hash).")
+        except FloodWaitError as fw:
+            # Nicht erneut versuchen – wir sind evtl. längst Mitglied, get_entity unten klärt das.
+            log.warning(f"⚠️ FloodWait beim Invite ({fw.seconds}s) – überspringe Join und versuche direkte Auflösung.")
+        except (InviteHashExpiredError, InviteHashInvalidError) as ie:
+            log.error(f"❌ Invite-Hash ungültig/abgelaufen: {ie}")
         except Exception as e:
             log.warning(f"⚠️ Invite fehlgeschlagen: {e}")
 
-    # Versuche direkte Auflösung (z.B. t.me/Username oder @Username oder URL)
+    # 3) Erneut versuchen aufzulösen (z.B. nach Beitritt oder via Username)
     try:
         ent = await client.get_entity(ref)
         log.info("✅ Entity aufgelöst (get_entity).")

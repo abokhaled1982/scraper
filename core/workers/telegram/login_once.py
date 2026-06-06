@@ -6,7 +6,7 @@ from typing import Optional, Callable
 from dotenv import load_dotenv
 from telethon import TelegramClient
 # NEU: Import für die Join-Logik
-from telethon.errors import UserAlreadyParticipantError
+from telethon.errors import UserAlreadyParticipantError, FloodWaitError, InviteHashExpiredError, InviteHashInvalidError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 import re 
 
@@ -48,6 +48,15 @@ def session_file_exists(cfg: LoginConfig) -> bool:
 async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
     log.info(f"ℹ️ Versuche Kanal/Entität zu lösen: {ref}")
 
+    # 0. Schnellpfad: Wenn wir bereits Mitglied sind, direkt auflösen und KEINEN Invite senden
+    #    (vermeidet FloodWait durch wiederholtes ImportChatInviteRequest beim Neustart).
+    try:
+        ent = await client.get_entity(ref)
+        log.info("✅ Bereits Mitglied / Entity direkt auflösbar – kein Invite nötig.")
+        return ent
+    except Exception:
+        pass
+
     # 1. Privater Invite-Link (t.me/+... oder t.me/joinchat/...)
     invite_match = re.search(r'(?:t\.me\/joinchat\/|t\.me\/\+|invite\/)([A-Za-z0-9_-]+)', ref)
     if invite_match:
@@ -57,6 +66,10 @@ async def _ensure_join_and_resolve(client: TelegramClient, ref: str):
             log.info(f"✅ Kanal beigetreten via Invite-Hash: {invite_hash}")
         except UserAlreadyParticipantError:
             log.info("ℹ️ Bereits Teilnehmer (Invite).")
+        except FloodWaitError as fw:
+            log.warning(f"⚠️ FloodWait beim Invite ({fw.seconds}s) – überspringe Join.")
+        except (InviteHashExpiredError, InviteHashInvalidError) as ie:
+            log.error(f"❌ Invite-Hash ungültig/abgelaufen: {ie}")
         except Exception as e:
             log.warning(f"⚠️ Invite via Hash fehlgeschlagen: {e}")
 
