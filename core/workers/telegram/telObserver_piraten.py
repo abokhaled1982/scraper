@@ -419,7 +419,7 @@ async def handle_message(evt: events.NewMessage.Event, chat_name_override: str |
 CATCHUP_MESSAGES = int(os.getenv("PIRATEN_CATCHUP", "0"))  # 0 = nur zukünftige Nachrichten verarbeiten
 
 async def _amain():
-    from core.db import workers_repo
+    from core.db import workers_repo, config_repo
     _WORKER = "tel_observer_piraten"
     workers_repo.register(_WORKER)
     log.info(f"🏴‍☠️ Starte Piraten-Observer Session: {PIRATEN_SESSION_NAME}")
@@ -467,6 +467,11 @@ async def _amain():
         @client.on(events.NewMessage(chats=entities))
         async def _on(evt):
             try:
+                # Dashboard-Toggle: piraten.enabled = False → komplett ignorieren.
+                # Session bleibt verbunden, damit Sofort-Reaktivierung möglich ist.
+                if not config_repo.is_enabled("piraten"):
+                    workers_repo.set_task(_WORKER, "⏸ deaktiviert (Dashboard) — Nachrichten werden ignoriert")
+                    return
                 # Label aus .env nutzen, sonst Telegram-Titel
                 chat_id = getattr(evt.chat_id, "real", None) or evt.chat_id
                 # evt.chat_id ist bereits int (-100... Form); auf raw id mappen
@@ -485,6 +490,30 @@ async def _amain():
             except Exception as e:
                 workers_repo.set_error(_WORKER, str(e)[:200])
                 log.error(f"❌ Piraten-Error: {e}")
+
+        # ── Statusfähnchen: zeigt im Dashboard/TUI an, ob Observer aktiv ist ──
+        async def _status_loop():
+            last = None
+            while True:
+                try:
+                    on = config_repo.is_enabled("piraten")
+                    if on != last:
+                        if on:
+                            workers_repo.set_task(
+                                _WORKER, f"👀 aktiv — überwache {len(entities)} Kanal/Kanäle"
+                            )
+                            log.info("✅ Piraten-Observer aktiviert (Dashboard-Toggle).")
+                        else:
+                            workers_repo.set_task(
+                                _WORKER, "⏸ deaktiviert (Dashboard) — Nachrichten werden ignoriert"
+                            )
+                            log.info("⏸ Piraten-Observer deaktiviert (Dashboard-Toggle).")
+                        last = on
+                except Exception:
+                    pass
+                await asyncio.sleep(2.0)
+
+        asyncio.create_task(_status_loop())
 
         log.info("🔴 Live-Listener aktiv – warte auf neue Nachrichten...")
         await client.run_until_disconnected()

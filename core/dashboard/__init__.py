@@ -750,6 +750,13 @@ async function api(path, opts) {
 // ── Overview ──────────────────────────────────────────────
 async function renderOverview() {
     const data = await api("/api/status");
+    // Config parallel laden für Quick-Toggles (z.B. Piraten-Observer)
+    let cfgItems = [];
+    try { cfgItems = await api("/api/config"); } catch (e) {}
+    const cfgMap = {};
+    cfgItems.forEach(c => { cfgMap[c.key] = c.value; });
+    const piratenOn = cfgMap["piraten.enabled"] !== false;  // default ON
+
     const c = data.deals;
     const cards = [
         ["queue", "Queue"], ["processing", "Processing"],
@@ -757,6 +764,30 @@ async function renderOverview() {
     ].map(([k,l]) =>
         `<div class="card"><h2>${l}</h2><div class="v ${k}">${c[k] ?? 0}</div></div>`
     ).join("");
+
+    // Observer-Quick-Toggle: zeigt aktuellen Status + 1-Klick An/Aus
+    //   → schreibt piraten.enabled in runtime_config (TTL-Bypass via .enabled-Suffix)
+    //   → telObserver_piraten prüft Flag bei jeder Nachricht
+    const obsBadge = piratenOn
+        ? '<span class="pill running" style="font-size:14px;">🟢 AKTIV</span>'
+        : '<span class="pill stopped" style="font-size:14px;">⏸ PAUSIERT</span>';
+    const obsBtn = piratenOn
+        ? `<button class="act danger" onclick="togglePiraten(false)">⏸ Observer pausieren</button>`
+        : `<button class="act" onclick="togglePiraten(true)">▶ Observer aktivieren</button>`;
+    const obsCard = `
+      <div class="card" style="grid-column: 1 / -1; background:#0b1220; border:1px solid #1e293b;">
+        <h2>🏴‍☠️ Piraten-Observer
+          <span style="float:right;">${obsBadge}</span>
+        </h2>
+        <div style="display:flex; align-items:center; gap:14px; margin-top:8px; flex-wrap:wrap;">
+          ${obsBtn}
+          <small style="color:#94a3b8;">
+            ${piratenOn
+              ? "Eingehende Telegram-Nachrichten werden automatisch in die Queue übernommen."
+              : "Eingehende Nachrichten werden ignoriert — sende Angebote manuell, ohne dass neue Links dazwischenfunken."}
+          </small>
+        </div>
+      </div>`;
 
     // "Nächster Versand"-Banner: kombiniert Queue-Count + früheste Worker-ETA
     //   - Nur Worker mit next_run_at zählen (telRouter, fb_watcher)
@@ -820,12 +851,25 @@ async function renderOverview() {
         : `<tr><td colspan="6"><small>noch keine Worker registriert</small></td></tr>`;
     $("#tab-overview").innerHTML = `
         <div class="grid">${cards}</div>
+        ${obsCard}
         ${nextBanner}
         <h2 style="font-size:13px; color:#94a3b8; text-transform:uppercase;
                    letter-spacing:.5px; margin:0 0 8px;">Worker</h2>
         <table><thead><tr>
             <th>Name</th><th>Status</th><th>Aufgabe</th><th>Next</th><th>PID</th><th>Heartbeat</th>
         </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// Quick-Toggle für Piraten-Observer (von Overview-Card aufgerufen)
+async function togglePiraten(on) {
+    try {
+        await api(`/api/config/${encodeURIComponent("piraten.enabled")}`, {
+            method: "PUT",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ value: !!on })
+        });
+        renderOverview();
+    } catch (e) { alert("Fehlgeschlagen: " + e.message); }
 }
 
 // ── Verlauf / Timeline ────────────────────────────────────

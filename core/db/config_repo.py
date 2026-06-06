@@ -37,10 +37,14 @@ DEFAULTS: dict[str, Any] = {
     "instagram.enabled":    True,
     "ai.enabled":           True,
     "filter.min_discount_pct": 0,
+    # Piraten-Observer (Telegram-Channel-Watcher für pirat.deals u.a.)
+    # OFF → eingehende Nachrichten werden ignoriert, aber Session bleibt offen,
+    # damit man jederzeit per Dashboard wieder einschalten kann.
+    "piraten.enabled":      True,
 }
 
 # Erlaubte Top-Level-Namespaces (für Dashboard-Filter)
-NAMESPACES = ("facebook", "telegram", "instagram", "ai", "filter", "worker")
+NAMESPACES = ("facebook", "telegram", "instagram", "ai", "filter", "worker", "piraten")
 
 
 # ───────────────────────────────────────────────────────────────
