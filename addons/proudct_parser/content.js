@@ -172,6 +172,72 @@
   }
 
   /**
+   * Liest den Clipboard-Inhalt sicher aus. Loggt jeden Versuch inklusive
+   * Vorschau, damit man auf jedem Rechner sehen kann, was tatsächlich
+   * zurückkommt. Liefert immer ein Objekt – nie eine Exception.
+   *
+   * @param {number} attempt - 1-basierter Versuchszähler (nur fürs Log).
+   * @returns {Promise<{ok: boolean, value: string, error: string|null}>}
+   */
+  async function readClipboardSafe(attempt) {
+    try {
+      const raw = await navigator.clipboard.readText();
+      const value = (raw || "").trim();
+      const preview = value.length > 120 ? value.slice(0, 120) + "…" : value;
+      console.log(
+        `[Clipboard] attempt #${attempt} ok – len=${value.length}, value="${preview}"`
+      );
+      return { ok: true, value, error: null };
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      console.warn(`[Clipboard] attempt #${attempt} failed: ${msg}`);
+      return { ok: false, value: "", error: msg };
+    }
+  }
+
+  /**
+   * Pollt in festen Intervallen sowohl Clipboard als auch DOM nach einem
+   * plausiblen Affiliate-Link. Bewusst als for-Schleife mit festem
+   * Versuchsbudget – einfacher zu debuggen als eine offene while-Schleife.
+   *
+   * @param {object} opts
+   * @param {number} opts.attempts - Anzahl der Versuche.
+   * @param {number} opts.intervalMs - Pause zwischen den Versuchen.
+   * @param {boolean} opts.clipboardWritable - true, wenn Sentinel geschrieben
+   *   werden konnte (dann gilt: Sentinel = "noch nichts Neues").
+   * @returns {Promise<string|null>}
+   */
+  async function pollForAffiliateLink({ attempts, intervalMs, clipboardWritable }) {
+    for (let i = 1; i <= attempts; i++) {
+      // 1) Clipboard prüfen
+      const clip = await readClipboardSafe(i);
+      if (clip.ok) {
+        const isSentinel = clip.value === CLIPBOARD_SENTINEL;
+        const sentinelOk = clipboardWritable ? !isSentinel : true;
+        if (sentinelOk && isPlausibleAffiliateLink(clip.value)) {
+          console.log(`[Poll] link via clipboard on attempt #${i}: ${clip.value}`);
+          return clip.value;
+        }
+      }
+
+      // 2) Parallel DOM probieren – Amazon reicht den Link manchmal nach
+      const fromDom = readShortlinkFromDOM();
+      if (isPlausibleAffiliateLink(fromDom)) {
+        console.log(`[Poll] link via DOM on attempt #${i}: ${fromDom}`);
+        return fromDom;
+      }
+
+      // 3) Warten vor nächstem Versuch (außer beim letzten Durchlauf)
+      if (i < attempts) await sleep(intervalMs);
+    }
+
+    console.warn(
+      `[Poll] no affiliate link after ${attempts} attempts (${attempts * intervalMs} ms)`
+    );
+    return null;
+  }
+
+  /**
    * Öffnet das SiteStripe-Popover, klickt "Affiliate-Link kopieren" und
    * liefert den aktuellen Affiliate-Link. Strategie:
    *   1) DOM zuerst (Popover-Input/Anchor) – immer korrekt für das aktuelle Produkt.
@@ -238,31 +304,14 @@
     console.log("[Stripe] clicking copy button");
     copyBtn.click();
 
-    // Schritt 5: Clipboard pollen, bis sich der Inhalt vom Sentinel
-    // unterscheidet bzw. ein plausibler Link erscheint (max. 10 s).
-    const pollStart = Date.now();
-    let link = null;
-    while (Date.now() - pollStart < 10_000) {
-      try {
-        const current = (await navigator.clipboard.readText()) || "";
-        if (
-          isPlausibleAffiliateLink(current) &&
-          (clipboardWritable ? current !== CLIPBOARD_SENTINEL : true)
-        ) {
-          link = current.trim();
-          break;
-        }
-      } catch (e) {
-        // readText kann ohne Fokus scheitern – weiter versuchen
-      }
-      // parallel weiter DOM probieren – falls Amazon den Link nachreicht
-      const fromDom = readShortlinkFromDOM();
-      if (isPlausibleAffiliateLink(fromDom)) {
-        link = fromDom;
-        break;
-      }
-      await sleep(500);
-    }
+    // Schritt 5: Clipboard + DOM pollen, bis ein plausibler Link gefunden wird
+    // (max. ~10 s, in festen Intervallen). Für-Schleife statt while, damit jeder
+    // Versuch numerisch nachvollziehbar ist und sich leichter debuggen lässt.
+    const link = await pollForAffiliateLink({
+      attempts: 20,
+      intervalMs: 500,
+      clipboardWritable,
+    });
 
     if (!link) {
       console.warn("[Stripe] no valid affiliate link found (clipboard+DOM)");
