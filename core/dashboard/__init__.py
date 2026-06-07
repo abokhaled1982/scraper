@@ -7,6 +7,7 @@ Tabs:
     - Workers  : Detailansicht + Stop/Kill via PID-Signal
     - Logs     : Letzte N Zeilen pro Worker aus .log/<DATE>/<worker>.log
     - State    : StateKV-Browser/Editor (sent_ids, product_list, ...)
+    - Produkte : product_list-Übersicht (Observer-Links + Opener-Status)
 
 Start als Modul:
     python -m core.dashboard
@@ -119,21 +120,42 @@ def api_deals_cleanup(body: dict = Body(...)) -> dict:
 @app.post("/api/deals/submit_url")
 def api_deals_submit_url(body: dict = Body(...)) -> dict:
     """Manueller URL-Wurf in product_list (wie wenn der Observer einen Link
-    sehen würde). product_opener pickt sie auf."""
+    sehen würde). product_opener pickt sie auf.
+
+    product_list lebt als Dict[key, meta] in state_kv (siehe
+    telObserver_piraten.add_link_to_product_list). Wir nutzen exakt
+    dieselbe Key-Schema (A-<ASIN> / U-<hash>), damit der Opener-Dedup
+    funktioniert.
+    """
     url = (body.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "invalid url")
     try:
-        current = state_repo.get("product_list", []) or []
-        if isinstance(current, dict):
-            current = list(current.values())
-        if not isinstance(current, list):
-            current = []
-        if url not in current:
-            current.append(url)
-            state_repo.put("product_list", current)
-            return {"ok": True, "added": True, "size": len(current)}
-        return {"ok": True, "added": False, "size": len(current)}
+        import time as _time, re as _re, hashlib as _hashlib
+        store = state_repo.get_dict("product_list")
+        # Migration: falls historisch List → in Dict konvertieren
+        if not isinstance(store, dict):
+            old = store if isinstance(store, list) else []
+            store = {}
+            for u in old:
+                if isinstance(u, str) and u.startswith(("http://", "https://")):
+                    store[f"U-{_hashlib.sha1(u.encode()).hexdigest()[:10]}"] = {
+                        "product_url": u, "source": "migrated",
+                    }
+
+        m = _re.search(r'/(?:dp|gp/product|d|o)/([A-Z0-9]{10})(?:[\/?]|$)', url, _re.IGNORECASE)
+        key = f"A-{m.group(1).upper()}" if m else f"U-{_hashlib.sha1(url.encode()).hexdigest()[:10]}"
+
+        if key in store:
+            return {"ok": True, "added": False, "size": len(store), "key": key}
+
+        store[key] = {
+            "product_url": url,
+            "source": "dashboard_manual",
+            "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        }
+        state_repo.put("product_list", store)
+        return {"ok": True, "added": True, "size": len(store), "key": key}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -523,6 +545,84 @@ def api_state_delete(key: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────
+# Products (product_list + opened-Status)
+# Eigener Tab im Dashboard. Zeigt alle vom Observer/Parser
+# eingesammelten Amazon-URLs, ihren Status (noch offen / schon
+# vom product_opener geöffnet) und erlaubt Einzel-Löschung
+# bzw. Komplett-Clear.
+# ──────────────────────────────────────────────────────────────
+
+def _products_snapshot() -> list[dict]:
+    """Flacht product_list (Dict[key, meta]) + opened (Dict[asin, …]) in
+    eine Liste für die UI ab. Sortiert: neueste/zuletzt gesehene zuerst."""
+    products = state_repo.get_dict("product_list")
+    opened = state_repo.get_dict("opened")
+    rows: list[dict] = []
+    for key, meta in products.items():
+        if not isinstance(meta, dict):
+            meta = {"product_url": str(meta)}
+        # ASIN aus Key (A-XXXX) oder aus meta.asin
+        asin = meta.get("asin") or (key[2:] if key.startswith("A-") else None)
+        op = opened.get(asin) if asin else None
+        # opened-Repo nutzt manchmal direkt den key (z.B. ASIN) als opened-Key
+        if op is None and key in opened:
+            op = opened[key]
+        rows.append({
+            "key": key,
+            "asin": asin,
+            "product_url": meta.get("product_url"),
+            "product_name": meta.get("product_name"),
+            "price": (meta.get("price") or {}).get("value") if isinstance(meta.get("price"), dict) else meta.get("price"),
+            "discount_percent": meta.get("discount_percent"),
+            "source": meta.get("source") or meta.get("_source_file") or "—",
+            "added_at": meta.get("timestamp") or meta.get("_first_seen"),
+            "last_seen": meta.get("_last_seen"),
+            "opened_at": (op or {}).get("last_open"),
+            "canonical_url": (op or {}).get("canonical_url"),
+        })
+    # Sort: noch offene (kein opened_at) zuerst, dann nach added_at desc
+    rows.sort(key=lambda r: (
+        r["opened_at"] is not None,
+        -(float(r["opened_at"]) if isinstance(r["opened_at"], (int, float)) else 0.0),
+        r["added_at"] or "",
+    ), reverse=False)
+    return rows
+
+
+@app.get("/api/products")
+def api_products() -> dict:
+    rows = _products_snapshot()
+    pending = sum(1 for r in rows if not r["opened_at"])
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "pending": pending,
+        "opened": len(rows) - pending,
+    }
+
+
+@app.delete("/api/products/{key}")
+def api_products_delete(key: str) -> dict:
+    products = state_repo.get_dict("product_list")
+    if key not in products:
+        raise HTTPException(404, f"key not found: {key}")
+    del products[key]
+    state_repo.put("product_list", products)
+    return {"ok": True, "removed": key, "size": len(products)}
+
+
+@app.post("/api/products/clear")
+def api_products_clear(body: dict = Body(default={})) -> dict:
+    """Leert die komplette product_list. Optional auch opened-Cache
+    zurücksetzen (body={'reset_opened': true})."""
+    n = len(state_repo.get_dict("product_list"))
+    state_repo.put("product_list", {})
+    if bool(body.get("reset_opened")):
+        state_repo.put("opened", {})
+    return {"ok": True, "cleared": n}
+
+
+# ──────────────────────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────────────────────
 
@@ -696,6 +796,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
     <button data-tab="workers">Workers</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="state">State</button>
+    <button data-tab="products">🛒 Produkte</button>
     <button data-tab="settings">⚙ Settings</button>
   </nav>
 </header>
@@ -706,6 +807,7 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
   <section id="tab-workers" hidden></section>
   <section id="tab-logs" hidden></section>
   <section id="tab-state" hidden></section>
+  <section id="tab-products" hidden></section>
   <section id="tab-settings" hidden></section>
 </main>
 <div id="modalRoot"></div>
@@ -1604,6 +1706,156 @@ async function deleteState(k) {
     renderState();
 }
 
+// ── Produkte (product_list + opened-Status) ───────────────
+// Eigener Tab. Zeigt alle vom Observer / Parser eingesammelten Amazon-URLs,
+// ihren Opener-Status und erlaubt Einzel-Löschung + Komplett-Clear.
+let productsFilter = "";
+let productsOnlyPending = false;
+function _fmtAge(iso) {
+    if (!iso) return '<small style="color:#64748b;">—</small>';
+    try {
+        const t = Date.parse(iso.endsWith("Z") ? iso : iso + "Z");
+        if (isNaN(t)) return esc(iso);
+        const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+        if (s < 60) return `<small>${s}s</small>`;
+        if (s < 3600) return `<small>${Math.floor(s/60)}m</small>`;
+        if (s < 86400) return `<small>${Math.floor(s/3600)}h</small>`;
+        return `<small>${Math.floor(s/86400)}d</small>`;
+    } catch { return esc(iso); }
+}
+function _fmtOpened(epochOrIso) {
+    if (!epochOrIso) return '<span class="pill stopped">⏳ offen</span>';
+    let t;
+    if (typeof epochOrIso === "number") {
+        t = epochOrIso * 1000;
+    } else {
+        t = Date.parse(String(epochOrIso).endsWith("Z") ? epochOrIso : epochOrIso + "Z");
+    }
+    if (isNaN(t)) return '<span class="pill busy">✓ geöffnet</span>';
+    const ago = Math.max(0, Math.round((Date.now() - t) / 1000));
+    let lbl;
+    if (ago < 60) lbl = `${ago}s`;
+    else if (ago < 3600) lbl = `${Math.floor(ago/60)}m`;
+    else if (ago < 86400) lbl = `${Math.floor(ago/3600)}h`;
+    else lbl = `${Math.floor(ago/86400)}d`;
+    return `<span class="pill busy">✓ vor ${lbl}</span>`;
+}
+async function renderProducts() {
+    const data = await api("/api/products");
+    let rows = data.rows || [];
+    if (productsOnlyPending) rows = rows.filter(r => !r.opened_at);
+    if (productsFilter) {
+        const q = productsFilter.toLowerCase();
+        rows = rows.filter(r =>
+            (r.product_url || "").toLowerCase().includes(q) ||
+            (r.asin || "").toLowerCase().includes(q) ||
+            (r.product_name || "").toLowerCase().includes(q) ||
+            (r.source || "").toLowerCase().includes(q) ||
+            (r.key || "").toLowerCase().includes(q));
+    }
+    const trs = rows.map(r => {
+        const urlShort = (r.product_url || "").replace(/^https?:\/\/(www\.)?/, "");
+        const name = r.product_name
+            ? `<div style="color:#e2e8f0; margin-bottom:2px;">${esc(r.product_name).slice(0,90)}</div>`
+            : "";
+        const priceTag = (r.price != null)
+            ? `<span class="tag" style="color:#facc15;">${esc(r.price)}€</span>`
+            : "";
+        const discTag = (r.discount_percent != null)
+            ? `<span class="tag" style="color:#4ade80;">-${esc(r.discount_percent)}%</span>`
+            : "";
+        return `
+        <tr>
+          <td><span class="tag">${esc(r.key)}</span>
+              ${r.asin ? `<br><small style="color:#64748b;">${esc(r.asin)}</small>` : ""}</td>
+          <td>${name}
+              <a href="${esc(r.product_url || '#')}" target="_blank" rel="noopener"
+                 style="color:#7dd3fc; font-size:12px;">${esc(urlShort).slice(0,120)}</a>
+              ${(priceTag || discTag) ? `<div style="margin-top:4px;">${priceTag} ${discTag}</div>` : ""}
+          </td>
+          <td><span class="tag">${esc(r.source)}</span></td>
+          <td>${_fmtAge(r.added_at)}</td>
+          <td>${_fmtOpened(r.opened_at)}</td>
+          <td class="row-actions">
+            <button class="act" onclick="window.open('${esc(r.product_url || '')}','_blank')">↗ Öffnen</button>
+            <button class="act danger" onclick="deleteProduct('${esc(r.key)}')">🗑</button>
+          </td>
+        </tr>`;
+    }).join("");
+
+    const header = `
+      <div class="grid" style="grid-template-columns:repeat(3,1fr); margin-bottom:14px;">
+        <div class="card"><h2>Total</h2><div class="v">${data.total ?? 0}</div></div>
+        <div class="card"><h2>⏳ Offen</h2><div class="v queue">${data.pending ?? 0}</div></div>
+        <div class="card"><h2>✓ Geöffnet</h2><div class="v sent">${data.opened ?? 0}</div></div>
+      </div>
+      <div class="toolbar">
+        <input id="prodFilter" placeholder="Filter: ASIN, URL, Name, Quelle …"
+               value="${esc(productsFilter)}" style="flex:1; min-width:240px;">
+        <label style="display:flex; gap:6px; align-items:center; color:#94a3b8; font-size:12.5px;">
+          <input type="checkbox" id="prodOnlyPending" ${productsOnlyPending ? "checked" : ""}>
+          nur offene
+        </label>
+        <button class="act" onclick="submitNewProductUrl()">＋ URL hinzufügen</button>
+        <button class="act" onclick="renderProducts()">↻ Refresh</button>
+        <button class="act danger" onclick="clearAllProducts()">🗑 Liste leeren</button>
+      </div>`;
+
+    const body = rows.length === 0
+        ? `<p style="color:#64748b; padding:24px;">Keine Produkte
+             ${productsOnlyPending ? "(nur offene gefiltert)" : "in der Liste"}.</p>`
+        : `<table>
+             <thead><tr>
+               <th>Key</th><th>Produkt / URL</th><th>Quelle</th>
+               <th>Hinzugefügt</th><th>Status</th><th></th>
+             </tr></thead>
+             <tbody>${trs}</tbody>
+           </table>`;
+
+    $("#tab-products").innerHTML = header + body;
+    const fi = $("#prodFilter"); if (fi) fi.oninput = (e) => {
+        productsFilter = e.target.value;
+        renderProducts();
+    };
+    const cb = $("#prodOnlyPending"); if (cb) cb.onchange = (e) => {
+        productsOnlyPending = e.target.checked;
+        renderProducts();
+    };
+}
+async function deleteProduct(key) {
+    if (!confirm(`Produkt ${key} aus der Liste löschen?`)) return;
+    try {
+        await api(`/api/products/${encodeURIComponent(key)}`, { method: "DELETE" });
+        renderProducts();
+    } catch (e) { alert("Fehler: " + e.message); }
+}
+async function clearAllProducts() {
+    if (!confirm("Komplette product_list leeren?\\n(opened-Cache bleibt erhalten)")) return;
+    const resetOpened = confirm("Auch opened-Cache zurücksetzen?\\n(OK = ja, Cancel = nein)");
+    try {
+        await api(`/api/products/clear`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset_opened: resetOpened }),
+        });
+        renderProducts();
+    } catch (e) { alert("Fehler: " + e.message); }
+}
+async function submitNewProductUrl() {
+    const url = prompt("Amazon-URL hinzufügen:");
+    if (!url) return;
+    try {
+        const r = await api(`/api/deals/submit_url`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+        });
+        if (r.added) alert(`✅ hinzugefügt als ${r.key} (Größe ${r.size})`);
+        else alert(`ℹ️ bereits in der Liste: ${r.key}`);
+        renderProducts();
+    } catch (e) { alert("Fehler: " + e.message); }
+}
+
 // ── Settings (Runtime-Config: Channel-Toggles, Limits, …) ─
 async function renderSettings() {
     const items = await api("/api/config");
@@ -1729,6 +1981,7 @@ async function render() {
         else if (activeTab === "workers") await renderWorkers();
         else if (activeTab === "logs") await renderLogs();
         else if (activeTab === "state") await renderState();
+        else if (activeTab === "products") await renderProducts();
         else if (activeTab === "settings") await renderSettings();
         $("#refreshTag").textContent = "✓ " + new Date().toLocaleTimeString();
     } catch (e) {
@@ -1737,7 +1990,7 @@ async function render() {
 }
 render();
 setInterval(() => {
-    if (["overview","workers","timeline"].includes(activeTab)) render();
+    if (["overview","workers","timeline","products"].includes(activeTab)) render();
     // Deals-Tab: nur queue/processing automatisch nachladen (5s)
     else if (activeTab === "deals" && ["queue","processing"].includes(dealsStatus)) renderDeals();
 }, 3000);

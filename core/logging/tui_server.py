@@ -57,7 +57,15 @@ _EVENT_PATTERNS: List[tuple[str, re.Pattern, str]] = [
     # (Kategorie, Pattern, Farb-Tag)
 
     # --- LINKS REIN (Observer, Watcher, Parser) ---
-    ("LINK",   re.compile(r"neue Links zur DB|Received Product URL", re.I), "bold cyan"),
+    # Matcht:
+    #   - "neue Links zur DB" / "Received Product URL" (Watcher/Parser)
+    #   - "🔗 https://… ← [Kanal]"                       (telObserver_piraten pro Link)
+    #   - "✅ N neue Links gespeichert"                  (telObserver_piraten Summary)
+    #   - "Hinzugefügt (Key: …)"                         (add_link_to_product_list)
+    ("LINK",   re.compile(
+        r"neue Links zur DB|Received Product URL|"
+        r"🔗\s*https?://|neue Links gespeichert|Hinzugefügt \(Key:",
+        re.I), "bold cyan"),
 
     # --- OPEN (nur die echten Chrome-Öffnungen, kein Skip/Polling) ---
     ("OPEN",   re.compile(r"\bOPEN\b\s+[A-Z0-9]{8,}\s*->"), "cyan"),
