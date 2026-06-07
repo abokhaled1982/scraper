@@ -40,7 +40,11 @@ CHROME_BIN = os.environ.get(
 PROFILE_NAME   = os.environ.get("AMAZON_CHROME_PROFILE", "amazon")
 ADDON_DIR      = os.environ.get("AMAZON_ADDON_DIR", "addons/proudct_parser")
 _chrome = ChromeProfile(PROFILE_NAME, addons=[ADDON_DIR])
-PAUSE_SECONDS  = int(os.environ.get("PAUSE_SECONDS", "30"))
+# Pause zwischen dem Öffnen zweier Angebote. 20s sorgt dafür, dass das Addon
+# in der aktiven Tab genug Zeit hat, SiteStripe zu öffnen und den
+# Affiliate-Link sauber in die Zwischenablage zu kopieren, bevor der nächste
+# Tab den Fokus übernimmt.
+PAUSE_SECONDS  = int(os.environ.get("PAUSE_SECONDS", "20"))
 SKIP_TTL_SECONDS = int(os.environ.get("SKIP_TTL_SECONDS", str(24*3600)))
 DRY_RUN = os.environ.get("DRY_RUN", "0") not in ("0", "", "false", "False", "no", "No")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "30"))  # Wartezeit beim Leerlauf

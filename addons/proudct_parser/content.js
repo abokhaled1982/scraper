@@ -420,6 +420,16 @@
    * ausgeführt (siehe ensureStripeLinkReadyForCurrentProduct-Lock).
    */
   async function _resolveStripeLink(urlKey) {
+    // Schritt 0: Tab proaktiv in den Vordergrund holen.
+    // Wenn der Opener mehrere Tabs hintereinander öffnet, überlagern sich
+    // diese sonst und ein Hintergrund-Tab kann SiteStripe weder zuverlässig
+    // öffnen noch die Zwischenablage lesen. Wir fordern daher *vor* jedem
+    // Klick, dass der eigene Tab + sein Fenster aktiv werden.
+    const focused = await requestTabFocus();
+    console.log(`[Stripe] proactive tab focus -> ${focused} (url=${urlKey})`);
+    ensureDocumentFocused();
+    await sleep(150);
+
     // Schritt 1: SiteStripe-Popover öffnen
     if (!clickedOnceForUrl.has(urlKey)) {
       const btn = await waitForStripeButton();
@@ -484,6 +494,15 @@
       console.warn("[Stripe] copy button not found in dialog");
       return null;
     }
+
+    // Vor dem Copy-Klick erneut Fokus erzwingen. Sonst kann ein parallel
+    // geöffneter Tab zwischenzeitlich den Vordergrund übernommen haben,
+    // wodurch navigator.clipboard.writeText() von Amazon ins Leere läuft.
+    const focusedBeforeCopy = await requestTabFocus();
+    console.log(`[Stripe] refocus before copy -> ${focusedBeforeCopy}`);
+    ensureDocumentFocused();
+    await sleep(120);
+
     console.log("[Stripe] clicking copy button");
     copyBtn.click();
 
