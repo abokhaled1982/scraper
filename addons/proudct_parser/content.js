@@ -72,6 +72,16 @@
   const isAmazonTargetPage = () => isAmazonHost() && (isAmazonProductPath() || isAmazonDealsPath());
 
   function hasOpenerTrigger(href = location.href) {
+    // Manche Seiten (z. B. sportspar.de via Awin-Tracking) säubern direkt
+    // beim Laden alle URL-Parameter via `history.replaceState()` und löschen
+    // damit auch unseren `ext_trigger`. Daher zuerst den bei `document_start`
+    // (in inject_trigger_capture.js) gemerkten Wert prüfen — der ist immun
+    // gegen spätere URL-Rewrites.
+    try {
+      if (window.__OPENER_TRIGGER__ === true) return true;
+    } catch {
+      /* ignore */
+    }
     try {
       const u = new URL(href, location.origin);
       return u.searchParams.get(TRIGGER_PARAM) === TRIGGER_VALUE;

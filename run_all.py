@@ -308,15 +308,11 @@ async def _run_full():
     tel_router     = await spawn("telegram_router",   PY, "-m", "core.workers.telegram.telRouter")
     tel_observer   = await spawn("telegram_observer", PY, "-m", "core.workers.telegram.telObserver")
     tel_sender     = await spawn("telegram_sender",   PY, "-m", "core.workers.telegram.telSender")
-    # Piraten-Observer nur starten wenn in der DB aktiviert (piraten.enabled=True/default).
-    # Wenn der User den Observer im Dashboard deaktiviert hat, bleibt er auch nach einem
-    # Neustart deaktiviert – er wird erst wieder gestartet wenn erneut aktiviert.
-    from core.db import config_repo as _cfg_boot
-    if _cfg_boot.is_enabled("piraten"):
-        tel_piraten = await spawn("telegram_piraten", PY, "-m", "core.workers.telegram.telObserver_piraten")
-    else:
-        tel_piraten = None
-        log.info("[supervisor] ⏸ Piraten-Observer deaktiviert (piraten.enabled=False) — wird nicht gestartet.")
+    # Piraten-Observer IMMER starten — der Prozess prüft den Dashboard-Toggle
+    # (piraten.enabled) selbst und ignoriert eingehende Nachrichten im OFF-Zustand.
+    # So bleibt die Telethon-Session offen und der Toggle wirkt sofort, ohne dass
+    # ein Neustart des Supervisors nötig wäre.
+    tel_piraten = await spawn("telegram_piraten", PY, "-m", "core.workers.telegram.telObserver_piraten")
 
     procs += [
         ("ws_server",          ws_server),
