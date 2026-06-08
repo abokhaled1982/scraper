@@ -1,6 +1,6 @@
 {
     "template_type": "typ3_audio",
-    "template_id": "d2c8b591-36d1-44d7-a0f5-7a8c8d5ec39f",
+    "template_id": "d4fe730f-511e-4bf4-b36c-44fdeca18e99",
     "kind": "reel",
       "api_key": "f47ac98812004fd3b59cd660254a1da02017a9e191d18ec9a3bdb8a0b526e7af01d30cb97806af581a7d9f3e8668e151",
     "description": "Universelles Reel-Template (9:16) mit ElevenLabs-Voiceover (Stimme: Matilda). Allzweck-Template fuer nahezu alle Produktkategorien: Elektronik, Haushalt, Kueche, Werkzeug, Garten, Spielzeug, Sport, Beauty, Drogerie, Lebensmittel, Buecher, Auto- und Heimwerker-Zubehoer sowie alle weiteren Produkte ohne spezielles Design-Template. Funktioniert mit normalen Produktfotos (mit oder ohne Hintergrund). Fallback-Template, wenn kein spezialisiertes Template (z.B. typ5_sneaker_purple fuer Mode/Schmuck/Uhren) passt.",
