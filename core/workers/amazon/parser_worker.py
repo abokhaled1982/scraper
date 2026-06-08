@@ -214,6 +214,7 @@ def parse_and_merge(html_path: Path) -> Dict[str, Any]:
         before = len(store)
         log.info(f"[parser] store size before: {before}")
 
+        merged_entries: Dict[str, Any] = {}
         for r in vis_rows:
             prod = _normalize_row(r, source_file=str(html_path))
             key_preview = product_key(prod)
@@ -221,9 +222,13 @@ def parse_and_merge(html_path: Path) -> Dict[str, Any]:
             log.info(f"[parser] MERGE {('NEW' if is_new else 'UPDATED'):7} key={key} preview={key_preview}")
             if is_new: new_count += 1
             else:      upd_count += 1
+            merged_entries[key] = store[key]
 
-        state_repo.put(_PRODUCT_LIST_KEY, store)
-        after = len(store)
+        # Atomare Merge-Operation statt put(gesamter store):
+        # so überschreibt ein Dashboard-DB-Reset nicht mehr von Worker-Caches.
+        if merged_entries:
+            state_repo.update_dict(_PRODUCT_LIST_KEY, merged_entries)
+        after = len(state_repo.get_dict(_PRODUCT_LIST_KEY))
         log.info(f"[parser] store size after:  {after} (+{after - before})")
 
     return {"parsed": len(rows), "visible": len(vis_rows), "new": new_count, "updated": upd_count}

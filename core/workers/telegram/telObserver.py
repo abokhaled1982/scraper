@@ -130,11 +130,15 @@ def add_link_to_product_list(url: str) -> Tuple[bool, str]:
     }
     key = product_key(minimal_product)
     with _locked_file(LOCK_FILE):
+        # Lesen direkt vor Schreiben: vermeidet, dass ein veralteter
+        # In-Memory-Snapshot einen Dashboard-DB-Reset überschreibt.
         store = load_store()
         if key in store:
             return False, "Link bereits in product_list (DB)"
-        store[key] = minimal_product
-        save_store(None, store)
+        # update_dict ist eine atomare read-modify-write Merge-Operation
+        # → nach einem DB-Reset wird hier nur der EINE neue Eintrag eingefügt,
+        #   nicht der gesamte alte Snapshot zurückgeschrieben.
+        state_repo.update_dict(_PRODUCT_LIST_KEY, {key: minimal_product})
     return True, f"Link erfolgreich hinzugefügt (Key: {key})"
 
 # ------------------------

@@ -224,7 +224,10 @@ def main():
             if open_in_chrome(triggered_url): # ⬅️ VERWENDUNG DER MODIFIZIERTEN URL
                 # Update der History mit der ORIGINALEN URL, damit der Link sauber bleibt
                 update_opened(opened, asin, url, meta)
-                state_repo.put(_OPENED_KEY, opened)
+                # Atomare Merge-Operation: schreibt NUR den neuen Eintrag in die DB,
+                # nicht den kompletten in-Memory-Snapshot zurück. Dadurch überlebt
+                # ein Dashboard-DB-Reset und wird nicht von alten Daten überschrieben.
+                state_repo.update_dict(_OPENED_KEY, {asin: opened[asin]})
                 opened_count += 1
                 time.sleep(PAUSE_SECONDS)
             else:

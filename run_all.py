@@ -308,7 +308,15 @@ async def _run_full():
     tel_router     = await spawn("telegram_router",   PY, "-m", "core.workers.telegram.telRouter")
     tel_observer   = await spawn("telegram_observer", PY, "-m", "core.workers.telegram.telObserver")
     tel_sender     = await spawn("telegram_sender",   PY, "-m", "core.workers.telegram.telSender")
-    tel_piraten    = await spawn("telegram_piraten",  PY, "-m", "core.workers.telegram.telObserver_piraten")
+    # Piraten-Observer nur starten wenn in der DB aktiviert (piraten.enabled=True/default).
+    # Wenn der User den Observer im Dashboard deaktiviert hat, bleibt er auch nach einem
+    # Neustart deaktiviert – er wird erst wieder gestartet wenn erneut aktiviert.
+    from core.db import config_repo as _cfg_boot
+    if _cfg_boot.is_enabled("piraten"):
+        tel_piraten = await spawn("telegram_piraten", PY, "-m", "core.workers.telegram.telObserver_piraten")
+    else:
+        tel_piraten = None
+        log.info("[supervisor] ⏸ Piraten-Observer deaktiviert (piraten.enabled=False) — wird nicht gestartet.")
 
     procs += [
         ("ws_server",          ws_server),
@@ -320,7 +328,7 @@ async def _run_full():
         ("telegram_router",    tel_router),
         ("telegram_observer",  tel_observer),
         ("telegram_sender",    tel_sender),
-        ("telegram_piraten",   tel_piraten),
+        *([("telegram_piraten", tel_piraten)] if tel_piraten else []),
     ]
     for n, p in procs:
         log.info(f"[supervisor] started {n} (pid={p.pid})")

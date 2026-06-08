@@ -154,11 +154,14 @@ def add_link_to_product_list(url: str) -> Tuple[bool, str]:
     }
     key = product_key(minimal)
     with _locked_file(LOCK_FILE):
+        # Lesen direkt vor Schreiben: vermeidet, dass ein veralteter
+        # In-Memory-Snapshot einen Dashboard-DB-Reset überschreibt.
         store = load_store()
         if key in store:
             return False, "Link bereits vorhanden"
-        store[key] = minimal
-        save_store(None, store)
+        # Atomare Merge-Operation: bei DB-Reset bleibt der Reset bestehen,
+        # nur der EINE neue Eintrag wird hinzugefügt.
+        state_repo.update_dict(_PRODUCT_LIST_KEY, {key: minimal})
     return True, f"Hinzugefügt (Key: {key})"
 
 # ------------------------
@@ -469,8 +472,8 @@ async def _amain():
             try:
                 # Dashboard-Toggle: piraten.enabled = False → komplett ignorieren.
                 # Session bleibt verbunden, damit Sofort-Reaktivierung möglich ist.
+                # set_stopped wurde bereits vom _status_loop gesetzt – kein extra DB-Write.
                 if not config_repo.is_enabled("piraten"):
-                    workers_repo.set_task(_WORKER, "⏸ deaktiviert (Dashboard) — Nachrichten werden ignoriert")
                     return
                 # Label aus .env nutzen, sonst Telegram-Titel
                 chat_id = getattr(evt.chat_id, "real", None) or evt.chat_id
@@ -499,14 +502,16 @@ async def _amain():
                     on = config_repo.is_enabled("piraten")
                     if on != last:
                         if on:
+                            # Reaktiviert: Worker wieder als idle/aktiv registrieren
+                            workers_repo.register(_WORKER)
                             workers_repo.set_task(
                                 _WORKER, f"👀 aktiv — überwache {len(entities)} Kanal/Kanäle"
                             )
                             log.info("✅ Piraten-Observer aktiviert (Dashboard-Toggle).")
                         else:
-                            workers_repo.set_task(
-                                _WORKER, "⏸ deaktiviert (Dashboard) — Nachrichten werden ignoriert"
-                            )
+                            # Deaktiviert: Worker als stopped markieren damit Dashboard
+                            # korrekt "stopped" zeigt und nicht fälschlich "idle/active".
+                            workers_repo.set_stopped(_WORKER)
                             log.info("⏸ Piraten-Observer deaktiviert (Dashboard-Toggle).")
                         last = on
                 except Exception:
