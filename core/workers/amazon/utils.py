@@ -220,6 +220,6 @@ def map_ai_output_to_target_format(
         discount_val = float(discount_raw)
     except ValueError:
         discount_val = 0.0
-    final_output["type"] = "reel" if discount_val >= 30.0 else "post"
-
+    #final_output["type"] = "reel" if discount_val >= 30.0 else "post"
+    final_output["type"] = "reel"
     return final_output
