@@ -212,7 +212,28 @@ def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
     log.info(f"[typ3_audio] 🚀 Starte Creatomate Render (template_id={resolved_id})")
     log.info(f"[typ3_audio]    Modifications: {list(modifications.keys())}")
 
-    response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+    # POST kann bei Voiceover-Templates >30s dauern (Creatomate validiert/preprocesst
+    # ElevenLabs-Audio vor dem Annehmen). Großzügiger Timeout + Retry gegen transiente
+    # Read-/Connection-Timeouts.
+    _POST_TIMEOUT = 120
+    _POST_RETRIES = [10, 30]  # Backoff-Sekunden vor Versuch 2 und 3
+    response = None
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate([0] + _POST_RETRIES, start=1):
+        if delay:
+            log.warning(
+                f"[typ3_audio]    ⏳ Retry POST (Versuch {attempt}/{len(_POST_RETRIES)+1}) "
+                f"nach {delay}s – letzter Fehler: {last_exc}"
+            )
+            time.sleep(delay)
+        try:
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=_POST_TIMEOUT)
+            break
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_exc = e
+            if attempt > len(_POST_RETRIES):
+                raise Exception(f"Creatomate POST-Timeout nach {attempt} Versuchen: {e}") from e
+    assert response is not None  # mypy/safety
     if response.status_code >= 400:
         raise Exception(
             f"Creatomate API-Fehler ({response.status_code}): {response.text[:600]}"
