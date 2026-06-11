@@ -7,7 +7,31 @@
  */
 
 // --- KONFIGURATION ---
-const WEBSOCKET_URL = "ws://localhost:8765"; // 🎯 PASSE DIESE URL AN DEINEN SERVER AN!
+// Port-Fallback: der Python-Supervisor verschiebt den WS-Port,
+// wenn 8765 belegt ist (z.B. auf 8766). Wir probieren beim Reconnect
+// alle Ports durch und merken uns den, der zuletzt geklappt hat.
+const WS_HOST = "localhost";
+const WS_PORTS = [8765, 8766, 8767, 8768];
+const WS_LAST_PORT_KEY = "ws_last_good_port";
+let wsPortIdx = 0;
+let WEBSOCKET_URL = `ws://${WS_HOST}:${WS_PORTS[0]}`;
+
+try {
+  chrome.storage?.local.get([WS_LAST_PORT_KEY], (res) => {
+    const p = res?.[WS_LAST_PORT_KEY];
+    if (typeof p === "number" && WS_PORTS.includes(p)) {
+      wsPortIdx = WS_PORTS.indexOf(p);
+      WEBSOCKET_URL = `ws://${WS_HOST}:${p}`;
+      console.log("[WS] using last good port", p);
+    }
+  });
+} catch {}
+
+function _nextWsPort() {
+  wsPortIdx = (wsPortIdx + 1) % WS_PORTS.length;
+  WEBSOCKET_URL = `ws://${WS_HOST}:${WS_PORTS[wsPortIdx]}`;
+  console.log("[WS] trying next port →", WEBSOCKET_URL);
+}
 
 let autoOpen = true;
 let openInterval = null;
@@ -41,12 +65,18 @@ function connectWebSocket() {
   websocket = new WebSocket(WEBSOCKET_URL);
 
   websocket.onopen = () => {
-    console.log("[WS] Verbindung erfolgreich hergestellt.");
+    console.log("[WS] Verbindung erfolgreich hergestellt →", WEBSOCKET_URL);
+    try {
+      chrome.storage?.local.set({ [WS_LAST_PORT_KEY]: WS_PORTS[wsPortIdx] });
+    } catch {}
   };
 
   websocket.onclose = () => {
     console.warn("[WS] Verbindung geschlossen. Versuche in 5s erneut zu verbinden.");
     websocket = null;
+    // Beim Reconnect den nächsten Port probieren — wenn der Supervisor
+    // den WS-Port hochgezählt hat (8765 → 8766), finden wir ihn so von alleine.
+    _nextWsPort();
     setTimeout(connectWebSocket, 5000); // Automatischer Reconnect
   };
 

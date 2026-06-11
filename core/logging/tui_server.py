@@ -43,7 +43,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.align import Align
 
-from core.config import LOG_HOST, LOG_PORT, LOG_DIR
+from core.config import LOG_HOST, LOG_PORT, LOG_DIR, DASHBOARD_HOST, DASHBOARD_PORT, WS_HOST, WS_PORT
 
 
 # ───────────────────────────────────────────────────────────────
@@ -329,8 +329,19 @@ def _render_header() -> Panel:
     line1.append("Uptime: ", style="dim")
     line1.append(up, style="green")
 
-    body = Group(Align.center(line1), Align.center(fb_part))
-    return Panel(body, border_style="cyan", height=4)
+    line_ports = Text()
+    line_ports.append("Logger ", style="dim")
+    line_ports.append(f"tcp://{LOG_HOST}:{LOG_PORT}", style="bold green")
+    line_ports.append("   •   ", style="dim")
+    line_ports.append("Dashboard ", style="dim")
+    line_ports.append(f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}", style="bold green")
+    line_ports.append("   •   ", style="dim")
+    line_ports.append("WS ", style="dim")
+    ws_style = "bold green" if 8765 <= WS_PORT <= 8768 else "bold red"
+    line_ports.append(f"ws://{WS_HOST}:{WS_PORT}", style=ws_style)
+
+    body = Group(Align.center(line1), Align.center(line_ports), Align.center(fb_part))
+    return Panel(body, border_style="cyan", height=5)
 
 
 def _render_workers() -> Panel:
@@ -448,8 +459,9 @@ def _render_events() -> Panel:
             Text(cat, style=color),
             worker,
             first,
-        )
-    return Panel(t, title="📜 Letzte Events (wichtige)", border_style="magenta")
+        )Logs: " + str(LOG_DIR)
+            + "/<Datum>/<worker>.log  |  Dashboard: "
+            + f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}genta")
 
 
 def _render_footer() -> Panel:
@@ -466,7 +478,7 @@ def _render_footer() -> Panel:
 
 def _build_layout() -> Layout:
     layout = Layout()
-    layout.split_column(
+    layout.split_column(5
         Layout(name="header", size=4),
         Layout(name="middle", ratio=2),
         Layout(name="events", ratio=3),
@@ -492,6 +504,11 @@ def main() -> None:
 
     # TCP-Server in eigenem Thread starten
     srv = _LogServer((LOG_HOST, LOG_PORT), _LogHandler)
+    sys.stderr.write(
+        f"\033[36m[tui-server] listening on {LOG_HOST}:{LOG_PORT} "
+        f"→ files: {LOG_DIR}/<DATE>/<worker>.log\033[0m\n"
+    )
+    sys.stderr.flush()
     thr = threading.Thread(target=srv.serve_forever, name="log-tcp", daemon=True)
     thr.start()
 

@@ -2022,6 +2022,10 @@ def index() -> HTMLResponse:
 
 def main() -> None:
     init_db()
+    print(
+        f"\033[36m[dashboard] listening on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}\033[0m",
+        flush=True,
+    )
     uvicorn.run(app, host=DASHBOARD_HOST, port=DASHBOARD_PORT, log_level="warning")
 
 

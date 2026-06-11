@@ -1,5 +1,31 @@
 // background.js — PRO/STABLE: streaming with begin_ack, saved-ACK, dedupe-after-save, optional retry
-const WS_URL = "ws://127.0.0.1:8765";
+// Port-Fallback: der Python-Supervisor zählt belegte Ports hoch (8765 → 8766 → …).
+// Wir probieren beim Reconnect die ganze Liste durch und merken uns den, der
+// zuletzt funktioniert hat, in chrome.storage.local.
+const WS_HOST = "127.0.0.1";
+const WS_PORTS = [8765, 8766, 8767, 8768];
+const WS_LAST_PORT_KEY = "ws_last_good_port";
+let wsPortIdx = 0;
+let WS_URL = `ws://${WS_HOST}:${WS_PORTS[0]}`;
+
+// Beim Start: zuletzt erfolgreichen Port aus dem Storage holen,
+// damit wir nicht jedes Mal den vollen Scan brauchen.
+try {
+  chrome.storage?.local.get([WS_LAST_PORT_KEY], (res) => {
+    const p = res?.[WS_LAST_PORT_KEY];
+    if (typeof p === "number" && WS_PORTS.includes(p)) {
+      wsPortIdx = WS_PORTS.indexOf(p);
+      WS_URL = `ws://${WS_HOST}:${p}`;
+      console.log("[WS] using last good port", p);
+    }
+  });
+} catch {}
+
+function _nextWsPort() {
+  wsPortIdx = (wsPortIdx + 1) % WS_PORTS.length;
+  WS_URL = `ws://${WS_HOST}:${WS_PORTS[wsPortIdx]}`;
+  console.log("[WS] trying next port →", WS_URL);
+}
 
 let ws = null;
 let alive = false;
@@ -55,12 +81,19 @@ function ensureWS() {
     alive = true;
     reconnectWaitMs = 1000; // reset backoff
     flush();
-    console.log("[WS] connected");
+    console.log("[WS] connected →", WS_URL);
+    try {
+      chrome.storage?.local.set({ [WS_LAST_PORT_KEY]: WS_PORTS[wsPortIdx] });
+    } catch {}
   };
 
   ws.onclose = () => {
     alive = false;
     console.log("[WS] closed");
+    // Beim Reconnect den nächsten Port probieren, falls keine
+    // Verbindung aufgebaut werden konnte. Sobald einer hält,
+    // resettet onopen den Backoff wieder.
+    _nextWsPort();
     setTimeout(() => ensureWS(), Math.min((reconnectWaitMs *= 1.8), 30_000));
   };
 

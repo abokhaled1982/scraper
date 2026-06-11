@@ -16,6 +16,7 @@ Beispiele:
 from __future__ import annotations
 import argparse
 import os
+import socket
 import sys
 import asyncio
 import signal
@@ -114,6 +115,109 @@ async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
         env={**os.environ, "PYTHONPATH": pythonpath, **(env or {})},
     )
 
+# ----------------------------------------------------------
+# Port-Helpers: belegte Ports automatisch hochzählen
+# ----------------------------------------------------------
+def _port_in_use(host: str, port: int) -> bool:
+    """True wenn (host, port) bereits gebunden ist (TCP)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        try:
+            s.bind((host, port))
+        except OSError:
+            return True
+    return False
+
+
+def _find_free_port(host: str, preferred: int, *, max_tries: int = 50) -> int:
+    """Liefert den ersten freien Port ab `preferred` (inkl.). Springt nach oben."""
+    for offset in range(max_tries):
+        candidate = preferred + offset
+        if candidate > 65535:
+            break
+        if not _port_in_use(host, candidate):
+            return candidate
+    # Fallback: OS-vergebener Port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+def _resolve_service_ports() -> Tuple[str, int, str, int, str, int]:
+    """Sorgt dafür, dass Logger-, Dashboard- und WS-Port frei sind.
+
+    Liest die Default-Hosts/Ports aus core.config (inkl. evtl. gesetzter
+    Env-Vars), prüft alle drei Ports und springt bei Belegung automatisch
+    auf den nächsten freien Port. Setzt die finalen Werte als
+    CORE_LOG_PORT / CORE_DASHBOARD_PORT / CORE_WS_PORT in os.environ,
+    damit alle Subprozesse (Logger, Dashboard, TUI, Worker, ws_server) sie sehen.
+    """
+    from core.config import (
+        LOG_HOST, LOG_PORT,
+        DASHBOARD_HOST, DASHBOARD_PORT,
+        WS_HOST, WS_PORT,
+    )
+
+    log_port = _find_free_port(LOG_HOST, LOG_PORT)
+    if log_port != LOG_PORT:
+        log.warning(
+            f"[supervisor] LOG_PORT {LOG_PORT} belegt → nutze {log_port}"
+        )
+    dash_port = _find_free_port(DASHBOARD_HOST, DASHBOARD_PORT)
+    if dash_port != DASHBOARD_PORT:
+        log.warning(
+            f"[supervisor] DASHBOARD_PORT {DASHBOARD_PORT} belegt → nutze {dash_port}"
+        )
+    ws_port = _find_free_port(WS_HOST, WS_PORT)
+    if ws_port != WS_PORT:
+        # Die Browser-Addons (addons/proudct_parser, addons/mydealz) probieren
+        # beim Reconnect die Port-Liste 8765..8768 durch und finden den neuen
+        # Port automatisch. Nur ausserhalb dieses Bereichs ist Handarbeit nötig.
+        msg = f"[supervisor] WS_PORT {WS_PORT} belegt → nutze {ws_port}"
+        if not (8765 <= ws_port <= 8768):
+            msg += "  ⚠ ausserhalb 8765..8768 — Addon muss angepasst werden!"
+        log.warning(msg)
+
+    # Für ALLE Subprozesse + spätere Config-Reloads sichtbar machen
+    os.environ["CORE_LOG_HOST"] = LOG_HOST
+    os.environ["CORE_LOG_PORT"] = str(log_port)
+    os.environ["CORE_DASHBOARD_HOST"] = DASHBOARD_HOST
+    os.environ["CORE_DASHBOARD_PORT"] = str(dash_port)
+    os.environ["CORE_WS_HOST"] = WS_HOST
+    os.environ["CORE_WS_PORT"] = str(ws_port)
+    return LOG_HOST, log_port, DASHBOARD_HOST, dash_port, WS_HOST, ws_port
+
+
+def _print_service_banner(log_host: str, log_port: int,
+                          dash_host: str, dash_port: int,
+                          ws_host: str, ws_port: int) -> None:
+    """Zeigt die finalen Service-Ports gross & farbig auf der Konsole."""
+    cyan = "\033[36m"
+    bold = "\033[1m"
+    green = "\033[32m"
+    yellow = "\033[33m"
+    red = "\033[31m"
+    reset = "\033[0m"
+    bar = "─" * 60
+    ws_color = green if 8765 <= ws_port <= 8768 else red
+    ws_note = "" if 8765 <= ws_port <= 8768 else f" {red}(ausserhalb 8765..8768 — Addon anpassen!){reset}"
+    lines = [
+        f"{cyan}{bar}{reset}",
+        f"{bold}{cyan}  📡  SCRAPER SERVICES{reset}",
+        f"{cyan}{bar}{reset}",
+        f"  {bold}Logger    {reset}: {green}tcp://{log_host}:{log_port}{reset}",
+        f"  {bold}Dashboard {reset}: {green}http://{dash_host}:{dash_port}{reset}",
+        f"  {bold}WS-Server {reset}: {ws_color}ws://{ws_host}:{ws_port}{reset}{ws_note}",
+        f"  {bold}Modus     {reset}: {yellow}{MODE}{'  (TUI)' if USE_TUI else ''}{reset}",
+        f"{cyan}{bar}{reset}",
+    ]
+    print("\n".join(lines), flush=True)
+    # Auch ins Logger-File-Log schreiben (sobald Logger steht)
+    log.info(f"[supervisor] Logger    → tcp://{log_host}:{log_port}")
+    log.info(f"[supervisor] Dashboard → http://{dash_host}:{dash_port}")
+    log.info(f"[supervisor] WS-Server → ws://{ws_host}:{ws_port}")
+
+
 async def terminate(proc: asyncio.subprocess.Process | None, name: str, timeout: float = 5.0):
     if not proc or proc.returncode is not None:
         return
@@ -139,6 +243,10 @@ async def _start_core_services() -> List[Tuple[str, asyncio.subprocess.Process]]
     Liefert die Liste der gestarteten Prozesse, damit der Supervisor sie
     beim Shutdown ebenfalls beendet.
     """
+    # 0) Ports prüfen / hochzählen + Banner mit den FINALEN Ports zeigen.
+    log_host, log_port, dash_host, dash_port, ws_host, ws_port = _resolve_service_ports()
+    _print_service_banner(log_host, log_port, dash_host, dash_port, ws_host, ws_port)
+
     # DB einmalig initialisieren (Tabellen anlegen, falls noch nicht vorhanden)
     try:
         from core.db import init_db
