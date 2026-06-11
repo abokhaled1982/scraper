@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,11 @@ log = get_logger("creatomate_accounts")
 #   .parent -> <repo root>
 _REPO_ROOT      = Path(__file__).resolve().parent.parent.parent.parent
 _ACCOUNTS_DIR   = _REPO_ROOT / "creatomate" / "accounts"
+# Aufgebrauchte / abgelaufene Account-Dateien werden hierhin verschoben,
+# damit der Pool ``_ACCOUNTS_DIR`` nur noch frische Accounts enthaelt.
+# In Zukunft kann man also einfach neue .txt-Dateien in ``_ACCOUNTS_DIR``
+# reinkopieren und alte landen automatisch in ``deleted/``.
+_DELETED_DIR    = _ACCOUNTS_DIR / "deleted"
 _TEMPLATES_DIR  = Path(__file__).resolve().parent / "templates"
 
 
@@ -270,17 +276,79 @@ _SKIP_LOCK = threading.Lock()
 _SKIPPED_KEYS: set[str] = set()
 
 
+def _find_account_files_by_key(api_key: str) -> list[Path]:
+    """Alle ``*.txt`` im Account-Pool, die diesen Bearer-Key enthalten.
+
+    Der ``deleted/``-Unterordner wird durch ``glob("*.txt")`` (nicht-rekursiv)
+    automatisch ausgeschlossen — verschobene Dateien werden also nicht erneut
+    angefasst.
+    """
+    if not api_key or not _ACCOUNTS_DIR.is_dir():
+        return []
+    matches: list[Path] = []
+    for fp in _ACCOUNTS_DIR.glob("*.txt"):
+        if fp.stem.lower() == "expired":
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        bearer = _BEARER_RE.search(text)
+        if bearer and bearer.group(1).strip() == api_key:
+            matches.append(fp)
+    return matches
+
+
+def _move_file_to_deleted(src: Path, reason: str = "") -> Path | None:
+    """Verschiebt eine Account-Datei nach ``creatomate/accounts/deleted/``.
+
+    Existiert die Zieldatei dort schon (z.B. weil derselbe Account-Name in
+    einem früheren Run schon mal aufgebraucht war), hängen wir einen Zeitstempel
+    an, statt zu überschreiben — so geht keine Datei verloren.
+    """
+    try:
+        _DELETED_DIR.mkdir(parents=True, exist_ok=True)
+        dest = _DELETED_DIR / src.name
+        if dest.exists():
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dest = _DELETED_DIR / f"{src.stem}_{ts}{src.suffix}"
+        src.rename(dest)
+    except OSError as exc:
+        log.error("[CM-ACCT] Konnte %s nicht nach deleted/ verschieben: %s", src.name, exc)
+        return None
+    log.info(
+        "[CM-ACCT] 🗑️  Account-Datei verschoben: %s → %s (%s)",
+        src.name,
+        dest.relative_to(_REPO_ROOT),
+        reason or "exhausted",
+    )
+    return dest
+
+
 def mark_key_exhausted(api_key: str, reason: str = "") -> None:
-    """Markiert einen api_key als "kein Credit" fuer den Rest dieser Laufzeit."""
+    """Markiert einen api_key als "kein Credit" fuer den Rest dieser Laufzeit.
+
+    Zusätzlich werden alle ``.txt``-Dateien aus ``creatomate/accounts/``,
+    die genau diesen Bearer-Key enthalten, nach ``creatomate/accounts/deleted/``
+    verschoben — so taucht der Account beim nächsten Start gar nicht mehr im
+    Pool auf, und wir können in Zukunft einfach neue ``.txt``-Dateien in den
+    Pool kopieren.
+    """
     if not api_key:
         return
     with _SKIP_LOCK:
+        first_time = api_key not in _SKIPPED_KEYS
         _SKIPPED_KEYS.add(api_key)
     log.warning(
         "[CM-ACCT] 💸 Key markiert als aufgebraucht (%s): %s",
         reason or "no-credit",
         _mask(api_key),
     )
+    # Datei-Move nur beim ersten Markieren — sonst scannen wir bei jedem
+    # Retry erneut den ganzen Account-Ordner.
+    if first_time:
+        for fp in _find_account_files_by_key(api_key):
+            _move_file_to_deleted(fp, reason=reason or "no-credit")
 
 
 def is_key_exhausted(api_key: str) -> bool:
