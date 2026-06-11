@@ -1,0 +1,16 @@
+curl -X POST https://api.creatomate.com/v2/renders \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer 222acdf800414b538fa72b3b1fcb4cd3d106797e40efae8531076abcad92773992c07491180ccd33c82b5c4f87262826" \
+     -d '{
+  "template_id": "dbe367ac-cc9e-44e7-aaaf-3a6621997729",
+  "modifications": {
+    "Product-Image.source": "https://creatomate.com/files/assets/fe61553c-4274-4586-affe-54cffe99ccdc",
+    "Product-Name.text": "Nike RN Flyknit",
+    "Product-Description.text": "Unleash your inner athlete with these high-performance running shoes.",
+    "Normal-Price.text": "$ 109.99",
+    "Discounted-Price.text": "$ 89.99",
+    "CTA.text": "Follow us for more discount alerts!",
+    "Website.text": "www.mywebsite.com",
+    "Voiceover-C9N.source": "This text is read aloud. Replace it with your own speech text."
+  }
+}'

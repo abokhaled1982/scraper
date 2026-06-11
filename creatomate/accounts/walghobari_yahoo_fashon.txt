@@ -1,0 +1,14 @@
+curl -X POST https://api.creatomate.com/v2/renders \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer 2b5442323d6f47019703bc09255981fd6a9263379c2c03c45ffd40ea367a34f52bfc95c8841a4f84a4d0b24d187ee532" \
+     -d '{
+  "template_id": "c668efc4-4759-4eb8-b962-32c208bd55bb",
+  "modifications": {
+    "Background-Image.source": "https://creatomate.com/files/assets/d3703f1f-fc12-4229-8cd6-ab23c5ddd782",
+    "Logo.source": "https://creatomate.com/files/assets/09ebe5ac-cfa2-44b6-8c2a-d4cbfb8cf74e",
+    "Website.text": "www.dealsboss.de",
+    "Discount.text": "-30%",
+    "Title.text": "Spring Sale",
+    "Voiceover-C9N.source": "This text is read aloud. Replace it with your own speech text."
+  }
+}'

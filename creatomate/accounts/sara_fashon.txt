@@ -1,0 +1,240 @@
+{
+  "output_format": "mp4",
+  "width": 1080,
+  "height": 1920,
+  "frame_rate": "60 fps",
+  "duration": 15.97,
+  "snapshot_time": 3.67,
+  "elements": [
+    {
+      "id": "0dac167e-ca39-414b-8d88-1b08c8489bd6",
+      "name": "Background-Image",
+      "type": "image",
+      "track": 1,
+      "time": 0,
+      "source": "d3703f1f-fc12-4229-8cd6-ab23c5ddd782",
+      "color_overlay": [
+        {
+          "time": 3.3,
+          "easing": "quadratic-out",
+          "value": "rgba(0,0,0,0)"
+        },
+        {
+          "time": 4.33,
+          "easing": "quadratic-out",
+          "value": "rgba(0,0,0,0.33)"
+        }
+      ],
+      "dynamic": true,
+      "animations": [
+        {
+          "easing": "quadratic-out",
+          "type": "scale",
+          "fade": false,
+          "end_scale": "120%",
+          "start_scale": "100%"
+        }
+      ]
+    },
+    {
+      "id": "de2f5dfd-51f9-4aec-ab1b-4fdf91e5b628",
+      "name": "Brand",
+      "type": "composition",
+      "track": 3,
+      "time": 0.49,
+      "x": "45.0963%",
+      "y": [
+        {
+          "time": 13.19,
+          "value": "84.2086%"
+        },
+        {
+          "time": 13.975,
+          "value": "56.6988%"
+        },
+        {
+          "time": 14.814,
+          "value": "53.9405%"
+        },
+        {
+          "time": 15.43,
+          "value": "50%"
+        }
+      ],
+      "width": [
+        {
+          "time": 13.19,
+          "value": "40.5714 vmin"
+        },
+        {
+          "time": 13.7,
+          "value": "71.571 vmin"
+        },
+        {
+          "time": 15.485,
+          "value": "75.57 vmin"
+        }
+      ],
+      "height": [
+        {
+          "time": 13.27,
+          "value": "11.2488 vmin"
+        },
+        {
+          "time": 14.66,
+          "value": "19.8437 vmin"
+        },
+        {
+          "time": 15.485,
+          "value": "40.8595 vmin"
+        }
+      ],
+      "aspect_ratio": 3.5956,
+      "elements": [
+        {
+          "id": "ba7cdeec-2f47-432b-8cac-cd597b3c8083",
+          "name": "Logo",
+          "type": "image",
+          "track": 1,
+          "time": 0,
+          "y": "38%",
+          "width": "109.7334%",
+          "height": "165%",
+          "source": "09ebe5ac-cfa2-44b6-8c2a-d4cbfb8cf74e",
+          "fit": "contain",
+          "dynamic": true
+        },
+        {
+          "id": "f8ff8cb4-e178-4e37-88d2-e08601469c15",
+          "name": "Website",
+          "type": "text",
+          "track": 2,
+          "time": 0,
+          "y": "118%",
+          "width": "95%",
+          "height": "55%",
+          "x_alignment": "50%",
+          "y_alignment": "50%",
+          "text": "www.dealsboss.de",
+          "font_family": "Montserrat",
+          "font_weight": "800",
+          "font_size_minimum": "3.6 vmin",
+          "font_size_maximum": "5.2 vmin",
+          "letter_spacing": "2%",
+          "text_clip": true,
+          "background_color": "rgba(0,0,0,0.78)",
+          "background_x_padding": "22%",
+          "background_y_padding": "38%",
+          "background_border_radius": "50%",
+          "fill_color": "rgba(255,255,255,1)",
+          "shadow_color": "rgba(0,0,0,0.45)",
+          "shadow_blur": "1.4 vmin",
+          "shadow_y": "0.4 vmin",
+          "dynamic": true
+        }
+      ]
+    },
+    {
+      "id": "98f55018-59f8-4a96-9b36-ec6c54a31d78",
+      "name": "Discount",
+      "type": "text",
+      "track": 4,
+      "time": 1.548,
+      "duration": 12.752,
+      "x": "70.8617%",
+      "y": "47.9011%",
+      "width": "45.4552%",
+      "height": "21.6893%",
+      "z_rotation": "-13.7034°",
+      "x_alignment": "50%",
+      "text": "-30%",
+      "font_family": "Work Sans",
+      "font_weight": "700",
+      "letter_spacing": "-58%",
+      "background_color": "rgba(253,94,94,1)",
+      "background_x_padding": "13%",
+      "background_y_padding": "6%",
+      "fill_color": "rgba(0,0,0,1)",
+      "dynamic": true,
+      "animations": [
+        {
+          "time": 0,
+          "duration": 4.03,
+          "easing": "sinusoid-out",
+          "type": "text-counter",
+          "scope": "split",
+          "split": "line",
+          "direction": "up"
+        },
+        {
+          "time": 0,
+          "duration": 0.3,
+          "easing": "sinusoid-out",
+          "type": "scale",
+          "start_scale": "500%"
+        },
+        {
+          "time": "end",
+          "duration": 1.07,
+          "easing": "quadratic-out",
+          "reversed": true,
+          "type": "slide",
+          "track": 0,
+          "property": "animations",
+          "direction": "270°"
+        }
+      ]
+    },
+    {
+      "id": "9db23433-c1cd-4bd9-a79b-7e072a72cd2c",
+      "name": "Title",
+      "type": "text",
+      "track": 5,
+      "time": 0.49,
+      "duration": 13.7,
+      "x": "8.9109%",
+      "y": "7.4762%",
+      "width": "82.1782%",
+      "height": "14.9825%",
+      "x_anchor": "0%",
+      "y_anchor": "0%",
+      "x_alignment": "50%",
+      "y_alignment": "100%",
+      "text": "Spring Sale",
+      "font_family": "Work Sans",
+      "font_weight": "700",
+      "fill_color": "rgba(255,255,255,1)",
+      "dynamic": true,
+      "animations": [
+        {
+          "time": 0,
+          "duration": 0.67,
+          "easing": "cubic-out",
+          "type": "fade",
+          "track": 0,
+          "property": "animations"
+        },
+        {
+          "time": "end",
+          "duration": 1.07,
+          "easing": "quadratic-out",
+          "reversed": true,
+          "type": "slide",
+          "track": 0,
+          "property": "animations",
+          "direction": "270°"
+        }
+      ]
+    },
+    {
+      "id": "a7415112-86ed-4727-95ea-1cc0ce5da136",
+      "name": "Voiceover-C9N",
+      "type": "audio",
+      "track": 7,
+      "time": 0,
+      "source": "This text is read aloud. Replace it with your own speech text.",
+      "provider": "elevenlabs model_id=eleven_multilingual_v2 voice_id=XrExE9yKIg1WjnnlVkGX",
+      "dynamic": true
+    }
+  ]
+}
