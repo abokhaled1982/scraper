@@ -20,6 +20,7 @@ import socket
 import sys
 import asyncio
 import signal
+import time
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from dotenv import load_dotenv
@@ -48,10 +49,26 @@ _arg_parser.add_argument(
     help="Einmaliger Profil-Login: \u00f6ffnet Chrome mit Worker-Profil + Addon, "
          "damit du dich einloggen kannst. Beendet sich danach.",
 )
+_arg_parser.add_argument(
+    "--force",
+    action="store_true",
+    help="Killt automatisch alte Supervisor-/Worker-Prozesse, statt mit "
+         "Fehler abzubrechen. Nützlich, wenn ein voriger Run ungeordnet "
+         "beendet wurde und noch .session-SQLite-Locks halt.",
+)
+_arg_parser.add_argument(
+    "--no-restart",
+    action="store_true",
+    help="Deaktiviert Auto-Restart abgestürzter Worker. Standard: Worker werden "
+         "bei Crash neugestartet, damit z. B. ein Telegram-Hänger nicht den "
+         "laufenden Facebook-Reel-Upload abbricht.",
+)
 ARGS = _arg_parser.parse_args()
 MODE = ARGS.mode
 USE_TUI = ARGS.tui
 SETUP_TARGET = ARGS.setup_profiles
+FORCE = ARGS.force
+AUTO_RESTART = not ARGS.no_restart
 
 # ----------------------------------------------------------
 # Initial Setup & Pfade
@@ -110,10 +127,125 @@ async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
     # auch wenn der Worker direkt mit absolutem Pfad gestartet wird.
     existing_pp = os.environ.get("PYTHONPATH", "")
     pythonpath = str(HERE) + (os.pathsep + existing_pp if existing_pp else "")
-    return await asyncio.create_subprocess_exec(
-        *argv,
-        env={**os.environ, "PYTHONPATH": pythonpath, **(env or {})},
-    )
+    full_env = {**os.environ, "PYTHONPATH": pythonpath, **(env or {})}
+    proc = await asyncio.create_subprocess_exec(*argv, env=full_env)
+    # Merke argv + env am Prozess-Objekt, damit der Supervisor den Worker
+    # bei einem Absturz mit identischen Parametern neu starten kann
+    # (siehe _supervise_with_restart()).
+    setattr(proc, "_spawn_argv", argv)
+    setattr(proc, "_spawn_env", env)
+    setattr(proc, "_spawn_name", name)
+    return proc
+
+# ----------------------------------------------------------
+# Pre-Flight: alte Supervisor-/Worker-Prozesse erkennen
+# ----------------------------------------------------------
+# Diese Worker-Module identifizieren wir als „uns gehörend". Tauchen sie
+# in der Prozessliste auf, obwohl wir gerade frisch starten, ist es ein
+# Geisterprozess aus einem vorherigen, nicht sauber beendeten Run.
+_WORKER_MODULE_KEYWORDS = (
+    "core.workers.amazon.ws_server",
+    "core.workers.amazon.watcher",
+    "core.workers.amazon.product_opener",
+    "core.workers.amazon.product_parser",
+    "core.workers.facebook.fb_watcher",
+    "core.workers.telegram.telRouter",
+    "core.workers.telegram.telObserver",
+    "core.workers.telegram.telObserver_piraten",
+    "core.workers.telegram.telSender",
+    "core.dashboard",
+    "core.logging.server",
+    "core.logging.tui_server",
+)
+
+
+def _scan_stale_processes() -> List[Tuple[int, str]]:
+    """Liefert (pid, cmdline) aller verdächtigen Geisterprozesse — ohne uns selbst."""
+    import subprocess as _sp
+    me = os.getpid()
+    stale: List[Tuple[int, str]] = []
+    try:
+        out = _sp.check_output(["ps", "-eo", "pid=,cmd="], text=True, errors="ignore")
+    except Exception as e:
+        log.warning(f"[supervisor] preflight: ps fehlgeschlagen: {e}")
+        return stale
+    # Auch eine andere run_all.py-Instanz ist „stale" aus unserer Sicht.
+    extra = (str(HERE / "run_all.py"),)
+    keywords = _WORKER_MODULE_KEYWORDS + extra
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pid_str, _, cmd = line.partition(" ")
+            pid = int(pid_str)
+        except Exception:
+            continue
+        if pid == me:
+            continue
+        if not any(k in cmd for k in keywords):
+            continue
+        # Nur Prozesse mit unserem venv-Python — andere Python-Prozesse
+        # ignorieren wir, sonst killen wir uns u.U. fremde Sachen.
+        if str(PY) not in cmd and ".venv/bin/python" not in cmd:
+            continue
+        stale.append((pid, cmd))
+    return stale
+
+
+def _kill_processes(procs: List[Tuple[int, str]]) -> None:
+    """Beendet PIDs zuerst per SIGTERM, dann (nach 3s) per SIGKILL."""
+    import time as _time
+    for pid, cmd in procs:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            log.warning(f"[supervisor] preflight: SIGTERM → {pid}  ({cmd[:80]})")
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            log.error(f"[supervisor] preflight: kill {pid} failed: {e}")
+    _time.sleep(3)
+    for pid, cmd in procs:
+        try:
+            os.kill(pid, 0)  # noch da?
+            os.kill(pid, signal.SIGKILL)
+            log.warning(f"[supervisor] preflight: SIGKILL → {pid}  ({cmd[:80]})")
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+
+
+def preflight_kill_stale() -> None:
+    """Vor dem Start checken, ob alte Scraper-Prozesse noch laufen.
+
+    - Ohne --force: klare Meldung + Liste + Exit (so kann der User entscheiden).
+    - Mit --force: alte Prozesse werden geterminated.
+    Verhindert das „database is locked"-Problem auf den .session-Dateien.
+    """
+    stale = _scan_stale_processes()
+    if not stale:
+        return
+    log.error("─" * 60)
+    log.error(f"❌ Es laufen noch {len(stale)} alte(r) Scraper-Prozess(e):")
+    for pid, cmd in stale:
+        log.error(f"   PID {pid:>7}  {cmd[:100]}")
+    log.error("─" * 60)
+    if FORCE:
+        log.warning("[supervisor] --force aktiv → killing …")
+        _kill_processes(stale)
+        # Kurze Restprüfung
+        leftover = _scan_stale_processes()
+        if leftover:
+            log.error(f"❌ {len(leftover)} Prozess(e) liessen sich nicht beenden. Abbruch.")
+            sys.exit(2)
+        log.info("✅ Alte Prozesse beendet — Start läuft weiter.")
+        return
+    log.error("Diese halten die Telegram-.session-Dateien (SQLite) gesperrt.")
+    log.error("Lösung A:  python run_all.py --force      (killt sie automatisch)")
+    log.error("Lösung B:  manuell:  kill -TERM <PID>     (dann run_all neu starten)")
+    sys.exit(2)
+
 
 # ----------------------------------------------------------
 # Port-Helpers: belegte Ports automatisch hochzählen
@@ -362,6 +494,10 @@ def setup_profiles(target: str) -> int:
 async def main():
     os.chdir(HERE)
     _ensure_dirs()
+    # Pre-Flight: alte Supervisor-/Worker-Prozesse abfangen, damit wir
+    # nicht in „sqlite3.OperationalError: database is locked" beim
+    # Telegram-Login laufen.
+    preflight_kill_stale()
 
     if MODE == "parser":
         log.info("[supervisor] Modus: parser — nur Amazon-Pipeline (kein Telegram, kein Facebook)")
@@ -441,11 +577,33 @@ async def _run_full():
 
 
 async def _wait_and_shutdown(procs: List[Tuple[str, asyncio.subprocess.Process]]):
-    """Wartet auf erstes Exit oder Signal, dann geordnetes Shutdown."""
+    """Wartet auf Signal (SIGINT/SIGTERM) und hält Worker am Leben.
+
+    Wenn AUTO_RESTART aktiv ist (Standard), startet diese Routine abgestürzte
+    Worker automatisch neu — so reißt z. B. ein crashender Telegram-Observer
+    nicht den `fb_watcher` mitten im Reel-Upload mit. Ein sauberes Beenden
+    aller Worker passiert nur bei SIGINT/SIGTERM.
+
+    Mit --no-restart fällt sie auf das alte Verhalten zurück: sobald ein
+    Worker exitet, werden alle anderen mit-getötet.
+    """
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
+
+    if not AUTO_RESTART:
+        await _wait_first_exit_then_kill_all(procs, stop_event)
+        return
+
+    await _supervise_with_restart(procs, stop_event)
+
+
+async def _wait_first_exit_then_kill_all(
+    procs: List[Tuple[str, asyncio.subprocess.Process]],
+    stop_event: asyncio.Event,
+) -> None:
+    """Altverhalten (vor Auto-Restart): erstes Exit → alle anderen killen."""
 
     async def wait_any():
         tasks = [asyncio.create_task(p.wait()) for _, p in procs]
@@ -465,6 +623,138 @@ async def _wait_and_shutdown(procs: List[Tuple[str, asyncio.subprocess.Process]]
     else:
         log.info("[supervisor] stop requested; shutting down …")
 
+    for name, proc in reversed(procs):
+        await terminate(proc, name)
+    log.info("[supervisor] all stopped")
+
+
+# Maximale Restarts je Worker innerhalb des Beobachtungsfensters –
+# verhindert Endlosschleifen bei einem dauerhaft kaputten Worker.
+_RESTART_WINDOW_SECS = 60
+_RESTART_MAX_IN_WINDOW = 5
+# Liste der Worker, deren cleaner Exit (Code 0) als „Job erledigt" gilt –
+# diese werden NICHT neu gestartet. Alle anderen Worker sind Daemons.
+_ONESHOT_WORKERS: set[str] = set()
+
+
+async def _supervise_with_restart(
+    procs: List[Tuple[str, asyncio.subprocess.Process]],
+    stop_event: asyncio.Event,
+) -> None:
+    """Hält Worker am Leben: bei Crash neu starten, bei Signal alle stoppen.
+
+    `procs` wird in-place aktualisiert, damit das endgültige Shutdown immer
+    die aktuellen Prozess-Handles trifft (auch nach mehreren Restarts).
+    """
+    # name → Anzahl Restarts im aktuellen Beobachtungsfenster + Startzeitpunkt
+    restart_counts: Dict[str, List[float]] = {}
+
+    # Map name → Index in `procs`, damit wir nach Restart das Tupel ersetzen können.
+    def _index_of(name: str) -> int:
+        for i, (n, _) in enumerate(procs):
+            if n == name:
+                return i
+        return -1
+
+    async def watch(name: str, proc: asyncio.subprocess.Process):
+        """Wartet bis dieser eine Prozess endet. Triggert dann den Watcher-Loop."""
+        await proc.wait()
+        return name, proc.returncode
+
+    # Pro Worker einen Watch-Task. Diese werden bei Restart neu erzeugt.
+    watch_tasks: Dict[str, asyncio.Task] = {
+        name: asyncio.create_task(watch(name, proc)) for name, proc in procs
+    }
+    stop_task = asyncio.create_task(stop_event.wait())
+
+    log.info(f"[supervisor] auto-restart aktiv ({len(watch_tasks)} worker(s) überwacht)")
+
+    while True:
+        pending = set(watch_tasks.values()) | {stop_task}
+        done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+
+        if stop_task in done:
+            log.info("[supervisor] stop requested; shutting down …")
+            break
+
+        # Mindestens ein Worker hat sich beendet → ggf. neu starten.
+        for finished in done:
+            if finished is stop_task:
+                continue
+            try:
+                name, code = finished.result()
+            except Exception as e:
+                log.error(f"[supervisor] watch-task Fehler: {e}")
+                continue
+
+            # Aus dem Dict entfernen, damit wir den Eintrag ersetzen können.
+            watch_tasks.pop(name, None)
+
+            idx = _index_of(name)
+            if idx < 0:
+                log.warning(f"[supervisor] {name} exited (code={code}) – nicht im procs-Index gefunden, kein Restart")
+                continue
+
+            old_proc = procs[idx][1]
+            argv = getattr(old_proc, "_spawn_argv", None)
+            spawn_env = getattr(old_proc, "_spawn_env", None)
+
+            # One-Shot Worker (z. B. Setup-Skripte) nicht respawnen, wenn sauber raus.
+            if name in _ONESHOT_WORKERS and code == 0:
+                log.info(f"[supervisor] {name} sauber beendet (code=0) – kein Restart (one-shot)")
+                continue
+
+            if argv is None:
+                log.warning(
+                    f"[supervisor] {name} exited (code={code}) – keine spawn-Args bekannt, kein Restart"
+                )
+                continue
+
+            # Restart-Throttling: max N Restarts pro 60s. Sonst geben wir auf,
+            # damit ein dauerhaft kaputter Worker nicht ewig in der Schleife läuft.
+            now = time.monotonic()
+            hist = restart_counts.setdefault(name, [])
+            hist[:] = [t for t in hist if now - t < _RESTART_WINDOW_SECS]
+            if len(hist) >= _RESTART_MAX_IN_WINDOW:
+                log.error(
+                    f"[supervisor] {name} >= {_RESTART_MAX_IN_WINDOW} Restarts in "
+                    f"{_RESTART_WINDOW_SECS}s — gebe diesen Worker auf."
+                )
+                # Aus procs entfernen, damit Shutdown ihn nicht doppelt zu killen versucht.
+                procs.pop(idx)
+                continue
+
+            backoff = min(2 ** len(hist), 30)  # 1,2,4,8,16,30…
+            level = "warning" if code in (0, None) else "error"
+            getattr(log, level)(
+                f"[supervisor] {name} exited (code={code}) – Restart #{len(hist)+1} in {backoff}s"
+            )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+                # stop_event ist gesetzt → raus aus der Restart-Schleife
+                break
+            except asyncio.TimeoutError:
+                pass
+
+            try:
+                new_proc = await spawn(name, *argv, env=spawn_env)
+            except Exception as e:
+                log.error(f"[supervisor] Restart von {name} fehlgeschlagen: {e}")
+                continue
+
+            hist.append(time.monotonic())
+            procs[idx] = (name, new_proc)
+            watch_tasks[name] = asyncio.create_task(watch(name, new_proc))
+            log.info(f"[supervisor] {name} neu gestartet (pid={new_proc.pid})")
+
+        # Wenn stop_event innerhalb des Backoffs gesetzt wurde, raus.
+        if stop_event.is_set():
+            log.info("[supervisor] stop requested während Restart-Backoff …")
+            break
+
+    # Sauberes Shutdown aller noch laufenden Worker.
+    for t in watch_tasks.values():
+        t.cancel()
     for name, proc in reversed(procs):
         await terminate(proc, name)
     log.info("[supervisor] all stopped")

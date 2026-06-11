@@ -106,49 +106,37 @@ async def ensure_both_sessions_sequential(
         if on_step: on_step(msg)
         else: print(msg)
 
-    # 1. Router Check
-    router_ok = False
-    try:
-        c1 = await ensure_logged_in(router_cfg)
-        me = await c1.get_me()
-        say(f"✔ Router OK: {me.username or me.phone}")
-        router_ok = True
-        await c1.disconnect()
-    except Exception as e: say(f"❌ Router Fehler: {e}")
-
-    # 2. Observer Check (Main Receiver)
-    observer_ok = False
-    try:
-        c2 = await ensure_logged_in(observer_cfg)
-        me = await c2.get_me()
-        say(f"✔ Observer OK: {me.username or me.phone}")
-        observer_ok = True
-        await c2.disconnect()
-    except Exception as e: say(f"❌ Observer Fehler: {e}")
-
-    # 3. Sender Check
-    sender_ok = False
-    try:
-        c3 = await ensure_logged_in(sender_cfg)
-        me = await c3.get_me()
-        say(f"✔ Sender OK: {me.username or me.phone}")
-        sender_ok = True
-        await c3.disconnect()
-    except Exception as e: say(f"❌ Sender Fehler: {e}")
-
-    # 4. Piraten Check (NEU)
-    piraten_ok = False
-    if piraten_cfg:
+    async def _check(label: str, cfg: LoginConfig) -> bool:
+        client: Optional[TelegramClient] = None
         try:
-            c4 = await ensure_logged_in(piraten_cfg)
-            me = await c4.get_me()
-            say(f"✔ Piraten OK: {me.username or me.phone}")
-            piraten_ok = True
-            await c4.disconnect()
-        except Exception as e: say(f"❌ Piraten Fehler: {e}")
+            client = await ensure_logged_in(cfg)
+            me = await client.get_me()
+            say(f"✔ {label} OK: {me.username or me.phone}")
+            return True
+        except Exception as e:
+            # WICHTIG: log.exception(...) druckt den vollen Traceback ins File-
+            # UND Console-Log. Damit sehen wir endlich, *warum* eine Session
+            # fehlschlägt (FloodWait, falsches Passwort, DB-Lock, Netz …).
+            log.exception(f"❌ {label} Fehler ({cfg.session_name}): {e}")
+            say(f"❌ {label} Fehler: {e}  (Details siehe log_login_once.log)")
+            return False
+        finally:
+            if client is not None:
+                try:
+                    if client.is_connected():
+                        await client.disconnect()
+                except Exception as de:
+                    log.warning(f"[{label}] disconnect-Fehler ignoriert: {de}")
+
+    router_ok   = await _check("Router",   router_cfg)
+    observer_ok = await _check("Observer", observer_cfg)
+    sender_ok   = await _check("Sender",   sender_cfg)
+
+    if piraten_cfg:
+        piraten_ok = await _check("Piraten", piraten_cfg)
     else:
-        # Wenn keine Config übergeben wurde, ignorieren wir es (für Rückwärtskompatibilität)
-        piraten_ok = True 
+        # Wenn keine Config übergeben wurde, ignorieren wir es (Rückwärtskompat.)
+        piraten_ok = True
 
     return router_ok, observer_ok, sender_ok, piraten_ok
 def _ensure_dir(path: str) -> None:
@@ -172,35 +160,48 @@ async def ensure_logged_in(cfg: LoginConfig) -> TelegramClient:
 
     _ensure_dir(cfg.session_dir)
     session_path = os.path.join(cfg.session_dir, cfg.session_name)
-    
+
     # 🌟 Workaround zur Erhöhung des SQLite-Timeouts 🌟
-    sqlite_timeout_config = json.dumps({"db_timeout": 5.0}) 
+    sqlite_timeout_config = json.dumps({"db_timeout": 5.0})
 
     client = TelegramClient(
-        session_path, 
-        cfg.api_id, 
+        session_path,
+        cfg.api_id,
         cfg.api_hash,
-        device_model=sqlite_timeout_config # WICHTIG: Setzt das Timeout
+        device_model=sqlite_timeout_config  # WICHTIG: Setzt das Timeout
     )
-    
+
     # Client MUSS verbunden sein, um den Login-Status zu prüfen
-    await client.connect() 
+    await client.connect()
 
-    if await client.is_user_authorized():
-        log.info(f"✅ Session '{cfg.session_name}' gültig – kein Login nötig.")
+    # Ab hier ist eine Verbindung offen. Falls etwas schiefgeht, muss sie
+    # WIEDER zu, sonst bleiben MTProtoSender-Tasks als "Task was destroyed
+    # but it is pending!"-Warnungen am Loop hängen und der Prozess endet
+    # mit "coroutine ignored GeneratorExit".
+    try:
+        if await client.is_user_authorized():
+            log.info(f"✅ Session '{cfg.session_name}' gültig – kein Login nötig.")
+            return client
+
+        log.info("ℹ️  Keine gültige Session – starte Anmelde-Flow …")
+        phone_cb: Callable[[], str] = lambda: _env_or_prompt(cfg.phone, "Telefonnummer (+49...)")
+        password_cb: Callable[[], str] = lambda: _env_or_prompt(cfg.password, "2FA-Passwort")
+
+        await client.start(phone=phone_cb, password=password_cb)
+
+        if not await client.is_user_authorized():
+            raise RuntimeError("❌ Login fehlgeschlagen – nicht autorisiert.")
+
+        log.info(f"✅ Angemeldet. Session gespeichert unter: {session_path}.session")
         return client
-
-    log.info("ℹ️  Keine gültige Session – starte Anmelde-Flow …")
-    phone_cb: Callable[[], str] = lambda: _env_or_prompt(cfg.phone, "Telefonnummer (+49...)")
-    password_cb: Callable[[], str] = lambda: _env_or_prompt(cfg.password, "2FA-Passwort")
-
-    await client.start(phone=phone_cb, password=password_cb)
-
-    if not await client.is_user_authorized():
-        raise RuntimeError("❌ Login fehlgeschlagen – nicht autorisiert.")
-
-    log.info(f"✅ Angemeldet. Session gespeichert unter: {session_path}.session")
-    return client
+    except BaseException:
+        # Auch KeyboardInterrupt/Cancellation muss zum Disconnect führen.
+        try:
+            if client.is_connected():
+                await client.disconnect()
+        except Exception as de:
+            log.warning(f"[{cfg.session_name}] disconnect nach Fehler fehlgeschlagen: {de}")
+        raise
 
 
 # Optional: als Skript nutzbar -> `python -m telegram.login_once`
