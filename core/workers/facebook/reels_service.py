@@ -1,117 +1,349 @@
 # reels/reels_service.py
-# Service für Creatomate API zum Rendern von Reels
+# Service fuer Creatomate API zum Rendern von Reels
 
+import json
 import os
 import pathlib
 import time
+from dataclasses import dataclass
 
 import requests
 
 from core.logging import get_logger  # noqa: E402
+from core.workers.facebook.creatomate_accounts import (  # noqa: E402
+    CreatomateAccount,
+    build_fallback_chain,
+    is_no_credit_error,
+    kind_for_template_type,
+    mark_key_exhausted,
+    persist_active_account,
+)
+
 log = get_logger("reels_service")  # noqa: E402
 
 API_URL = "https://api.creatomate.com/v2/renders"
 _DEFAULT_API_KEY = os.getenv("CREATOMATE_API_KEY", "")
 
+_TEMPLATES_DIR = pathlib.Path(__file__).resolve().parent / "templates"
+
+# Rate-Limit-Retry-Backoffs fuer 429 (gilt pro Account-Versuch).
+_RATE_LIMIT_DELAYS = [30, 60, 120]
+# Transient-POST-Retry-Backoffs (Connection/Timeout).
+_POST_RETRY_DELAYS = [10, 30]
+
+_POST_TIMEOUT_S      = 120
+_POLL_INTERVAL_S     = 5
+_POLL_DEADLINE_S     = 300
+_STATUS_TIMEOUT_S    = 15
+
+
+# ── Registry-Helfer (Live-Lookup, damit Updates aus persist_active_account sofort wirken) ─
+def _read_template_cfg_by_id(template_id: str) -> dict | None:
+    """Liest die templates/*.json, die diese template_id traegt."""
+    if not template_id or not _TEMPLATES_DIR.is_dir():
+        return None
+    for fp in _TEMPLATES_DIR.glob("*.json"):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if str(data.get("template_id") or "").strip() == template_id:
+            return data
+    return None
+
+
+def _read_template_cfg_by_type(template_type: str) -> dict | None:
+    if not template_type or not _TEMPLATES_DIR.is_dir():
+        return None
+    for fp in _TEMPLATES_DIR.glob("*.json"):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if str(data.get("template_type") or "").strip() == template_type:
+            return data
+    return None
+
 
 def _get_api_key(template_id: str | None = None) -> str:
-    """Liest api_key aus dem Template-Registry, falls vorhanden. Fallback: Umgebungsvariable."""
+    """Liest den derzeit aktiven api_key fuer eine template_id aus der Registry."""
     if template_id:
-        import json as _json
-        import pathlib as _pl
-        templates_dir = _pl.Path(__file__).resolve().parent / "templates"
-        for fp in templates_dir.glob("*.json"):
-            try:
-                data = _json.loads(fp.read_text(encoding="utf-8"))
-                if data.get("template_id") == template_id:
-                    key = str(data.get("api_key") or "").strip()
-                    if key:
-                        return key
-            except Exception:
-                pass
+        cfg = _read_template_cfg_by_id(template_id)
+        if cfg:
+            key = str(cfg.get("api_key") or "").strip()
+            if key:
+                return key
     return _DEFAULT_API_KEY
 
 
-def _make_headers(template_id: str | None = None) -> dict:
-    return {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {_get_api_key(template_id)}",
+def _mask(key: str, head: int = 6, tail: int = 4) -> str:
+    if len(key) <= head + tail:
+        return "***"
+    return f"{key[:head]}…{key[-tail:]}"
+
+
+# ── Render-Outcome ────────────────────────────────────────────────────────────
+@dataclass
+class _RenderOutcome:
+    """Strukturiertes Ergebnis eines einzelnen Render-Versuchs."""
+    ok: bool
+    data: dict | None = None       # Render-Antwort bei ok=True
+    status_code: int | None = None # HTTP-Status des letzten Calls
+    error: str | None = None       # menschenlesbarer Fehlertext
+    no_credit: bool = False        # True wenn "kein Credit/Plan abgelaufen"
+
+
+def _perform_render(
+    api_key: str,
+    template_id: str,
+    modifications: dict,
+    *,
+    log_prefix: str = "",
+) -> _RenderOutcome:
+    """
+    Fuehrt EINEN Render-Versuch (POST + Polling) mit dem gegebenen api_key
+    + template_id aus und liefert ein strukturiertes Outcome zurueck.
+
+    * Behandelt 429 (Rate-Limit) mit Retry.
+    * Behandelt Connection/Timeout-Fehler beim POST mit Retry.
+    * Erkennt "kein Credit"-Fehler und setzt ``no_credit=True``.
+    * Wirft KEINE Exception bei HTTP-Fehlern – die ruft der Wrapper aus.
+    """
+    if not api_key:
+        return _RenderOutcome(
+            ok=False, error="Kein api_key vorhanden (Registry leer / CREATOMATE_API_KEY nicht gesetzt).",
+        )
+
+    headers = {
+        "Content-Type":  "application/json",
+        "Authorization": f"Bearer {api_key}",
     }
-
-_RETRY_DELAYS = [30, 60, 120]  # Sekunden Wartezeit bei 429 (3 Versuche)
-
-def render_template(template_id: str, modifications: dict) -> dict:
-    """
-    Rendert ein Template mit den gegebenen Modifikationen über die Creatomate API.
-    Wartet bis der Render abgeschlossen ist und gibt das Ergebnis zurück.
-    Bei 429 Too Many Requests wird automatisch mit Wartezeit wiederholt.
-    """
-    data = {
-        "template_id": template_id,
+    payload = {
+        "template_id":   template_id,
         "modifications": modifications,
     }
-    try:
-        log.info("🚀 Starte Creatomate Render...")
-        headers = _make_headers(template_id)
-        response = None
-        for attempt, delay in enumerate([0] + _RETRY_DELAYS, start=1):
-            if delay:
-                log.info(f"   ⏳ Rate-Limit – warte {delay}s vor Versuch {attempt}...")
-                time.sleep(delay)
-            response = requests.post(API_URL, headers=headers, json=data)
-            if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", delay or 30))
-                log.warning(f"   ⚠️  429 Too Many Requests (Versuch {attempt}/{len(_RETRY_DELAYS)+1}) – warte {retry_after}s...")
-                if attempt <= len(_RETRY_DELAYS):
-                    time.sleep(retry_after)
-                    continue
-                response.raise_for_status()
-            else:
-                response.raise_for_status()
-                break
-        renders = response.json()
 
-        # API gibt eine Liste zurück
-        if isinstance(renders, list):
-            render_data = renders[0]
-        else:
-            render_data = renders
+    log.info(
+        f"{log_prefix}🚀 Render-Versuch (template_id={template_id}, key={_mask(api_key)})"
+    )
 
-        render_id = render_data.get("id")
-        if not render_id:
-            raise ValueError(f"Keine Render-ID in der Antwort: {render_data}")
-
-        log.info(f"⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
-
-        # Polling bis Status "succeeded" oder "failed"
-        status_url = f"{API_URL}/{render_id}"
-        while True:
-            status_response = requests.get(status_url, headers=headers)
-            status_response.raise_for_status()
-            status_data = status_response.json()
-            status = status_data.get("status")
-            log.info(f"   Status: {status}")
-            if status == "succeeded":
-                log.info(f"✅ Render fertig. URL: {status_data.get('url')}")
-                return status_data
-            elif status in ("failed", "error"):
-                raise ValueError(f"Render fehlgeschlagen: {status_data.get('error', status_data)}")
-            time.sleep(5)
-    except requests.RequestException as e:
-        # Bei HTTP-Fehlern: Body mit ausgeben, damit Creatomate-Validierungsfehler sichtbar sind
-        body = ""
+    # ── POST mit 429- + Transient-Retry ───────────────────────────────────
+    response: requests.Response | None = None
+    last_exc: Exception | None = None
+    combined_delays = [0] + _POST_RETRY_DELAYS
+    for post_attempt, post_delay in enumerate(combined_delays, start=1):
+        if post_delay:
+            log.warning(
+                f"{log_prefix}   ⏳ Retry POST (Versuch {post_attempt}) "
+                f"nach {post_delay}s – letzter Fehler: {last_exc}"
+            )
+            time.sleep(post_delay)
         try:
-            if response is not None:
-                body = response.text[:800]
-        except Exception:
-            pass
-        raise Exception(f"Creatomate API-Fehler: {e}" + (f" | Body: {body}" if body else ""))
+            response = requests.post(
+                API_URL, headers=headers, json=payload, timeout=_POST_TIMEOUT_S,
+            )
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            response = None
+            continue
+
+        # 429 -> Rate-Limit-Backoff im selben POST-Slot.
+        if response.status_code == 429:
+            retry_after_hdr = response.headers.get("Retry-After")
+            for rl_idx, rl_delay in enumerate(_RATE_LIMIT_DELAYS, start=1):
+                wait_s = int(retry_after_hdr) if retry_after_hdr else rl_delay
+                log.warning(
+                    f"{log_prefix}   ⚠️  429 Too Many Requests "
+                    f"(Versuch {rl_idx}/{len(_RATE_LIMIT_DELAYS)}) – warte {wait_s}s…"
+                )
+                time.sleep(wait_s)
+                response = requests.post(
+                    API_URL, headers=headers, json=payload, timeout=_POST_TIMEOUT_S,
+                )
+                if response.status_code != 429:
+                    break
+
+        break  # POST komplett (ggf. inkl. 429-Backoff)
+
+    if response is None:
+        return _RenderOutcome(
+            ok=False,
+            error=f"POST nach {len(combined_delays)} Versuchen fehlgeschlagen: {last_exc}",
+        )
+
+    # ── HTTP-Fehler auswerten ─────────────────────────────────────────────
+    body_text = response.text or ""
+    if response.status_code >= 400:
+        no_credit = is_no_credit_error(response.status_code, body_text)
+        return _RenderOutcome(
+            ok=False,
+            status_code=response.status_code,
+            error=f"HTTP {response.status_code}: {body_text[:600]}",
+            no_credit=no_credit,
+        )
+
+    # ── Render-ID extrahieren ─────────────────────────────────────────────
+    try:
+        renders = response.json()
+    except ValueError:
+        return _RenderOutcome(
+            ok=False, status_code=response.status_code,
+            error="Antwort war kein gueltiges JSON.",
+        )
+    render = renders[0] if isinstance(renders, list) and renders else renders
+    render_id = render.get("id") if isinstance(render, dict) else None
+    if not render_id:
+        return _RenderOutcome(
+            ok=False, status_code=response.status_code,
+            error=f"Keine Render-ID in der Antwort: {str(render)[:300]}",
+        )
+
+    log.info(
+        f"{log_prefix}⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung…"
+    )
+
+    # ── Polling ───────────────────────────────────────────────────────────
+    status_url = f"{API_URL}/{render_id}"
+    deadline = time.time() + _POLL_DEADLINE_S
+    last_status = ""
+    while time.time() < deadline:
+        try:
+            sr = requests.get(status_url, headers=headers, timeout=_STATUS_TIMEOUT_S)
+        except requests.RequestException as exc:
+            return _RenderOutcome(
+                ok=False, error=f"Polling-Fehler: {exc}",
+            )
+        if sr.status_code >= 400:
+            return _RenderOutcome(
+                ok=False, status_code=sr.status_code,
+                error=f"Polling HTTP {sr.status_code}: {sr.text[:300]}",
+            )
+        sd = sr.json()
+        last_status = str(sd.get("status") or "")
+        log.info(f"{log_prefix}   Status: {last_status}")
+        if last_status == "succeeded":
+            log.info(f"{log_prefix}✅ Render fertig. URL: {sd.get('url')}")
+            return _RenderOutcome(ok=True, data=sd)
+        if last_status in ("failed", "error"):
+            return _RenderOutcome(
+                ok=False, error=f"Render fehlgeschlagen: {sd.get('error', sd)}",
+            )
+        time.sleep(_POLL_INTERVAL_S)
+
+    return _RenderOutcome(
+        ok=False, error=f"Polling-Timeout nach {_POLL_DEADLINE_S}s (zuletzt: {last_status!r})",
+    )
+
+
+# ── Wrapper mit Account-Fallback ──────────────────────────────────────────────
+def _render_with_account_fallback(
+    template_id: str,
+    modifications: dict,
+    *,
+    log_prefix: str = "",
+) -> dict:
+    """
+    Versucht den Render zuerst mit dem aktuell in der Registry hinterlegten
+    Account. Bei "kein Credit"-Fehler iteriert durch den passenden Pool
+    (``creatomate/accounts/*_(all|fashon).txt``) und persistiert den
+    Sieger-Account zurueck in die Template-JSON.
+
+    Bei jedem anderen Fehler wird sofort abgebrochen (damit wir nicht Credits
+    bei mehreren Accounts fuer dasselbe kaputte Payload verbrennen).
+    """
+    # Template-Type + Account-Kind aus der aktuellen Registry herleiten.
+    current_cfg  = _read_template_cfg_by_id(template_id) or {}
+    template_type = str(current_cfg.get("template_type") or "").strip()
+    kind          = kind_for_template_type(template_type, current_cfg)
+
+    current_api_key = _get_api_key(template_id)
+
+    # ── 1) Erster Versuch mit dem aktuell aktiven Account ─────────────────
+    outcome = _perform_render(
+        current_api_key, template_id, modifications, log_prefix=log_prefix,
+    )
+    if outcome.ok:
+        return outcome.data or {}
+
+    if not outcome.no_credit:
+        raise Exception(
+            f"Creatomate API-Fehler (kein Credit-Problem, kein Fallback): {outcome.error}"
+        )
+
+    log.warning(
+        f"{log_prefix}💸 Aktiver Account hat keine Credits "
+        f"(HTTP {outcome.status_code}). Starte Fallback-Kette (kind={kind})."
+    )
+    mark_key_exhausted(current_api_key, reason=f"HTTP {outcome.status_code}")
+
+    # ── 2) Fallback-Kette ─────────────────────────────────────────────────
+    if not template_type:
+        raise Exception(
+            "Fallback nicht moeglich: aktuelle template_id "
+            f"({template_id}) ist nicht in templates/*.json registriert."
+        )
+
+    chain = build_fallback_chain(kind, exclude_keys={current_api_key})
+    if not chain:
+        raise Exception(
+            f"Keine Fallback-Accounts verfuegbar (kind={kind}). "
+            f"Bitte in creatomate/accounts/ neuen Account hinterlegen."
+        )
+
+    last_error = outcome.error or "unknown"
+    for idx, acc in enumerate(chain, start=1):
+        log.info(
+            f"{log_prefix}↪️  Fallback {idx}/{len(chain)}: account={acc.name!r} "
+            f"template_id={acc.template_id} key={_mask(acc.api_key)}"
+        )
+        sub = _perform_render(
+            acc.api_key, acc.template_id, modifications,
+            log_prefix=log_prefix + f"   [fallback#{idx}] ",
+        )
+        if sub.ok:
+            persist_active_account(template_type, acc)
+            log.info(
+                f"{log_prefix}🎯 Fallback erfolgreich via {acc.name!r}; "
+                f"Template-Registry aktualisiert."
+            )
+            return sub.data or {}
+
+        if sub.no_credit:
+            mark_key_exhausted(acc.api_key, reason=f"HTTP {sub.status_code}")
+            last_error = sub.error or last_error
+            continue
+
+        # Anderer Fehler -> abbrechen, sonst verbrennen wir nur Credits.
+        raise Exception(
+            f"Creatomate Fallback abgebrochen (kein Credit-Problem) "
+            f"bei account={acc.name!r}: {sub.error}"
+        )
+
+    raise Exception(
+        f"Alle {len(chain)} Fallback-Accounts (kind={kind}) sind ohne Credits. "
+        f"Letzter Fehler: {last_error}"
+    )
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+def render_template(template_id: str, modifications: dict) -> dict:
+    """
+    Rendert ein Template ueber die Creatomate API.
+
+    Wartet bis der Render abgeschlossen ist und gibt die Render-Antwort zurueck.
+    Bei "kein Credit"-Fehler wird automatisch der naechste Account aus dem Pool
+    unter ``creatomate/accounts/`` probiert und der funktionierende Account
+    persistiert in ``core/workers/facebook/templates/<template>.json``.
+    """
+    return _render_with_account_fallback(template_id, modifications)
 
 
 def render_reel(modifications: dict, template_id: str | None = None) -> dict:
-    """Backward-compatible wrapper for reel rendering."""
+    """Backward-compatible Wrapper fuer Reel-Rendering."""
     if not template_id:
-        raise ValueError("template_id ist erforderlich – bitte in der Template-JSON-Datei eintragen.")
+        raise ValueError(
+            "template_id ist erforderlich – bitte in der Template-JSON-Datei eintragen."
+        )
     return render_template(template_id, modifications)
 
 
@@ -185,83 +417,31 @@ def build_typ3_audio_modifications(data: dict) -> dict:
 
 def render_typ3_audio(data: dict, template_id: str | None = None) -> dict:
     """
-    Rendert das typ3_audio-Template – exakt wie creatomate.py.
+    Rendert das typ3_audio-Template ueber die Creatomate API.
 
-    Verwendet die hardcoded TEMPLATE_ID + API_KEY (gleiche Werte wie creatomate.py),
-    damit sich Verhalten in der App und im Test-Script identisch verhalten.
-    Der `template_id`-Parameter wird nur genutzt, wenn er explizit überschrieben wird.
+    * Aufloesung der template_id:
+        1) expliziter Parameter ``template_id`` (falls gesetzt)
+        2) aktuelle ``template_id`` aus ``templates/typ3_audio.json``
+        3) hartkodierter Legacy-Fallback ``TYP3_AUDIO_TEMPLATE_ID``
+    * Account-Fallback (kein Credit) ist automatisch aktiv – siehe
+      ``_render_with_account_fallback``.
     """
-    resolved_id = (template_id or "").strip() or TYP3_AUDIO_TEMPLATE_ID
+    resolved_id = (template_id or "").strip()
+    if not resolved_id:
+        cfg = _read_template_cfg_by_type("typ3_audio")
+        if cfg:
+            resolved_id = str(cfg.get("template_id") or "").strip()
+    if not resolved_id:
+        resolved_id = TYP3_AUDIO_TEMPLATE_ID
 
     modifications = build_typ3_audio_modifications(data)
 
-    # API-Key dynamisch aus der Registry (typ3_audio.json -> api_key)
-    api_key = _get_api_key(resolved_id) or _DEFAULT_API_KEY
-    if not api_key:
-        raise ValueError("Kein Creatomate API-Key gefunden (Registry leer und CREATOMATE_API_KEY nicht gesetzt).")
-
-    payload = {
-        "template_id": resolved_id,
-        "modifications": modifications,
-    }
-    headers = {
-        "Content-Type":  "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-
-    log.info(f"[typ3_audio] 🚀 Starte Creatomate Render (template_id={resolved_id})")
+    log.info(f"[typ3_audio] 🎬 Render-Auftrag (template_id={resolved_id})")
     log.info(f"[typ3_audio]    Modifications: {list(modifications.keys())}")
 
-    # POST kann bei Voiceover-Templates >30s dauern (Creatomate validiert/preprocesst
-    # ElevenLabs-Audio vor dem Annehmen). Großzügiger Timeout + Retry gegen transiente
-    # Read-/Connection-Timeouts.
-    _POST_TIMEOUT = 120
-    _POST_RETRIES = [10, 30]  # Backoff-Sekunden vor Versuch 2 und 3
-    response = None
-    last_exc: Exception | None = None
-    for attempt, delay in enumerate([0] + _POST_RETRIES, start=1):
-        if delay:
-            log.warning(
-                f"[typ3_audio]    ⏳ Retry POST (Versuch {attempt}/{len(_POST_RETRIES)+1}) "
-                f"nach {delay}s – letzter Fehler: {last_exc}"
-            )
-            time.sleep(delay)
-        try:
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=_POST_TIMEOUT)
-            break
-        except (requests.Timeout, requests.ConnectionError) as e:
-            last_exc = e
-            if attempt > len(_POST_RETRIES):
-                raise Exception(f"Creatomate POST-Timeout nach {attempt} Versuchen: {e}") from e
-    assert response is not None  # mypy/safety
-    if response.status_code >= 400:
-        raise Exception(
-            f"Creatomate API-Fehler ({response.status_code}): {response.text[:600]}"
-        )
-    renders = response.json()
-    render_data = renders[0] if isinstance(renders, list) else renders
-    render_id = render_data.get("id")
-    if not render_id:
-        raise ValueError(f"Keine Render-ID in Antwort: {render_data}")
-
-    log.info(f"[typ3_audio] ⏳ Render gestartet (ID: {render_id}). Warte auf Fertigstellung...")
-
-    status_url = f"{API_URL}/{render_id}"
-    start = time.time()
-    while True:
-        if time.time() - start > 300:
-            raise TimeoutError(f"Render-Timeout nach 300s (ID: {render_id})")
-        status_response = requests.get(status_url, headers=headers, timeout=15)
-        status_response.raise_for_status()
-        status_data = status_response.json()
-        status = status_data.get("status")
-        log.info(f"[typ3_audio]    Status: {status}")
-        if status == "succeeded":
-            log.info(f"[typ3_audio] ✅ Render fertig. URL: {status_data.get('url')}")
-            return status_data
-        if status in ("failed", "error"):
-            raise ValueError(f"Render fehlgeschlagen: {status_data.get('error', status_data)}")
-        time.sleep(5)
+    return _render_with_account_fallback(
+        resolved_id, modifications, log_prefix="[typ3_audio] ",
+    )
 
 
 def _get_api_key_from_registry(template_type: str) -> str:
