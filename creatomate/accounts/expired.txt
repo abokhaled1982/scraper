@@ -1,0 +1,15 @@
+curl -X POST https://api.creatomate.com/v2/renders \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer 688232cc736747d08d2c0be29bb54729c84559095069862a8bf917abec15d5bdbc0ba11f777157d7df9196ecf340a18f" \
+     -d '{
+  "template_id": "69c1b5e7-fcd2-4a8d-adda-a7f37603547f",
+  "modifications": {
+    "Product-Image.source": "https://creatomate.com/files/assets/fe61553c-4274-4586-affe-54cffe99ccdc",
+    "Product-Name.text": "Nike RN Flyknit",
+    "Product-Description.text": "Unleash your inner athlete with these high-performance running shoes.",
+    "Normal-Price.text": "$ 109.99",
+    "Discounted-Price.text": "$ 89.99",
+    "CTA.text": "Folgt uns für mehr Rabattaktionen!",
+    "Website.text": "www.deealsboss.de"
+  }
+}'
