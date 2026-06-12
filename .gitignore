@@ -16,6 +16,11 @@ media/
 .vscode/
 .env
 
+# Secrets / Service-Account-Keys
+.secrets/
+*.sa.json
+*service-account*.json
+
 # Sonstige temporäre Dateien
 *.log
 *.tmp

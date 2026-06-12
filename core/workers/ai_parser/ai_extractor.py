@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 import vertexai
 from vertexai.generative_models import GenerativeModel, GenerationConfig
 from google.api_core import exceptions as google_exceptions
+from google.oauth2 import service_account
 from dotenv import load_dotenv
 
 from core.logging import get_logger  # noqa: E402
@@ -21,10 +22,25 @@ from core.workers.facebook.template_interface import (  # noqa: E402
 log = get_logger("ai_extractor")  # noqa: E402
 load_dotenv()
 
-# --- Vertex AI Konfiguration ---
-VERTEX_PROJECT_ID = "crack-photon-495413-r1"
-VERTEX_LOCATION   = "us-central1"
-LLM_MODEL         = "gemini-2.5-pro"
+# --- Vertex AI Konfiguration (aus .env, mit sinnvollen Defaults) ---
+VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "crack-photon-495413-r1")
+VERTEX_LOCATION   = os.getenv("VERTEX_LOCATION", "us-central1")
+LLM_MODEL         = os.getenv("VERTEX_MODEL", "gemini-2.5-pro")
+
+# Pfad zum Service-Account-Key (ersetzt `gcloud auth application-default login`).
+# Relative Pfade werden zum Projekt-Root aufgeloest, damit der Worker unabhaengig
+# vom aktuellen Arbeitsverzeichnis startet.
+_SA_KEY_RAW = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+if _SA_KEY_RAW:
+    _sa_path = Path(_SA_KEY_RAW).expanduser()
+    if not _sa_path.is_absolute():
+        # Projekt-Root = drei Ebenen ueber dieser Datei (core/workers/ai_parser/..)
+        _sa_path = (Path(__file__).resolve().parents[3] / _sa_path).resolve()
+    GCP_SA_KEY_PATH: Path | None = _sa_path
+    # Normalisieren, damit Google-Auth-Bibliotheken denselben absoluten Pfad sehen
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(_sa_path)
+else:
+    GCP_SA_KEY_PATH = None
 
 # --- 1. LLM-DATENMODELLE ---
 
@@ -303,7 +319,34 @@ SYSTEM_PROMPT = (
 
 def baue_pattern_pack() -> dict:
     """Initialisiert Vertex AI und gibt Model + Config zurück."""
-    vertexai.init(project=VERTEX_PROJECT_ID, location=VERTEX_LOCATION)
+    # Service-Account-Key explizit laden, damit kein `gcloud auth login` noetig ist.
+    credentials = None
+    if GCP_SA_KEY_PATH is not None:
+        if not GCP_SA_KEY_PATH.is_file():
+            raise FileNotFoundError(
+                f"Service-Account-Key nicht gefunden: {GCP_SA_KEY_PATH}. "
+                "Bitte GOOGLE_APPLICATION_CREDENTIALS in der .env pruefen."
+            )
+        credentials = service_account.Credentials.from_service_account_file(
+            str(GCP_SA_KEY_PATH),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        log.debug(
+            "Vertex AI Auth via Service-Account-Key",
+            key_path=str(GCP_SA_KEY_PATH),
+            project=VERTEX_PROJECT_ID,
+        )
+    else:
+        log.debug(
+            "GOOGLE_APPLICATION_CREDENTIALS nicht gesetzt - nutze ADC-Fallback",
+            project=VERTEX_PROJECT_ID,
+        )
+
+    vertexai.init(
+        project=VERTEX_PROJECT_ID,
+        location=VERTEX_LOCATION,
+        credentials=credentials,
+    )
     model = GenerativeModel(
         model_name=LLM_MODEL,
         system_instruction=SYSTEM_PROMPT,
