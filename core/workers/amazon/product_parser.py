@@ -690,7 +690,10 @@ def daemon_loop(interval: int = INTERVAL_SECS) -> None:
         try:
             fp = pick_oldest_html(PRODUCKT_DIR) 
             if not fp:
-                workers_repo.set_idle(_WORKER)
+                # Idle + Countdown bis zum nächsten Inbox-Scan, damit das
+                # Dashboard den wirklichen Status (wartend, nicht 'busy')
+                # mit Live-Timer anzeigt.
+                workers_repo.set_next_run(_WORKER, interval, label="inbox scan")
                 time.sleep(interval)
                 continue
             workers_repo.set_task(_WORKER, f"parsing {fp.name}")

@@ -41,9 +41,53 @@ def _on_startup() -> None:
 
 @app.get("/api/status")
 def api_status() -> dict[str, Any]:
+    """Overview-Datenquelle: Worker, Deal-Counts, Top-Queue und Opener-Pipeline.
+
+    - workers      : alle registrierten Worker (Heartbeat, current_task, stats)
+    - deals        : counts_by_status (queue/processing/sent/failed)
+    - next_queue   : die nächsten zu versendenden Deals (Top-N nach
+                     Priorität+FIFO), inkl. Titel/Markt/Preis – fürs
+                     „Was kommt als nächstes?"-Panel im Overview-Tab.
+    - opener       : Snapshot der Produkt-Pipeline:
+                       * in_list  = Einträge in state_kv['product_list']
+                       * opened   = Einträge in state_kv['opened']
+                       * pending  = product_list-Schlüssel, die noch nicht
+                                    in opened auftauchen (echte „zu öffnen"-
+                                    Restmenge)
+    """
+    # Top-N der Queue (Priorität DESC, created_at ASC – identisch zur
+    # list_queue-Sortierung, die der telRouter sowieso nutzt)
+    try:
+        top_queue = deals_repo.list_queue(limit=5)
+    except Exception:
+        top_queue = []
+    next_queue = [
+        {
+            "id": d.get("id"),
+            "market": d.get("market"),
+            "title": d.get("title"),
+            "priority": d.get("priority"),
+            "created_at": d.get("created_at"),
+            "price": ((d.get("payload") or {}).get("price")
+                      or (d.get("payload") or {}).get("price_now")),
+        }
+        for d in top_queue
+    ]
+
+    # Opener-Pipeline (DB-state_kv)
+    product_list = state_repo.get_dict("product_list") or {}
+    opened = state_repo.get_dict("opened") or {}
+    pending = [k for k in product_list.keys() if k not in opened]
+
     return {
         "workers": workers_repo.list_all(),
         "deals": deals_repo.counts_by_status(),
+        "next_queue": next_queue,
+        "opener": {
+            "in_list": len(product_list),
+            "opened": len(opened),
+            "pending": len(pending),
+        },
     }
 
 
@@ -791,23 +835,21 @@ pre.json { background:#020617; padding:12px; border-radius:8px; overflow:auto;
   <span class="tag" id="refreshTag">– offline –</span>
   <nav>
     <button data-tab="overview" class="active">Overview</button>
-    <button data-tab="timeline">Verlauf</button>
     <button data-tab="deals">Deals</button>
-    <button data-tab="workers">Workers</button>
+    <button data-tab="timeline">Verlauf</button>
+    <button data-tab="products">🛒 Produkte</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="state">State</button>
-    <button data-tab="products">🛒 Produkte</button>
     <button data-tab="settings">⚙ Settings</button>
   </nav>
 </header>
 <main>
   <section id="tab-overview"></section>
-  <section id="tab-timeline" hidden></section>
   <section id="tab-deals" hidden></section>
-  <section id="tab-workers" hidden></section>
+  <section id="tab-timeline" hidden></section>
+  <section id="tab-products" hidden></section>
   <section id="tab-logs" hidden></section>
   <section id="tab-state" hidden></section>
-  <section id="tab-products" hidden></section>
   <section id="tab-settings" hidden></section>
 </main>
 <div id="modalRoot"></div>
@@ -827,6 +869,20 @@ function fmtNext(stats) {
     const col = rem < 15 ? '#4ade80' : (rem < 60 ? '#fde047' : '#67e8f9');
     const lbl = rem >= 60 ? `${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')}` : `${rem}s`;
     return `<span class="badge" style="background:#0f172a;color:${col};">⏳ ${lbl}</span>`;
+}
+
+// "vor Xs / Xm" für last_heartbeat → schnelle Tot/Lebend-Diagnose
+function fmtHbAge(iso) {
+    if (!iso) return '<small style="color:#64748b;">—</small>';
+    const t = Date.parse(iso.endsWith('Z') ? iso : iso + 'Z');
+    if (isNaN(t)) return '<small style="color:#64748b;">—</small>';
+    const ago = Math.max(0, Math.round((Date.now() - t) / 1000));
+    let lbl, col;
+    if (ago < 30)        { lbl = `${ago}s`;             col = '#4ade80'; }
+    else if (ago < 120)  { lbl = `${ago}s`;             col = '#fde047'; }
+    else if (ago < 3600) { lbl = `${Math.floor(ago/60)}m`; col = '#fb923c'; }
+    else                 { lbl = `${Math.floor(ago/3600)}h`; col = '#f87171'; }
+    return `<small style="color:${col};">vor ${lbl}</small>`;
 }
 
 let activeTab = "overview";
@@ -852,14 +908,17 @@ async function api(path, opts) {
 // ── Overview ──────────────────────────────────────────────
 async function renderOverview() {
     const data = await api("/api/status");
-    // Config parallel laden für Quick-Toggles (z.B. Piraten-Observer)
-    let cfgItems = [];
-    try { cfgItems = await api("/api/config"); } catch (e) {}
-    const cfgMap = {};
-    cfgItems.forEach(c => { cfgMap[c.key] = c.value; });
-    const piratenOn = cfgMap["piraten.enabled"] !== false;  // default ON
+    const c = data.deals || {};
+    const op = data.opener || { in_list: 0, opened: 0, pending: 0 };
 
-    const c = data.deals;
+    // Pause-Flags parallel laden (für Pause/Resume-Badges in der Worker-Tabelle)
+    let cfg = [];
+    try { cfg = await api("/api/config"); } catch (e) {}
+    const pausedMap = {};
+    cfg.filter(c => c.key.startsWith("worker.") && c.key.endsWith(".paused"))
+       .forEach(c => { pausedMap[c.key.split(".")[1]] = !!c.value; });
+
+    // ── KPI-Zeile inkl. Opener-Pipeline ─────────────────────
     const cards = [
         ["queue", "Queue"], ["processing", "Processing"],
         ["sent", "Sent"], ["failed", "Failed"]
@@ -867,33 +926,31 @@ async function renderOverview() {
         `<div class="card"><h2>${l}</h2><div class="v ${k}">${c[k] ?? 0}</div></div>`
     ).join("");
 
-    // Observer-Quick-Toggle: zeigt aktuellen Status + 1-Klick An/Aus
-    //   → schreibt piraten.enabled in runtime_config (TTL-Bypass via .enabled-Suffix)
-    //   → telObserver_piraten prüft Flag bei jeder Nachricht
-    const obsBadge = piratenOn
-        ? '<span class="pill running" style="font-size:14px;">🟢 AKTIV</span>'
-        : '<span class="pill stopped" style="font-size:14px;">⏸ PAUSIERT</span>';
-    const obsBtn = piratenOn
-        ? `<button class="act danger" onclick="togglePiraten(false)">⏸ Observer pausieren</button>`
-        : `<button class="act" onclick="togglePiraten(true)">▶ Observer aktivieren</button>`;
-    const obsCard = `
+    // Opener-Pipeline-Karte: product_list / opened / pending
+    //   - in_list  : Anzahl Einträge in state_kv['product_list']
+    //   - opened   : Anzahl Einträge in state_kv['opened']
+    //   - pending  : product_list-Keys, die noch nicht in opened sind
+    //                = echte „zu öffnen"-Restmenge des amazon_opener
+    const openerCard = `
       <div class="card" style="grid-column: 1 / -1; background:#0b1220; border:1px solid #1e293b;">
-        <h2>🏴‍☠️ Piraten-Observer
-          <span style="float:right;">${obsBadge}</span>
-        </h2>
-        <div style="display:flex; align-items:center; gap:14px; margin-top:8px; flex-wrap:wrap;">
-          ${obsBtn}
-          <small style="color:#94a3b8;">
-            ${piratenOn
-              ? "Eingehende Telegram-Nachrichten werden automatisch in die Queue übernommen."
-              : "Eingehende Nachrichten werden ignoriert — sende Angebote manuell, ohne dass neue Links dazwischenfunken."}
-          </small>
+        <h2>🛒 Opener-Pipeline (Amazon)</h2>
+        <div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:6px; align-items:flex-end;">
+          <div>
+            <div style="font-size:11px; color:#94a3b8; text-transform:uppercase;">In Liste</div>
+            <div style="font-size:26px; font-weight:700; color:#e2e8f0;">${op.in_list}</div>
+          </div>
+          <div>
+            <div style="font-size:11px; color:#94a3b8; text-transform:uppercase;">Bereits geöffnet</div>
+            <div style="font-size:26px; font-weight:700; color:#86efac;">${op.opened}</div>
+          </div>
+          <div>
+            <div style="font-size:11px; color:#94a3b8; text-transform:uppercase;">Noch zu öffnen</div>
+            <div style="font-size:26px; font-weight:700; color:${op.pending > 0 ? '#fde047' : '#64748b'};">${op.pending}</div>
+          </div>
         </div>
       </div>`;
 
-    // "Nächster Versand"-Banner: kombiniert Queue-Count + früheste Worker-ETA
-    //   - Nur Worker mit next_run_at zählen (telRouter, fb_watcher)
-    //   - Wenn Queue leer ist → klar als "keine Deals" anzeigen
+    // ── „Nächster Versand"-Banner (kombiniert Queue-Count + Worker-ETA) ──
     const senders = (data.workers || []).filter(w => (w.stats || {}).next_run_at);
     let nextBanner = '';
     const queueN = c.queue ?? 0;
@@ -904,7 +961,6 @@ async function renderOverview() {
           <div style="font-size:18px; color:#94a3b8;">Queue ist leer — kein Deal eingeplant</div>
         </div>`;
     } else if (senders.length) {
-        // früheste ETA über alle Sender-Worker
         const etas = senders.map(w => {
             const nra = w.stats.next_run_at;
             const t = Date.parse(nra.endsWith('Z') ? nra : nra + 'Z');
@@ -941,36 +997,102 @@ async function renderOverview() {
         </div>`;
     }
 
-    const rows = data.workers.length ? data.workers.map(w => `
+    // ── Top-5 Queue: was geht als nächstes raus? ────────────
+    const nq = data.next_queue || [];
+    const queueRows = nq.length ? nq.map((d, idx) => {
+        const title = d.title ? esc(d.title).slice(0, 80) : `<small style="color:#64748b;">– kein Titel –</small>`;
+        const market = d.market ? `<span class="tag">${esc(d.market)}</span>` : '';
+        const prio = (d.priority || 0) !== 0
+            ? `<span class="badge" style="background:#0c4a6e;color:#7dd3fc;">P ${d.priority}</span>`
+            : '';
+        const price = d.price != null ? `<small style="color:#86efac;">${esc(d.price)} €</small>` : '';
+        return `
+          <tr>
+            <td style="color:#64748b; width:30px;">#${idx + 1}</td>
+            <td>${title} ${prio}</td>
+            <td>${market}</td>
+            <td>${price}</td>
+            <td><small style="color:#94a3b8;">${esc(d.created_at || "")}</small></td>
+            <td>
+              <button class="act" onclick="showDealDetail(${d.id})" title="Details">🔍</button>
+            </td>
+          </tr>`;
+    }).join('') : `<tr><td colspan="6"><small style="color:#64748b;">Queue ist leer.</small></td></tr>`;
+
+    const queueCard = `
+      <div class="card" style="grid-column: 1 / -1; background:#0b1220; border:1px solid #1e293b;">
+        <h2>📋 Nächste Deals in der Queue
+          <span style="float:right; font-size:11px; color:#64748b; font-weight:normal;">
+            Top ${nq.length} · sortiert nach Priorität, dann FIFO
+          </span>
+        </h2>
+        <table style="margin-top:6px;"><tbody>${queueRows}</tbody></table>
+      </div>`;
+
+    // ── Worker-Tabelle mit Live-Countdown + Pause/Stop/Kill ─
+    // Eine zentrale Tabelle für alle Worker (Facebook-Timer, Telegram-Router,
+    // Amazon-Opener/Parser/Watcher/WS, Observer …). Spalte „Next" zeigt den
+    // Live-Countdown aus stats.next_run_at — das ist genau das, was im
+    // Worker-Log als "sleeping → next tick in Xs" steht.
+    const rows = data.workers.length ? data.workers.map(w => {
+        const paused = pausedMap[w.name];
+        return `
         <tr>
           <td>${esc(w.name)}</td>
-          <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span></td>
+          <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span>
+              ${paused?'<span class="badge" style="background:#451a03;color:#fdba74;">⏸ pause</span>':''}</td>
           <td>${esc(w.current_task || "")}</td>
           <td>${fmtNext(w.stats)}</td>
           <td>${esc(w.pid || "")}</td>
-          <td><small>${esc(w.last_heartbeat || "")}</small></td>
-        </tr>`).join("")
-        : `<tr><td colspan="6"><small>noch keine Worker registriert</small></td></tr>`;
+          <td><small>${esc(w.started_at || "")}</small></td>
+          <td>${fmtHbAge(w.last_heartbeat)}</td>
+          <td class="row-actions">
+            ${paused
+              ? `<button class="act" onclick="workerCfg('${esc(w.name)}','resume')">▶ Resume</button>`
+              : `<button class="act" onclick="workerCfg('${esc(w.name)}','pause')">⏸ Pause</button>`}
+            <button class="act" onclick="signalWorker('${esc(w.name)}','stop')">⏻ Stop</button>
+            <button class="act danger" onclick="signalWorker('${esc(w.name)}','kill')">⚡ Kill</button>
+          </td>
+        </tr>`;
+    }).join("")
+        : `<tr><td colspan="8"><small>noch keine Worker registriert</small></td></tr>`;
+
     $("#tab-overview").innerHTML = `
         <div class="grid">${cards}</div>
-        ${obsCard}
+        ${openerCard}
         ${nextBanner}
+        ${queueCard}
         <h2 style="font-size:13px; color:#94a3b8; text-transform:uppercase;
-                   letter-spacing:.5px; margin:0 0 8px;">Worker</h2>
+                   letter-spacing:.5px; margin:14px 0 8px;">⚙ Worker &amp; Timer</h2>
+        <p style="margin:0 0 6px;"><small style="color:#64748b;">
+          Spalte „Next" zeigt den Live-Countdown bis zum nächsten Tick (Facebook-Timer,
+          Queue-Check, Inbox-Scan …). „Pause" setzt nur das DB-Flag, „Stop" sendet SIGTERM,
+          „Kill" SIGKILL. Restart braucht <code>run_all.py</code>.
+        </small></p>
         <table><thead><tr>
-            <th>Name</th><th>Status</th><th>Aufgabe</th><th>Next</th><th>PID</th><th>Heartbeat</th>
-        </tr></thead><tbody>${rows}</tbody></table>`;
+            <th>Name</th><th>Status</th><th>Aufgabe</th><th>Next</th>
+            <th>PID</th><th>Started</th><th>Heartbeat</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table>
+        <p style="margin-top:14px;"><small style="color:#64748b;">
+          Observer-/Worker-Schalter (z. B. Piraten-Observer pausieren) findest du im
+          <a href="#" onclick="document.querySelector('nav button[data-tab=settings]').click(); return false;"
+             style="color:#7dd3fc;">⚙ Settings</a>-Tab.
+          URL manuell einreichen geht im
+          <a href="#" onclick="document.querySelector('nav button[data-tab=products]').click(); return false;"
+             style="color:#7dd3fc;">🛒 Produkte</a>-Tab.
+        </small></p>`;
 }
 
-// Quick-Toggle für Piraten-Observer (von Overview-Card aufgerufen)
-async function togglePiraten(on) {
+// Quick-Toggle für beliebige *.enabled-Flags in runtime_config.
+// Wird von Settings-Tab aufgerufen. Re-rendert Settings nach dem Schreiben.
+async function toggleConfigFlag(key, on) {
     try {
-        await api(`/api/config/${encodeURIComponent("piraten.enabled")}`, {
+        await api(`/api/config/${encodeURIComponent(key)}`, {
             method: "PUT",
             headers: {"Content-Type":"application/json"},
             body: JSON.stringify({ value: !!on })
         });
-        renderOverview();
+        renderSettings();
     } catch (e) { alert("Fehlgeschlagen: " + e.message); }
 }
 
@@ -1524,60 +1646,22 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal()
 
 // ── Workers ───────────────────────────────────────────────
 async function renderWorkers() {
-    const data = await api("/api/status");
-    let cfg = [];
-    try { cfg = await api("/api/config"); } catch(e) {}
-    const pausedMap = {};
-    cfg.filter(c => c.key.startsWith("worker.") && c.key.endsWith(".paused"))
-       .forEach(c => { pausedMap[c.key.split(".")[1]] = !!c.value; });
-
-    const rows = data.workers.map(w => {
-        const paused = pausedMap[w.name];
-        return `
-        <tr>
-          <td>${esc(w.name)}</td>
-          <td><span class="pill ${esc(w.state)}">${esc(w.state)}</span>
-              ${paused?'<span class="badge" style="background:#451a03;color:#fdba74;">⏸ pause</span>':''}</td>
-          <td>${esc(w.current_task || "")}</td>
-          <td>${fmtNext(w.stats)}</td>
-          <td>${esc(w.pid || "")}</td>
-          <td><small>${esc(w.started_at || "")}</small></td>
-          <td><small>${esc(w.last_heartbeat || "")}</small></td>
-          <td class="row-actions">
-            ${paused
-              ? `<button class="act" onclick="workerCfg('${esc(w.name)}','resume')">▶ Resume</button>`
-              : `<button class="act" onclick="workerCfg('${esc(w.name)}','pause')">⏸ Pause</button>`}
-            <button class="act" onclick="signalWorker('${esc(w.name)}','stop')">⏻ Stop</button>
-            <button class="act danger" onclick="signalWorker('${esc(w.name)}','kill')">⚡ Kill</button>
-          </td>
-        </tr>`;
-    }).join("");
-    $("#tab-workers").innerHTML = `
-        <p><small>Pause/Resume setzt ein Flag in der DB — der Worker pollt es.
-        Stop = SIGTERM, Kill = SIGKILL. Restart braucht <code>run_all.py</code>.</small></p>
-        <table><thead><tr>
-            <th>Name</th><th>Status</th><th>Aufgabe</th><th>Next</th><th>PID</th>
-            <th>Started</th><th>Heartbeat</th><th></th>
-        </tr></thead><tbody>${rows}</tbody></table>
-
-        <h3 style="font-size:13px;color:#94a3b8;margin:18px 0 6px;text-transform:uppercase;letter-spacing:.5px;">
-            URL manuell einreichen</h3>
-        <div class="toolbar">
-          <input id="subUrl" placeholder="https://www.amazon.de/dp/B0..." style="min-width:480px;">
-          <button class="act" onclick="submitUrl()">📨 In product_list einreihen</button>
-        </div>
-        <small>Wird vom <code>product_opener</code> aufgegriffen wie ein Telegram-Observer-Link.</small>`;
+    // Workers-Tab wurde in Overview eingebaut. Diese Funktion bleibt nur als
+    // No-Op-Stub, damit ältere Inline-Aufrufe (z. B. aus signalWorker oder
+    // workerCfg) keinen ReferenceError werfen. Re-Rendern erfolgt über
+    // renderOverview().
+    if (typeof renderOverview === "function") return renderOverview();
 }
 async function workerCfg(name, action) {
     await api(`/api/workers/${name}/${action}`, { method:"POST" });
-    renderWorkers();
+    renderOverview();
 }
 async function signalWorker(name, action) {
     if (!confirm(`${action.toUpperCase()} → ${name}?`)) return;
     try {
         await api(`/api/workers/${name}/${action}`, { method: "POST" });
     } catch (e) { alert(e.message); }
-    renderWorkers();
+    renderOverview();
 }
 async function submitUrl() {
     const u = $("#subUrl").value.trim();
@@ -1857,9 +1941,65 @@ async function submitNewProductUrl() {
 }
 
 // ── Settings (Runtime-Config: Channel-Toggles, Limits, …) ─
+// Quick-Toggle-Block: vordefinierte Observer/Worker, die sich per
+// `<name>.enabled`-Flag in runtime_config steuern lassen.
+//   - Werte > 0 als ON, false als OFF; Default = ON (wenn Key fehlt)
+//   - Wir setzen das Flag identisch zum bisherigen Piraten-Toggle, damit
+//     der bestehende TTL-Bypass (.enabled-Suffix) greift.
+// ACHTUNG: Damit ein Worker pausiert, muss er das Flag in seiner
+// Hauptschleife selbst lesen. Aktuell respektiert es z.B. piraten.enabled
+// im telObserver_piraten — andere Worker werden über die Anzeige hier
+// nach und nach nachgezogen.
+const WORKER_TOGGLES = [
+    { key: "piraten.enabled",          icon: "🏴‍☠️", label: "Piraten-Observer",
+      hint: "Telegram-Watcher für Piraten-Channels (übernimmt eingehende Links in die Queue)." },
+    { key: "telegram_router.enabled",  icon: "✈️",   label: "Telegram-Router",
+      hint: "Versendet Deals aus der Queue an die Telegram-Kanäle." },
+    { key: "fb_watcher.enabled",       icon: "📘",   label: "Facebook-Watcher",
+      hint: "Postet Reels/Beiträge nach dem Facebook-Timer." },
+    { key: "amazon_opener.enabled",    icon: "🛒",   label: "Amazon-Opener",
+      hint: "Öffnet Produkt-URLs in Chrome (product_list → opened)." },
+    { key: "amazon_parser.enabled",    icon: "🤖",   label: "Amazon-Parser",
+      hint: "Parst die vom Opener gelieferten HTML-Snapshots." },
+];
+
 async function renderSettings() {
     const items = await api("/api/config");
-    // Gruppiere nach Namespace (vor erstem Punkt)
+    // Map für schnellen Lookup der Toggle-States
+    const cfgMap = {};
+    items.forEach(it => { cfgMap[it.key] = it.value; });
+
+    // ── Worker-Toggle-Block (über der RAW-KV-Tabelle) ──
+    const toggleRows = WORKER_TOGGLES.map(t => {
+        const on = cfgMap[t.key] !== false; // default ON
+        const badge = on
+            ? '<span class="pill running" style="font-size:12px;">🟢 AKTIV</span>'
+            : '<span class="pill stopped" style="font-size:12px;">⏸ AUS</span>';
+        const btn = on
+            ? `<button class="act danger" onclick="toggleConfigFlag('${esc(t.key)}', false)">⏸ pausieren</button>`
+            : `<button class="act" onclick="toggleConfigFlag('${esc(t.key)}', true)">▶ aktivieren</button>`;
+        return `
+          <tr>
+            <td style="width:38%;">
+              <strong style="font-size:14px;">${t.icon} ${esc(t.label)}</strong><br>
+              <small style="color:#94a3b8;">${esc(t.hint)}</small><br>
+              <small><span class="tag">${esc(t.key)}</span></small>
+            </td>
+            <td style="width:18%;">${badge}</td>
+            <td>${btn}</td>
+          </tr>`;
+    }).join("");
+
+    const togglesBlock = `
+      <h3 style="margin:6px 0 6px;font-size:13px;color:#7dd3fc;
+                 text-transform:uppercase;letter-spacing:.5px;">⚡ Observer & Worker</h3>
+      <p><small style="color:#94a3b8;">
+        Schaltet den jeweiligen Worker live an/aus (Cache &lt; 5 s).
+        Worker müssen das Flag in ihrer Hauptschleife respektieren.
+      </small></p>
+      <table style="margin-bottom:18px;"><tbody>${toggleRows}</tbody></table>`;
+
+    // ── Bestehender RAW-KV-Editor (gruppiert nach Namespace) ──
     const groups = {};
     items.forEach(it => {
         const ns = (it.key.split(".")[0] || "misc");
@@ -1917,6 +2057,9 @@ async function renderSettings() {
           <button class="act" onclick="resetSentAsins()" title="Leert das Duplikat-Register → zuvor gesendete Deals können erneut versendet werden">🔄 sent_asins leeren</button>
           <button class="act danger" onclick="dbReset()">⚠ DB Reset</button>
         </div>
+        ${togglesBlock}
+        <h3 style="margin:18px 0 6px;font-size:13px;color:#7dd3fc;
+                   text-transform:uppercase;letter-spacing:.5px;">🛠 Raw-KV-Editor</h3>
         ${html}`;
 }
 async function dbBackup() {
@@ -1978,7 +2121,6 @@ async function render() {
         if (activeTab === "overview") await renderOverview();
         else if (activeTab === "timeline") await renderTimeline();
         else if (activeTab === "deals") await renderDeals();
-        else if (activeTab === "workers") await renderWorkers();
         else if (activeTab === "logs") await renderLogs();
         else if (activeTab === "state") await renderState();
         else if (activeTab === "products") await renderProducts();
@@ -1990,7 +2132,9 @@ async function render() {
 }
 render();
 setInterval(() => {
-    if (["overview","workers","timeline","products"].includes(activeTab)) render();
+    // Overview enthält jetzt die komplette Worker-Tabelle (mit Live-Timern),
+    // daher ist Overview der Tab, der am häufigsten frisch sein muss.
+    if (["overview","timeline","products"].includes(activeTab)) render();
     // Deals-Tab: nur queue/processing automatisch nachladen (5s)
     else if (activeTab === "deals" && ["queue","processing"].includes(dealsStatus)) renderDeals();
 }, 3000);

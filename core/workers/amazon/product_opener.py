@@ -99,11 +99,22 @@ def wait_until_has_items(poll_seconds: int = POLL_SECONDS) -> dict:
     """
     Blockiert, bis state_kv['product_list'] mind. 1 Item enthält.
     Gibt den geladenen Dict zurück.
+
+    Setzt während des Wartens periodisch `set_next_run`, damit das
+    Dashboard einen echten Live-Countdown anzeigt und der Worker nicht
+    fälschlich als 'busy' oder 'stale' erscheint.
     """
+    from core.db import workers_repo as _wr
+    _W = "amazon_opener"
     while True:
         products = state_repo.get_dict(_PRODUCT_LIST_KEY)
         if isinstance(products, dict) and len(products) > 0:
             return products
+        # Echter Status: idle + Countdown bis zum nächsten DB-Check.
+        try:
+            _wr.set_next_run(_W, poll_seconds, label="product_list check")
+        except Exception:
+            pass
         log.info(f"[opener] waiting for items in DB key '{_PRODUCT_LIST_KEY}' (current: 0) … {poll_seconds}s")
         time.sleep(poll_seconds)
 
@@ -183,10 +194,12 @@ def main():
     POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "10")) 
 
     while True:
-        # 1. Wait for items (blocking until items are present)
-        workers_repo.set_idle(_WORKER)
+        # 1. Wait for items (blocking until items are present).
+        # `wait_until_has_items` aktualisiert den Heartbeat während des Wartens
+        # selbst via set_next_run, damit das Dashboard nicht 'stale' zeigt.
+        workers_repo.set_next_run(_WORKER, POLL_SECONDS, label="product_list check")
         products = wait_until_has_items(poll_seconds=POLL_SECONDS)
-        workers_repo.set_task(_WORKER, f"opening {len(products)} candidates")
+        workers_repo.set_task(_WORKER, f"scanning {len(products)} candidates")
 
         # State laden/sicherstellen (DB)
         opened = state_repo.get_dict(_OPENED_KEY)
@@ -200,7 +213,7 @@ def main():
 
         opened_count = 0
         skipped = 0
-        
+
         # 2. Processing logic
         for idx, (asin, meta) in enumerate(items, start=1):
             url = (meta or {}).get("product_url")
@@ -209,37 +222,41 @@ def main():
                 skipped += 1
                 continue
 
-            # NEU: Die URL mit dem Addon-Trigger versehen
-            triggered_url = add_trigger_param(url) # ⬅️ WICHTIGE ANPASSUNG
+            # URL mit Opener-Fragment markieren (Addon erkennt den Tab)
+            triggered_url = add_trigger_param(url)
 
-            # Angenommen, should_open existiert
             ok_to_open, reason = should_open(asin, url, meta, opened)
             if not ok_to_open:
-                #print(f"[{idx}/{total}] [SKIP] {asin} -> {reason}")
                 skipped += 1
                 continue
 
-            # Log-Ausgabe mit Hinweis auf den Trigger
-            # Angenommen, canonicalize_amazon_url existiert
+            workers_repo.set_task(
+                _WORKER,
+                f"opening [{idx}/{total}] {asin}"
+            )
             log.info(f"[{idx}/{total}] OPEN {asin} -> {canonicalize_amazon_url(url)} (Triggered)")
-            
-            # WICHTIG: Die getriggerte URL öffnen
-            # Angenommen, open_in_chrome existiert
-            if open_in_chrome(triggered_url): # ⬅️ VERWENDUNG DER MODIFIZIERTEN URL
-                # Update der History mit der ORIGINALEN URL, damit der Link sauber bleibt
+
+            if open_in_chrome(triggered_url):
                 update_opened(opened, asin, url, meta)
                 # Atomare Merge-Operation: schreibt NUR den neuen Eintrag in die DB,
                 # nicht den kompletten in-Memory-Snapshot zurück. Dadurch überlebt
                 # ein Dashboard-DB-Reset und wird nicht von alten Daten überschrieben.
                 state_repo.update_dict(_OPENED_KEY, {asin: opened[asin]})
                 opened_count += 1
+                # Während der Pause zwischen zwei Opens: ehrlich als 'idle +
+                # Countdown' melden, damit das Dashboard keinen Fake-Busy zeigt.
+                workers_repo.set_next_run(
+                    _WORKER, PAUSE_SECONDS,
+                    label=f"next open ({idx}/{total})"
+                )
                 time.sleep(PAUSE_SECONDS)
             else:
                 log.info(f"[{idx}/{total}] [FAIL] Could not open {asin}")
-        
+
         log.warning(f"[DONE] opened={opened_count}, skipped={skipped}, total={total}]")
-        
-        # 3. Pause before checking the product list again
+
+        # 3. Pause before checking the product list again (mit echtem Countdown)
+        workers_repo.set_next_run(_WORKER, POLL_SECONDS, label="cycle restart")
         log.info(f"[opener] Cycle complete. Waiting {POLL_SECONDS}s for next check...")
         time.sleep(POLL_SECONDS)
 

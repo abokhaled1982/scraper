@@ -28,7 +28,9 @@ def main():
         try:
             fp = _pick_oldest_html(INBOX_DIR)
             if not fp:
-                workers_repo.set_idle(_WORKER)
+                # Echter Status fürs Dashboard: idle + Countdown bis zum
+                # nächsten Inbox-Scan, statt nur 'idle'.
+                workers_repo.set_next_run(_WORKER, WATCH_INTERVAL_SECS, label="inbox scan")
                 time.sleep(WATCH_INTERVAL_SECS)
                 continue
 

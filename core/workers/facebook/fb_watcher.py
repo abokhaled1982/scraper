@@ -87,7 +87,9 @@ async def safety_wait():
 
 async def run_init_phase(fb_service) -> None:
     log.info("1⃣  [INIT] Prüfe Dienste...")
-    workers_repo.register(_WORKER)
+    # Worker ist bereits in start_system() registriert, damit er ab Sekunde 0
+    # im Dashboard sichtbar ist (vor der bis zu 120s langen Chrome-Init-Phase).
+    workers_repo.set_task(_WORKER, "init: warte auf Chrome+Extension")
 
     # Schritt 1: WebSocket-Server starten
     fb_service.init()
@@ -171,7 +173,10 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
     log.info("\n3️⃣  [WATCHER] 👁️  Live-Modus aktiv...")
     while True:
         try:
-            workers_repo.set_idle(_WORKER)
+            # Kein set_idle() hier — das würde den letzten sinnvollen
+            # current_task auf None setzen und das Dashboard würde nichts
+            # anzeigen. Stattdessen lassen wir set_next_run am Loop-Ende
+            # bzw. set_task beim Post das Wort führen.
             # Worker-Pause respektieren (vom Dashboard gesetzt)
             if cfg.is_worker_paused(_WORKER) or not cfg.is_enabled("facebook"):
                 workers_repo.set_next_run(_WORKER, CHECK_INTERVAL_SECS, label="queue check (paused)")
@@ -204,15 +209,42 @@ async def run_watch_loop(sent_ids: set, fb_service) -> None:
         await asyncio.sleep(CHECK_INTERVAL_SECS)
 
 
+async def _heartbeat_loop() -> None:
+    """Persistenter Hintergrund-Heartbeat.
+
+    Verhindert, dass der Worker im Dashboard als ``stale`` markiert wird,
+    wenn die Hauptschleife gerade einen langen FB-Post macht (send_post kann
+    leicht > 60s dauern, das ist mehr als ``WORKER_STALE_AFTER_SECS``).
+    Aktualisiert nur den last_heartbeat-Zeitstempel — current_task und stats
+    werden bewusst nicht überschrieben, damit der Live-Countdown / aktuelle
+    Aufgabentext erhalten bleiben.
+    """
+    from core.db import workers_repo as _wr
+    while True:
+        try:
+            _wr.heartbeat(_WORKER)  # nur Zeitstempel, kein Reset
+        except Exception:
+            pass
+        await asyncio.sleep(15)
+
+
 async def start_system():
     import core.workers.facebook.fb_service as fb_service
     log.info("========================================")
     log.info("   🚀 FACEBOOK DEAL BOT SYSTEM          ")
     log.info("========================================")
-    sent_ids = get_sent_ids()
-    await run_init_phase(fb_service)
-    await run_batch_phase(sent_ids, fb_service)
-    await run_watch_loop(sent_ids, fb_service)
+    # Früher Register: damit der Worker im Dashboard schon während der
+    # langen Chrome-/Extension-Init-Phase sichtbar ist (statt erst nach ~120s).
+    workers_repo.register(_WORKER)
+    workers_repo.set_task(_WORKER, "boot")
+    hb_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        sent_ids = get_sent_ids()
+        await run_init_phase(fb_service)
+        await run_batch_phase(sent_ids, fb_service)
+        await run_watch_loop(sent_ids, fb_service)
+    finally:
+        hb_task.cancel()
 
 
 if __name__ == "__main__":

@@ -200,11 +200,37 @@ async def handle(ws):
 
 async def main():
     from core.db import workers_repo
-    workers_repo.register("amazon_ws_server")
-    workers_repo.set_task("amazon_ws_server", f"listening on ws://{HOST}:{PORT}")
+    _WORKER = "amazon_ws_server"
+    workers_repo.register(_WORKER)
+    workers_repo.set_task(_WORKER, f"listening on ws://{HOST}:{PORT}")
+
+    # Periodischer Heartbeat: ohne ihn wird der Worker nach
+    # WORKER_STALE_AFTER_SECS im Dashboard als 'stale' markiert, obwohl er
+    # völlig in Ordnung auf eingehende Verbindungen wartet.
+    async def _heartbeat_loop() -> None:
+        while True:
+            try:
+                workers_repo.heartbeat(
+                    _WORKER,
+                    state="idle" if not assemblies else "busy",
+                    current_task=(
+                        f"assembling {len(assemblies)} stream(s)"
+                        if assemblies
+                        else f"listening on ws://{HOST}:{PORT}"
+                    ),
+                    stats={"active_streams": len(assemblies)},
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(15)
+
     async with websockets.serve(handle, HOST, PORT, max_size=None, ping_interval=30):
         log.info(f"[srv] listening on ws://{HOST}:{PORT} (single-save mode, url+id naming, product routing)")
-        await asyncio.Future()  # run forever
+        hb_task = asyncio.create_task(_heartbeat_loop())
+        try:
+            await asyncio.Future()  # run forever
+        finally:
+            hb_task.cancel()
 
 
 if __name__ == "__main__":
