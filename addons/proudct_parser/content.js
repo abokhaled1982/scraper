@@ -8,8 +8,12 @@
 
 (async () => {
   // --- Konstanten und Konfiguration ---
-  const TRIGGER_PARAM = "ext_trigger";
-  const TRIGGER_VALUE = "send_html";
+  // Opener-Marker ist ein URL-FRAGMENT, damit er nie an den Server geschickt
+  // wird (Affiliate-Tracker wie Awin sehen ihn dadurch gar nicht und können
+  // ihn nicht in 301/302-Redirects umbauen). Erkannt wird er zuerst von
+  // inject_trigger_capture.js bei document_start (siehe __OPENER_TRIGGER__);
+  // der direkte href-Check unten ist nur ein Fallback.
+  const TRIGGER_FRAGMENT = "#__opener__";
   const MIN_RUN_INTERVAL_MS = 60_000; // Max. alle 60s pro URL
   const STRIPE_BUTTON_SEL = "#amzn-ss-get-link-button, .amzn-ss-get-link-button";
   const COPY_BTN_SEL = "#amzn-ss-copy-affiliate-link-btn-announce";
@@ -73,9 +77,9 @@
 
   function hasOpenerTrigger(href = location.href) {
     // Manche Seiten (z. B. sportspar.de via Awin-Tracking) säubern direkt
-    // beim Laden alle URL-Parameter via `history.replaceState()` und löschen
-    // damit auch unseren `ext_trigger`. Daher zuerst den bei `document_start`
-    // (in inject_trigger_capture.js) gemerkten Wert prüfen — der ist immun
+    // beim Laden die URL via `history.replaceState()` und löschen damit auch
+    // unser Fragment. Daher zuerst den bei `document_start` (in
+    // inject_trigger_capture.js) gemerkten Wert prüfen — der ist immun
     // gegen spätere URL-Rewrites.
     try {
       if (window.__OPENER_TRIGGER__ === true) return true;
@@ -84,7 +88,7 @@
     }
     try {
       const u = new URL(href, location.origin);
-      return u.searchParams.get(TRIGGER_PARAM) === TRIGGER_VALUE;
+      return u.hash === TRIGGER_FRAGMENT;
     } catch {
       return false;
     }

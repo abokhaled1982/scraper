@@ -53,23 +53,27 @@ POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "30"))  # Wartezeit beim Leerl
 
 # ---------------- NEUE HELFERFUNKTION ----------------
 def add_trigger_param(url: str) -> str:
-    """Fügt 'ext_trigger=send_html' zur URL hinzu, um das Addon zu aktivieren."""
+    """
+    Markiert die URL als "vom Opener geöffnet", indem ein URL-Fragment
+    angehängt wird.
+
+    Vorteile gegenüber einem Query-Parameter:
+      - Fragmente werden NIE an den Server gesendet (Affiliate-Tracker wie
+        Awin auf sportspar.de sehen sie gar nicht und bauen sie nicht in
+        301/302-Redirects um).
+      - Fragmente landen nicht in serverseitigen Logs.
+      - Chrome kennt die volle URL inkl. Fragment beim Tab-Öffnen; unser
+        Background-Worker erkennt den Marker via `chrome.tabs.onCreated` und
+        `chrome.webNavigation.onBeforeNavigate` BEVOR irgendein Page-Skript
+        die URL via `history.replaceState()` säubern kann.
+    """
     try:
         parsed = urlparse(url)
-        # parse_qs gibt ein Dict von Listen zurück
-        query_parts = parse_qs(parsed.query) 
-        
-        # Setze den speziellen Marker, der das Addon aktiviert
-        query_parts['ext_trigger'] = ['send_html'] 
-        
-        # Erzeuge den neuen Query-String. doseq=True ist wichtig für korrekte Encodierung.
-        new_query = urlencode(query_parts, doseq=True)
-        
-        # Setze den neuen Query-String in die URL ein und gib sie zurück
-        return urlunparse(parsed._replace(query=new_query))
+        # Bestehende Query bleibt unangetastet; nur das Fragment wird gesetzt.
+        return urlunparse(parsed._replace(fragment="__opener__"))
     except Exception as e:
-        log.error(f"Fehler beim Hinzufügen des Parameters zu {url}: {e}")
-        return url # Im Fehlerfall die Original-URL zurückgeben
+        log.error(f"Fehler beim Setzen des Opener-Fragments für {url}: {e}")
+        return url  # Im Fehlerfall die Original-URL zurückgeben
 
 def load_json(p: Path, default):
     if not p.exists():
