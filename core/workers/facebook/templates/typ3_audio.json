@@ -1,32 +1,49 @@
 {
-    "template_type": "typ3_audio",
-    "template_id": "d4fe730f-511e-4bf4-b36c-44fdeca18e99",
-    "kind": "reel",
-    "account_kind": "all",
-      "api_key": "f47ac98812004fd3b59cd660254a1da02017a9e191d18ec9a3bdb8a0b526e7af01d30cb97806af581a7d9f3e8668e151",
-    "description": "Universelles Reel-Template (9:16) mit ElevenLabs-Voiceover (Stimme: Matilda). Allzweck-Template fuer nahezu alle Produktkategorien: Elektronik, Haushalt, Kueche, Werkzeug, Garten, Spielzeug, Sport, Beauty, Drogerie, Lebensmittel, Buecher, Auto- und Heimwerker-Zubehoer sowie alle weiteren Produkte ohne spezielles Design-Template. Funktioniert mit normalen Produktfotos (mit oder ohne Hintergrund). Fallback-Template, wenn kein spezialisiertes Template (z.B. typ5_sneaker_purple fuer Mode/Schmuck/Uhren) passt.",
-    "ai_extractor_hints": {
-      "is_fallback_template": true,
-      "recommended_categories": [
-        "elektronik", "haushalt", "kueche", "werkzeug", "garten", "spielzeug", "schmuck",
-        "sport", "beauty", "drogerie", "lebensmittel", "buecher", "auto",
-        "heimwerker", "buero", "tierbedarf", "baby", "gesundheit", "sonstiges"
-      ],
-      "requires_transparent_product_image": false,
-      "preferred_image_type": "normales Produktfoto (mit oder ohne Hintergrund)"
-    },
-    "default_cta": "Folgt uns für mehr Rabatte!",
-    "default_website": "www.dealsboss.de",
-    "image_fit": "cover",
-    "layer_mapping": {
-      "Product-Image.source":     "images[0] oder image_url",
-      "Product-Name.text":        "title",
-      "Product-Description.text": "reel_beschreibung",
-      "Normal-Price.text":        "original_price",
-      "Discounted-Price.text":    "price",
-      "Caption.text":             "reel_caption (Fallback: rabatt_text)",
-      "CTA.text":                 "default_cta",
-      "Website.text":             "affiliate_url",
-      "Voiceover-C9N.source":     "voiceover_text (ElevenLabs TTS – Matilda)"
-    }
+  "template_type": "typ3_audio",
+  "template_id": "b26a9904-6a67-4ce1-847c-e26b025d1bed",
+  "api_key": "f970a143c18e45799e412f268cdb64fdf0d46a2ed9307d0b2b0da601ca2034e2d280dcf6cdda797dce181219b0ddcee1",
+  "account": "hanan",
+  "kind": "reel",
+  "account_kind": "all",
+  "description": "Universelles Reel-Template (9:16) mit ElevenLabs-Voiceover (Stimme: Matilda). Allzweck-Template fuer nahezu alle Produktkategorien: Elektronik, Haushalt, Kueche, Werkzeug, Garten, Spielzeug, Sport, Beauty, Drogerie, Lebensmittel, Buecher, Auto- und Heimwerker-Zubehoer sowie alle weiteren Produkte ohne spezielles Design-Template. Funktioniert mit normalen Produktfotos (mit oder ohne Hintergrund). Fallback-Template, wenn kein spezialisiertes Template (z.B. typ5_sneaker_purple fuer Mode/Schmuck/Uhren) passt.",
+  "ai_extractor_hints": {
+    "is_fallback_template": true,
+    "recommended_categories": [
+      "elektronik",
+      "haushalt",
+      "kueche",
+      "werkzeug",
+      "garten",
+      "spielzeug",
+      "schmuck",
+      "sport",
+      "beauty",
+      "drogerie",
+      "lebensmittel",
+      "buecher",
+      "auto",
+      "heimwerker",
+      "buero",
+      "tierbedarf",
+      "baby",
+      "gesundheit",
+      "sonstiges"
+    ],
+    "requires_transparent_product_image": false,
+    "preferred_image_type": "normales Produktfoto (mit oder ohne Hintergrund)"
+  },
+  "default_cta": "Folgt uns für mehr Rabatte!",
+  "default_website": "www.dealsboss.de",
+  "image_fit": "cover",
+  "layer_mapping": {
+    "Product-Image.source": "images[0] oder image_url",
+    "Product-Name.text": "title",
+    "Product-Description.text": "reel_beschreibung",
+    "Normal-Price.text": "original_price",
+    "Discounted-Price.text": "price",
+    "Caption.text": "reel_caption (Fallback: rabatt_text)",
+    "CTA.text": "default_cta",
+    "Website.text": "affiliate_url",
+    "Voiceover-C9N.source": "voiceover_text (ElevenLabs TTS – Matilda)"
   }
+}
