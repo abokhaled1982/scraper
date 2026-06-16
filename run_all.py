@@ -120,6 +120,28 @@ def _ensure_dirs():
     ensure_directories()
     (HERE / SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
+# ----------------------------------------------------------
+# Parent-Death-Signal (Linux): sorgt dafür, dass jeder Worker
+# automatisch SIGTERM bekommt, sobald der Supervisor stirbt –
+# auch bei kill -9, Terminal-Close ohne SIGHUP-Handling oder Crash.
+# So bleibt NIE ein verwaister Worker übrig.
+# ----------------------------------------------------------
+def _install_parent_death_signal() -> None:
+    """Wird im Subprozess via preexec_fn aufgerufen (Linux only)."""
+    if sys.platform != "linux":
+        return
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        # Wenn parent (Supervisor) stirbt → Kernel schickt uns SIGTERM
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    except Exception:
+        # Best effort — wenn prctl nicht verfügbar ist, fallen wir
+        # auf den normalen SIGHUP/SIGTERM-Pfad des Supervisors zurück.
+        pass
+
+
 async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
     log.info(f"[supervisor] spawn {name}: {' '.join(argv)}")
     # Stelle sicher, dass Worker-Subprozesse das Projekt-Root in PYTHONPATH haben,
@@ -128,7 +150,11 @@ async def spawn(name: str, *argv: str, env: Optional[Dict[str, str]] = None):
     existing_pp = os.environ.get("PYTHONPATH", "")
     pythonpath = str(HERE) + (os.pathsep + existing_pp if existing_pp else "")
     full_env = {**os.environ, "PYTHONPATH": pythonpath, **(env or {})}
-    proc = await asyncio.create_subprocess_exec(*argv, env=full_env)
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        env=full_env,
+        preexec_fn=_install_parent_death_signal if sys.platform == "linux" else None,
+    )
     # Merke argv + env am Prozess-Objekt, damit der Supervisor den Worker
     # bei einem Absturz mit identischen Parametern neu starten kann
     # (siehe _supervise_with_restart()).
@@ -589,8 +615,15 @@ async def _wait_and_shutdown(procs: List[Tuple[str, asyncio.subprocess.Process]]
     """
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
+    # SIGHUP zusätzlich abfangen: schließt der User das Terminal,
+    # schickt das System SIGHUP – ohne Handler würde der Supervisor
+    # sofort sterben und Worker als verwaiste Prozesse weiterlaufen.
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, ValueError):
+            # SIGHUP gibt's z. B. unter Windows nicht – einfach überspringen.
+            pass
 
     if not AUTO_RESTART:
         await _wait_first_exit_then_kill_all(procs, stop_event)
