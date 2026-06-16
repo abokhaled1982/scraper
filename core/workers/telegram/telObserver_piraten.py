@@ -453,6 +453,17 @@ async def _amain():
         log.info(f"🏴‍☠️ Überwache {len(entities)} Kanal/Kanäle: {list(id_to_name.values())}")
         workers_repo.set_task(_WORKER, f"watching {len(entities)} channel(s)")
 
+        # Set der überwachten Channel-IDs in Bot-API-Form (-100…) und Raw-Form,
+        # damit wir einkommende Events sicher zuordnen können — unabhängig davon,
+        # welche Form Telethon im Event liefert.
+        watched_ids: set[int] = set()
+        for ent in entities:
+            rid = getattr(ent, "id", None)
+            if rid is None:
+                continue
+            watched_ids.add(rid)
+            watched_ids.add(-1_000_000_000_000 - rid)  # -100<id> Bot-API-Form
+
         # ── Catch-Up: letzte N Nachrichten je Kanal beim Start verarbeiten ──
         if CATCHUP_MESSAGES > 0:
             log.info(f"⏪ Catch-Up: verarbeite letzte {CATCHUP_MESSAGES} Nachrichten je Kanal...")
@@ -466,14 +477,71 @@ async def _amain():
                         total_added += added
             log.info(f"⏪ Catch-Up abgeschlossen: {total_added} neue Links hinzugefügt.\n")
 
+        # ── Cold-Subscribe: zwingt Telegram, die Channel-Updates für DIESE
+        # Session zu aktivieren. Ohne diesen Touch bekommt eine "neue"
+        # Session am gleichen Account oft KEINE Live-Pushes für Kanäle,
+        # weil Telegram sie nur an die zuletzt-aktive Session schickt.
+        # Ein einzelnes iter_messages(limit=1) reicht aus.
+        log.info("🔥 Cold-Subscribe: aktiviere Channel-Updates je Kanal …")
+        for ent in entities:
+            name = id_to_name.get(getattr(ent, "id", 0), "Kanal")
+            try:
+                async for _msg in client.iter_messages(ent, limit=1):
+                    pass
+                log.info(f"   🔥 subscribed: {name}")
+            except Exception as e:
+                log.warning(f"   ⚠️ subscribe failed for {name}: {e}")
+
+        # ── Diagnose: Raw-Tap auf ALLE Telegram-Updates (auch die, die
+        # Telethon's NewMessage-Filter intern verwirft). So sehen wir
+        # garantiert, ob Pushes aus den Piraten-Kanälen ankommen.
+        from telethon.tl import types as _ttypes
+
+        @client.on(events.Raw)
+        async def _diag_raw(update):
+            try:
+                cid = None
+                if isinstance(update, (_ttypes.UpdateNewChannelMessage,
+                                       _ttypes.UpdateEditChannelMessage)):
+                    msg = update.message
+                    peer = getattr(msg, "peer_id", None)
+                    cid = getattr(peer, "channel_id", None)
+                elif isinstance(update, _ttypes.UpdateNewMessage):
+                    msg = update.message
+                    peer = getattr(msg, "peer_id", None)
+                    cid = (getattr(peer, "channel_id", None)
+                           or getattr(peer, "chat_id", None)
+                           or getattr(peer, "user_id", None))
+                if cid is None:
+                    return
+                matched = cid in watched_ids or (-1_000_000_000_000 - cid) in watched_ids
+                tag = "✅ watched" if matched else "➖ other"
+                log.info(f"[PIRATEN:raw] {tag} {type(update).__name__} channel_id={cid}")
+            except Exception:
+                pass
+
+        # ── Diagnose: ungefilterter NewMessage-Tap ──
+        @client.on(events.NewMessage())
+        async def _diag(evt):
+            try:
+                cid = evt.chat_id
+                matched = cid in watched_ids
+                tag = "✅ watched" if matched else "➖ other"
+                log.info(f"[PIRATEN:diag] {tag} chat_id={cid}")
+            except Exception:
+                pass
+
         # ── Live-Listener: neue Nachrichten ───────────────────────────────
-        @client.on(events.NewMessage(chats=entities))
+        # WICHTIG: Filter über Channel-IDs (Set) statt Entity-Objekte. Bei manchen
+        # Telethon-Versionen schlägt der entitätsbasierte Vergleich fehl, wenn
+        # Entities aus `iter_dialogs()` stammen — Events werden dann lautlos
+        # verworfen. IDs sind primitiv und matchen immer.
+        @client.on(events.NewMessage(chats=list(watched_ids)))
         async def _on(evt):
             try:
-                # Dashboard-Toggle: piraten.enabled = False → komplett ignorieren.
-                # Session bleibt verbunden, damit Sofort-Reaktivierung möglich ist.
-                # set_stopped wurde bereits vom _status_loop gesetzt – kein extra DB-Write.
+                # Dashboard-Toggle: piraten.enabled = False → ignorieren.
                 if not config_repo.is_enabled("piraten"):
+                    log.info(f"[PIRATEN] toggle=OFF → skip chat_id={evt.chat_id}")
                     return
                 # Label aus .env nutzen, sonst Telegram-Titel
                 chat_id = getattr(evt.chat_id, "real", None) or evt.chat_id
@@ -519,6 +587,17 @@ async def _amain():
                 await asyncio.sleep(2.0)
 
         asyncio.create_task(_status_loop())
+
+        # Pending Updates vom Server abholen, bevor wir auf Live-Events warten.
+        # Ohne catch_up() liefert Telethon nach reinem connect() teilweise
+        # GAR KEINE neuen Events, weil der Server denkt, der Client sei
+        # "schon auf dem Laufenden" — was bei einer wiederverwendeten Session
+        # zu einem stumm hängenden Listener führt.
+        try:
+            await client.catch_up()
+            log.info("⏫ catch_up() erfolgreich — Update-Loop aktiv.")
+        except Exception as e:
+            log.warning(f"⚠️ catch_up() fehlgeschlagen: {e}")
 
         log.info("🔴 Live-Listener aktiv – warte auf neue Nachrichten...")
         await client.run_until_disconnected()
