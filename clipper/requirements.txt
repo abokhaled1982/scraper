@@ -1,0 +1,12 @@
+# GPU runtime for `python -m clipper` (Google Colab T4 or better). Keep the preinstalled CUDA torch.
+qwen-asr>=0.0.6
+silero-vad>=5.1
+ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+transformers>=4.51.0
+accelerate
+bitsandbytes>=0.45
+opencv-python-headless>=4.8
+numpy
+# optional: download source videos from URLs
+yt-dlp
+# system packages: ffmpeg (with libass) and fonts-noto-core (Noto Sans + Noto Sans Arabic)

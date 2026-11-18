@@ -152,20 +152,30 @@ def align_qwen(cfg: ClipperConfig, audio: np.ndarray, chunks: list[Chunk]) -> di
     log.info("Loading %s for %d chunks", cfg.qwen_aligner_model, len(chunks))
     aligner = Qwen3ForcedAligner.from_pretrained(cfg.qwen_aligner_model, dtype=dtype, device_map=device)
     out: dict[int, list[tuple[str, float, float]]] = {}
+
+    def align_group(model, group: list[Chunk]) -> None:
+        results = model.align(
+            audio=[(audio[int(c.start * SAMPLE_RATE) : int(c.end * SAMPLE_RATE)], SAMPLE_RATE) for c in group],
+            text=[c.text for c in group],
+            language=[LANGUAGES[c.language][0] for c in group],
+        )
+        for chunk, res in zip(group, results):
+            out[id(chunk)] = [(it.text, chunk.start + float(it.start_time), chunk.start + float(it.end_time)) for it in _items(res)]
+
     batch = max(1, cfg.asr_batch_size)
     for b in range(0, len(chunks), batch):
         group = chunks[b : b + batch]
         try:
-            results = aligner.align(
-                audio=[(audio[int(c.start * SAMPLE_RATE) : int(c.end * SAMPLE_RATE)], SAMPLE_RATE) for c in group],
-                text=[c.text for c in group],
-                language=[LANGUAGES[c.language][0] for c in group],
-            )
-        except Exception as exc:  # one bad chunk must not kill the run; it gets interpolated
-            log.warning("Qwen aligner batch failed (%s); interpolating %d chunks", exc, len(group))
-            continue
-        for chunk, res in zip(group, results):
-            out[id(chunk)] = [(it.text, chunk.start + float(it.start_time), chunk.start + float(it.end_time)) for it in _items(res)]
+            align_group(aligner, group)
+        except Exception as exc:
+            # Retry one by one so a single bad chunk (or OOM on a padded batch) only costs that chunk.
+            log.warning("Qwen aligner batch failed (%s); retrying chunk by chunk", exc)
+            for chunk in group:
+                try:
+                    align_group(aligner, [chunk])
+                except Exception as exc_one:
+                    log.warning("Qwen aligner failed for chunk %.1f-%.1fs (%s); interpolating", chunk.start, chunk.end, exc_one)
+                    free_gpu()
     del aligner
     free_gpu()
     return out
@@ -225,7 +235,10 @@ def transcribe(video: str, cfg: ClipperConfig) -> Transcript:
     log.info("%d speech regions -> %d ASR chunks", len(speech), len(chunks))
 
     run_asr(cfg, audio, chunks)
-    chunks = [c for c in chunks if c.text]
+    # Drop empty / punctuation-only outputs ("...", "♪"): nothing to caption, and they break aligners.
+    chunks = [c for c in chunks if any(normalize(t) for t in tokenize(c.text))]
+    if not chunks:
+        raise RuntimeError("ASR produced no text")
     langs = Counter(c.language for c in chunks if c.language)
     dominant = language_code(cfg.language) if cfg.language != "auto" else (langs.most_common(1)[0][0] if langs else None)
     for c in chunks:

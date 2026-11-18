@@ -141,21 +141,29 @@ def llm_candidates(transcript: Transcript, sentences: list[Sentence], cfg: Clipp
                 language=language, lines=lines, k=per_window,
                 min_sec=cfg.min_clip_sec, max_sec=cfg.max_clip_sec, target_sec=cfg.target_clip_sec,
             )
-            raw = llm.chat(SYSTEM_PROMPT, user)
-            items = parse_json_array(raw)
-            if not items and raw.strip() not in ("[]", ""):
-                raw = llm.chat(SYSTEM_PROMPT, user + "\n\nYour previous answer was not valid JSON. Output the JSON array only.")
+            try:
+                raw = llm.chat(SYSTEM_PROMPT, user)
                 items = parse_json_array(raw)
+                if not items and raw.strip() not in ("[]", ""):
+                    raw = llm.chat(SYSTEM_PROMPT, user + "\n\nYour previous answer was not valid JSON. Output the JSON array only.")
+                    items = parse_json_array(raw)
+            except Exception as exc:  # e.g. OOM on one long window: keep the picks of the other windows
+                log.warning("LLM window %d/%d failed (%s); skipping", n, len(windows), exc)
+                from .transcribe import free_gpu
+
+                free_gpu()
+                continue
             for it in items:
                 try:
                     i, j = int(it["start_id"]), int(it["end_id"])
+                    score = float(np.clip(float(it.get("score", 50) or 50), 0, 100))
                 except (KeyError, TypeError, ValueError):
                     continue
                 if not (a <= i <= b) or j < i:
                     continue
                 picks.append({
                     "i": i, "j": min(j, len(sentences) - 1),
-                    "score": float(np.clip(float(it.get("score", 50) or 50), 0, 100)),
+                    "score": score,
                     "title": str(it.get("title", "")).strip(),
                     "hook": str(it.get("hook", "")).strip(),
                     "reason": str(it.get("reason", "")).strip(),
@@ -166,19 +174,20 @@ def llm_candidates(transcript: Transcript, sentences: list[Sentence], cfg: Clipp
     return picks
 
 
-def _iou(a: Moment, b: Moment) -> float:
+def _overlap(a: Moment, b: Moment) -> float:
+    """Shared time as a fraction of the shorter clip (so a short clip can't be mostly a repeat)."""
     inter = max(0.0, min(a.end, b.end) - max(a.start, b.start))
-    union = max(a.end, b.end) - min(a.start, b.start)
-    return inter / union if union > 0 else 0.0
+    shorter = min(a.duration, b.duration)
+    return inter / shorter if shorter > 0 else 0.0
 
 
-def select(moments: list[Moment], k: int, max_overlap: float) -> list[Moment]:
-    chosen: list[Moment] = []
+def select(moments: list[Moment], k: int, max_overlap: float, chosen: list[Moment] | None = None) -> list[Moment]:
+    chosen = list(chosen or [])
     for m in sorted(moments, key=lambda m: m.score, reverse=True):
-        if all(_iou(m, c) <= max_overlap for c in chosen):
-            chosen.append(m)
         if len(chosen) >= k:
             break
+        if all(_overlap(m, c) <= max_overlap for c in chosen):
+            chosen.append(m)
     return chosen
 
 
@@ -200,16 +209,18 @@ def detect_moments(transcript: Transcript, env_db: np.ndarray, cfg: ClipperConfi
         return Moment(start=start, end=end, first_word=first, last_word=last, score=round(score, 1),
                       llm_score=llm_score, heuristic_score=round(h_score, 1), **meta)
 
-    moments: list[Moment] = []
+    llm_moments: list[Moment] = []
     if cfg.use_llm:
         try:
             for p in llm_candidates(transcript, sentences, cfg):
-                moments.append(build(p["i"], p["j"], llm_score=p["score"], title=p["title"], hook=p["hook"],
-                                     reason=p["reason"], source="llm"))
+                llm_moments.append(build(p["i"], p["j"], llm_score=p["score"], title=p["title"], hook=p["hook"],
+                                         reason=p["reason"], source="llm"))
         except Exception as exc:
             log.warning("LLM scoring unavailable (%s) - using heuristic scoring only", exc)
 
-    if len(select(moments, cfg.max_clips, cfg.max_overlap)) < cfg.max_clips:
+    # LLM picks get the slots first; heuristic windows only fill what is left.
+    chosen = select(llm_moments, cfg.max_clips, cfg.max_overlap)
+    if len(chosen) < cfg.max_clips:
         windows = candidate_windows(sentences, cfg.min_clip_sec, cfg.max_clip_sec)
         if not windows:  # very short input: take everything that fits
             windows = [(0, len(sentences) - 1)]
@@ -217,12 +228,7 @@ def detect_moments(transcript: Transcript, env_db: np.ndarray, cfg: ClipperConfi
             ((signals.window_score(sentences[i : j + 1], cfg.target_clip_sec)[0], i, j) for i, j in windows),
             reverse=True,
         )
-        # Fill remaining slots with heuristic picks, ranked below any LLM pick.
-        penalty = 0.85 if moments else 1.0
-        for h, i, j in scored[: max(50, 10 * cfg.max_clips)]:
-            m = build(i, j, title=sentences[i].text[:60], hook="", reason="heuristic", source="heuristic")
-            m.score = round(m.score * penalty, 1)
-            moments.append(m)
-
-    chosen = select(moments, cfg.max_clips, cfg.max_overlap)
-    return sorted(chosen, key=lambda m: m.score, reverse=True)
+        fillers = [build(i, j, title=sentences[i].text[:60], hook="", reason="heuristic", source="heuristic")
+                   for _, i, j in scored[: max(50, 10 * cfg.max_clips)]]
+        chosen = select(fillers, cfg.max_clips, cfg.max_overlap, chosen)
+    return chosen

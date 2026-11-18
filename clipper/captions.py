@@ -81,7 +81,8 @@ def build_ass(words: list[Word], cfg: ClipperConfig, language: str | None, width
     rtl = is_rtl(language)
     scale = height / 1920.0
     font = cfg.font or DEFAULT_FONTS.get(language or "", LATIN_FONT)
-    size = int(cfg.font_size * scale * (1.25 if cfg.captions == "word" else 1.0))
+    # Arabic glyphs have a smaller x-height at the same point size.
+    size = int(cfg.font_size * scale * (1.25 if cfg.captions == "word" else 1.0) * (1.35 if rtl else 1.0))
     max_words = cfg.max_words_per_line or (1 if cfg.captions == "word" else 3 if rtl else 4)
     max_chars = 20 if rtl else 24
     upper = cfg.uppercase and not rtl

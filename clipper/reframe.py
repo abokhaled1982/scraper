@@ -68,8 +68,6 @@ class FaceDetector:
 
 
 def _decode_samples(video: str, start: float, duration: float, width: int, height: int):
-    import cv2  # noqa: F401  (fail early if OpenCV is missing)
-
     dh = int(round(DETECT_WIDTH * height / width / 2) * 2)
     cmd = [
         "ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-i", video, "-t", f"{duration:.3f}",
@@ -133,11 +131,18 @@ def _smooth_shot(series: np.ndarray, dead_zone: float) -> np.ndarray:
         filled = np.median(np.lib.stride_tricks.sliding_window_view(pad, 5), axis=1)
     if filled.max() - filled.min() <= dead_zone:
         return np.full_like(filled, float(np.median(filled)))  # locked-off camera
-    cam, out = filled[0], np.empty_like(filled)
+    # Hysteresis camera: start moving once the subject leaves the dead zone, then glide (speed-limited)
+    # until it is re-centred, so the subject never stays parked at the frame edge.
+    max_step = 0.25 / SAMPLE_FPS  # at most 25 % of the frame width per second
+    cam, moving, out = filled[0], False, np.empty_like(filled)
     for k, p in enumerate(filled):
         diff = p - cam
         if abs(diff) > dead_zone:
-            cam += diff - np.sign(diff) * dead_zone
+            moving = True
+        if moving:
+            cam += float(np.clip(diff * 0.35, -max_step, max_step))
+            if abs(p - cam) < dead_zone * 0.15:
+                moving = False
         out[k] = cam
     win = int(SAMPLE_FPS)  # ~1 s moving average for a soft pan
     if len(out) > win:

@@ -42,7 +42,7 @@ LEXICON: dict[str, dict[str, set[str]]] = {
     "ar": {
         "question": {"لماذا", "ليش", "ليه", "كيف", "شلون", "هل", "متى", "وين", "اين", "ايش", "شو", "ماذا", "مين", "من"},
         "hook": {
-            "سر", "اسرار", "خطا", "اخطاء", "ابدا", "مستحيل", "صدمه", "حقيقه", "الحقيقه", "اهم", "افضل",
+            "سر", "اسرار", "خطا", "اخطاء", "مستحيل", "صدمه", "حقيقه", "اهم", "افضل",
             "اسوا", "فلوس", "مال", "نصيحه", "انتبه", "تخيل", "والله", "صراحه", "بصراحه", "مجنون", "اول",
             "مليون", "غلط", "مشكله", "كذب", "اكتشفت", "تغيرت", "احذر", "خطير", "عجيب", "غريب",
         },
@@ -52,6 +52,16 @@ LEXICON: dict[str, dict[str, set[str]]] = {
 }
 
 _NUMBER = re.compile(r"\d")
+_AR_PREFIXES = ("وال", "بال", "فال", "كال", "لل", "ال", "و", "ف", "ب", "ل")
+
+
+def _variants(token: str, arabic: bool) -> set[str]:
+    out = {token}
+    if arabic:
+        for p in _AR_PREFIXES:
+            if token.startswith(p) and len(token) - len(p) >= 2:
+                out.add(token[len(p):])
+    return out
 
 
 class SignalModel:
@@ -61,6 +71,7 @@ class SignalModel:
         self.hop = hop
         lex_lang = transcript.language if transcript.language in LEXICON else "en"
         self.lex = LEXICON[lex_lang]
+        self.arabic = lex_lang == "ar"
 
         mask = np.zeros(len(env_db), dtype=bool)
         for a, b in transcript.speech:
@@ -82,14 +93,17 @@ class SignalModel:
     def _tokens(self, text: str) -> list[str]:
         return [normalize(t) for t in text.split() if normalize(t)]
 
+    def _in(self, token: str, kind: str) -> bool:
+        return not _variants(token, self.arabic).isdisjoint(self.lex[kind])
+
     def hook_score(self, s: Sentence) -> float:
         toks = self._tokens(s.text)
         if not toks:
             return 0.0
         score = 0.0
-        if ends_with(s.text, QUESTION_MARKS) or toks[0] in self.lex["question"]:
+        if ends_with(s.text, QUESTION_MARKS) or self._in(toks[0], "question"):
             score += 0.35
-        score += min(0.5, 0.25 * sum(t in self.lex["hook"] for t in toks[:15]))
+        score += min(0.5, 0.25 * sum(self._in(t, "hook") for t in toks[:15]))
         if _NUMBER.search(s.text):
             score += 0.15
         if ends_with(s.text, ("!",)):
@@ -111,7 +125,7 @@ class SignalModel:
         spoken = sum(s.end - s.start for s in sentences)
         density = float(np.clip(spoken / dur, 0, 1))
         toks = [t for s in sentences for t in self._tokens(s.text)]
-        emotion = min(1.0, 8.0 * sum(t in self.lex["hook"] for t in toks) / max(1, len(toks)))
+        emotion = min(1.0, 8.0 * sum(self._in(t, "hook") for t in toks) / max(1, len(toks)))
         ending = 1.0 if ends_with(last.text, SENTENCE_END) else 0.4
         length = math.exp(-(((dur - target_sec) / (0.6 * target_sec)) ** 2))
 

@@ -70,7 +70,7 @@ class ClipperConfig:
     min_clip_sec: float = 15.0
     max_clip_sec: float = 60.0
     target_clip_sec: float = 35.0
-    max_overlap: float = 0.25  # max temporal IoU between two selected clips
+    max_overlap: float = 0.15  # max shared time between two clips, as a fraction of the shorter one
 
     # --- cutting ---
     pad_start: float = 0.12
@@ -88,7 +88,7 @@ class ClipperConfig:
     captions: str = "karaoke"  # karaoke | phrase | word | none
     font: str | None = None  # None = language default
     fonts_dir: str | None = None
-    font_size: int = 76
+    font_size: int = 92
     highlight_color: str = "#FFD400"
     text_color: str = "#FFFFFF"
     caption_margin_v: int = 520  # px from bottom, keeps captions above platform UI

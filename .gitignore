@@ -51,3 +51,6 @@ profiles/
 scripts/*.local
 *.tar.gz
 
+
+# Clipper outputs
+clipper_out/
