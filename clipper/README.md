@@ -40,7 +40,7 @@ python -m clipper run talk.mp4 --no-llm            # heuristic picks only
 
 Local machine: orchestration and cutting (ffmpeg with libass, `pip install -r clipper/requirements.txt`).
 Colab runs ASR ([colab_asr_server.ipynb](colab_asr_server.ipynb)), Kaggle 2×T4 runs Gemma 4 26B-A4B via llama-server
-([Gemma-4-26B-A4B-Leadbrief-Kaggle.ipynb](Gemma-4-26B-A4B-Leadbrief-Kaggle.ipynb)). Gemma fixes ASR errors
+([kaggle_gemma4_server.ipynb](kaggle_gemma4_server.ipynb)). Gemma fixes ASR errors
 (new words inherit the original timings, rewrites are rejected) and picks the moments.
 
 ```bash

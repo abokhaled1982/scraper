@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         if not cfg.asr_url and (args.force or not pipe.transcript_path.exists()):
             missing.append("CLIPPER_ASR_URL  (Colab: colab_asr_server.ipynb, tunnel cell)")
         if not cfg.llm_url and cfg.use_llm:
-            missing.append("CLIPPER_LLM_URL  (Kaggle: Gemma-4-26B-A4B-Leadbrief-Kaggle.ipynb, section 5)")
+            missing.append("CLIPPER_LLM_URL  (Kaggle: kaggle_gemma4_server.ipynb, section 5)")
         if missing:
             print("No local GPU stack (torch) - these remote workers must be set in clipper/.env:\n  "
                   + "\n  ".join(missing), file=sys.stderr)
