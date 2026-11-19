@@ -47,6 +47,31 @@ Return ONLY a JSON array, no prose, e.g.
 [{{"start_id": 12, "end_id": 19, "score": 78, "title": "...", "hook": "...", "reason": "..."}}]
 Return [] if nothing is worth clipping."""
 
+# Remote (llama-server) path: the grammar forces this shape; parse_json_array still finds the array inside.
+CLIPS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "clips": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start_id": {"type": "integer"},
+                    "end_id": {"type": "integer"},
+                    "score": {"type": "number"},
+                    "title": {"type": "string"},
+                    "hook": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["start_id", "end_id", "score", "title", "hook", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["clips"],
+    "additionalProperties": False,
+}
+
 
 def _mmss(t: float) -> str:
     return f"{int(t // 60):02d}:{int(t % 60):02d}"
@@ -102,7 +127,7 @@ class LocalLLM:
         self.model = AutoModelForCausalLM.from_pretrained(cfg.llm_model, **kwargs).eval()
         self.thinking = cfg.llm_thinking
 
-    def chat(self, system: str, user: str) -> str:
+    def chat(self, system: str, user: str, schema: dict | None = None) -> str:
         import torch
 
         prompt = self.tokenizer.apply_chat_template(
@@ -129,8 +154,14 @@ class LocalLLM:
 
 
 def llm_candidates(transcript: Transcript, sentences: list[Sentence], cfg: ClipperConfig) -> list[dict]:
-    llm = LocalLLM(cfg)
+    if cfg.llm_url:
+        from .remote import RemoteLLM
+
+        llm = RemoteLLM(cfg)
+    else:
+        llm = LocalLLM(cfg)
     language = LANGUAGES.get(transcript.language or "", ("the transcript's language",))[0]
+    budget = cfg.max_clip_sec - cfg.pad_start - cfg.pad_end
     picks: list[dict] = []
     try:
         windows = _windows(sentences, cfg.llm_window_words)
@@ -139,13 +170,13 @@ def llm_candidates(transcript: Transcript, sentences: list[Sentence], cfg: Clipp
             lines = "\n".join(f"[{s.id}] {_mmss(s.start)} | {s.text}" for s in sentences[a : b + 1])
             user = USER_PROMPT.format(
                 language=language, lines=lines, k=per_window,
-                min_sec=cfg.min_clip_sec, max_sec=cfg.max_clip_sec, target_sec=cfg.target_clip_sec,
+                min_sec=cfg.min_clip_sec, max_sec=budget, target_sec=cfg.target_clip_sec,
             )
             try:
-                raw = llm.chat(SYSTEM_PROMPT, user)
+                raw = llm.chat(SYSTEM_PROMPT, user, CLIPS_SCHEMA)
                 items = parse_json_array(raw)
-                if not items and raw.strip() not in ("[]", ""):
-                    raw = llm.chat(SYSTEM_PROMPT, user + "\n\nYour previous answer was not valid JSON. Output the JSON array only.")
+                if not items and re.sub(r"\s", "", raw) not in ("[]", "", '{"clips":[]}'):
+                    raw = llm.chat(SYSTEM_PROMPT, user + "\n\nYour previous answer was not valid JSON. Output the JSON array only.", CLIPS_SCHEMA)
                     items = parse_json_array(raw)
             except Exception as exc:  # e.g. OOM on one long window: keep the picks of the other windows
                 log.warning("LLM window %d/%d failed (%s); skipping", n, len(windows), exc)
@@ -197,11 +228,13 @@ def detect_moments(transcript: Transcript, env_db: np.ndarray, cfg: ClipperConfi
     if not sentences:
         return []
     signals = SignalModel(transcript, sentences, env_db)
+    # Padding is added around the words, so the words get the rest: --max is a hard limit for the file.
+    budget = cfg.max_clip_sec - cfg.pad_start - cfg.pad_end
 
     def build(i: int, j: int, **meta) -> Moment:
-        i, j = fit_range(sentences, i, j, cfg.min_clip_sec, cfg.max_clip_sec)
+        i, j = fit_range(sentences, i, j, cfg.min_clip_sec, budget)
         first, last = sentences[i].first_word, sentences[j].last_word
-        last = trim_words_to(words, first, last, cfg.max_clip_sec)
+        last = trim_words_to(words, first, last, budget)
         h_score, _ = signals.window_score(sentences[i : j + 1], cfg.target_clip_sec)
         start, end = snap_bounds(words, first, last, env_db, transcript.duration, cfg.pad_start, cfg.pad_end)
         llm_score = meta.pop("llm_score", None)
@@ -220,8 +253,8 @@ def detect_moments(transcript: Transcript, env_db: np.ndarray, cfg: ClipperConfi
 
     # LLM picks get the slots first; heuristic windows only fill what is left.
     chosen = select(llm_moments, cfg.max_clips, cfg.max_overlap)
-    if len(chosen) < cfg.max_clips:
-        windows = candidate_windows(sentences, cfg.min_clip_sec, cfg.max_clip_sec)
+    if len(chosen) < cfg.max_clips and (cfg.fill_heuristic or not chosen):
+        windows = candidate_windows(sentences, cfg.min_clip_sec, budget)
         if not windows:  # very short input: take everything that fits
             windows = [(0, len(sentences) - 1)]
         scored = sorted(

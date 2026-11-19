@@ -1,0 +1,9 @@
+# GPU stages (ASR, local LLM) for `python -m clipper` without remote workers: Colab T4 or a local NVIDIA GPU.
+# Keep the preinstalled CUDA torch (Colab) or install it first from pytorch.org.
+-r requirements.txt
+qwen-asr>=0.0.6
+silero-vad>=5.1
+ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+transformers>=4.51.0
+accelerate
+bitsandbytes>=0.45

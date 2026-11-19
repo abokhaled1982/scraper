@@ -71,6 +71,17 @@ class ClipperConfig:
     max_clip_sec: float = 60.0
     target_clip_sec: float = 35.0
     max_overlap: float = 0.15  # max shared time between two clips, as a fraction of the shorter one
+    fill_heuristic: bool = True  # top up with heuristic picks when the LLM returns fewer than max_clips
+
+    # --- remote GPU workers (empty = run locally) ---
+    asr_url: str = ""  # Colab ASR server (colab_asr_server.ipynb)
+    asr_token: str = ""
+    llm_url: str = ""  # OpenAI-compatible llama-server, e.g. Gemma 4 on Kaggle
+    llm_token: str = ""
+    llm_api_model: str = "gemma-4-26B-A4B-it"
+    llm_max_tokens: int = 4096
+    llm_correct: bool = True  # let the remote LLM fix ASR errors before moment picking
+    llm_correct_words: int = 600  # words per correction request
 
     # --- cutting ---
     pad_start: float = 0.12

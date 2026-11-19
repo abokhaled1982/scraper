@@ -28,13 +28,29 @@ video ──ffmpeg──► 16 kHz audio ──Silero VAD──► ≤30 s chunk
 
 Colab: open [colab_clipper.ipynb](colab_clipper.ipynb) (T4 GPU is enough).
 
-CLI (GPU machine, `pip install -r clipper/requirements.txt`, ffmpeg with libass, `fonts-noto-core`):
+CLI (GPU machine, `pip install -r clipper/requirements-gpu.txt`, ffmpeg with libass, `fonts-noto-core`):
 
 ```bash
 python -m clipper run talk.mp4 --lang ar -n 5 --hook-title
 python -m clipper run talk.mp4 --lang de --min 20 --max 45 --captions phrase
 python -m clipper run talk.mp4 --no-llm            # heuristic picks only
 ```
+
+### Remote mode (local orchestrator + free cloud GPUs)
+
+Local machine: orchestration and cutting (ffmpeg with libass, `pip install -r clipper/requirements.txt`).
+Colab runs ASR ([colab_asr_server.ipynb](colab_asr_server.ipynb)), Kaggle 2×T4 runs Gemma 4 26B-A4B via llama-server
+([Gemma-4-26B-A4B-Leadbrief-Kaggle.ipynb](Gemma-4-26B-A4B-Leadbrief-Kaggle.ipynb)). Gemma fixes ASR errors
+(new words inherit the original timings, rewrites are rejected) and picks the moments.
+
+```bash
+export CLIPPER_ASR_URL=... CLIPPER_ASR_TOKEN=...   # printed by the Colab tunnel cell
+export CLIPPER_LLM_URL=... CLIPPER_LLM_TOKEN=...   # printed by the Kaggle tunnel cell
+python -m clipper run talk.mp4 -n 8 --min 8 --max 20 --target 14 --llm-only --hook-title
+```
+
+`--max` is a hard limit for the file length (padding included). `corrections.json` lists every transcript fix,
+`transcript.raw.json` keeps the uncorrected ASR output.
 
 Stages are cached in `clipper_out/<video>/`:
 

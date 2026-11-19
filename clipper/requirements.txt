@@ -1,12 +1,7 @@
-# GPU runtime for `python -m clipper` (Google Colab T4 or better). Keep the preinstalled CUDA torch.
-qwen-asr>=0.0.6
-silero-vad>=5.1
-ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
-transformers>=4.51.0
-accelerate
-bitsandbytes>=0.45
+# Local orchestrator + cutter (`python -m clipper run VIDEO` with CLIPPER_* workers in clipper/.env).
+# No GPU needed: ASR runs on Colab, Gemma 4 on Kaggle. GPU stages: requirements-gpu.txt.
+numpy>=1.26
 opencv-python-headless>=4.8
-numpy
 # optional: download source videos from URLs
 yt-dlp
 # system packages: ffmpeg (with libass) and fonts-noto-core (Noto Sans + Noto Sans Arabic)

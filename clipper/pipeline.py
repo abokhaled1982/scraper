@@ -44,9 +44,20 @@ class Pipeline:
         if self.transcript_path.exists() and not force:
             log.info("Using cached %s", self.transcript_path)
             return Transcript.load(self.transcript_path)
-        from .transcribe import transcribe
+        if self.cfg.asr_url:
+            from .remote import transcribe_remote
 
-        transcript = transcribe(self.video, self.cfg)
+            transcript = transcribe_remote(self.video, self.cfg)
+        else:
+            from .transcribe import transcribe
+
+            transcript = transcribe(self.video, self.cfg)
+        if self.cfg.llm_url and self.cfg.llm_correct:
+            from .remote import correct_transcript
+
+            transcript.save(self.work / "transcript.raw.json")
+            transcript, changes = correct_transcript(transcript, self.cfg)
+            (self.work / "corrections.json").write_text(json.dumps(changes, ensure_ascii=False, indent=1), encoding="utf-8")
         transcript.save(self.transcript_path)
         (self.work / "transcript.txt").write_text(transcript.text, encoding="utf-8")
         log.info("Transcript: %d words, language=%s", len(transcript.words), transcript.language)
