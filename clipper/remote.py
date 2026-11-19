@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from .config import LANGUAGES, ClipperConfig
-from .media import run
+from .media import probe, run
 from .models import Transcript, Word
 from .segment import split_sentences
 from .textalign import attach_times, normalize, tokenize
@@ -87,7 +87,8 @@ def transcribe_remote(video: str, cfg: ClipperConfig, poll_sec: float = 5.0) -> 
         run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", video, "-vn", "-ac", "1", "-ar", "16000",
              "-c:a", "libopus", "-b:a", "48k", str(audio)])
         log.info("Uploading %.1f MB audio to the ASR worker", audio.stat().st_size / 1e6)
-        query = urllib.parse.urlencode({"language": cfg.language, "context": cfg.asr_context})
+        query = urllib.parse.urlencode({"language": cfg.language, "context": cfg.asr_context,
+                                        "vad_threshold": cfg.vad_threshold, "chunk_max_sec": cfg.chunk_max_sec})
         job = _call(f"{base}/jobs?{query}", cfg.asr_token, audio.read_bytes(), "application/octet-stream", timeout=600)
 
     started, last_stage = time.time(), None
@@ -105,6 +106,7 @@ def transcribe_remote(video: str, cfg: ClipperConfig, poll_sec: float = 5.0) -> 
 
     data = status["result"]
     data["source"] = str(video)
+    data["duration"] = probe(video).duration or data["duration"]
     data["words"] = [Word(**w) for w in data["words"]]
     data["speech"] = [tuple(s) for s in data.get("speech", [])]
     return Transcript(**data)
